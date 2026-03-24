@@ -12,6 +12,7 @@ pub mod error;
 pub mod listings;
 pub mod orders;
 pub mod user;
+pub mod watchlist;
 use error::ApiError;
 use rig::completion::Message;
 use rig::message::{AssistantContent, Text, UserContent};
@@ -103,6 +104,15 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route(
             "/api/conversations/{id}/messages",
             get(conversations::get_conversation_messages),
+        )
+        .route("/api/watchlist", get(watchlist::get_watchlist))
+        .route(
+            "/api/watchlist/{listing_id}",
+            post(watchlist::add_to_watchlist),
+        )
+        .route(
+            "/api/watchlist/{listing_id}",
+            delete(watchlist::remove_from_watchlist),
         )
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))

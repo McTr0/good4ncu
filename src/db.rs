@@ -114,6 +114,25 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
         .await
         .ok();
 
+    // Watchlist table for user favorites
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS watchlist (
+            user_id TEXT NOT NULL,
+            listing_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, listing_id),
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(listing_id) REFERENCES inventory(id) ON DELETE CASCADE
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_watchlist_user ON watchlist(user_id)")
+        .execute(pool)
+        .await
+        .ok();
+
     Ok(())
 }
 
