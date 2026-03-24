@@ -128,3 +128,26 @@ pub async fn remove_from_watchlist(
         "listing_id": listing_id
     })))
 }
+
+/// GET /api/watchlist/:listing_id - check if listing is in watchlist
+pub async fn check_watchlist(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(listing_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let exists = sqlx::query("SELECT 1 FROM watchlist WHERE user_id = $1 AND listing_id = $2")
+        .bind(&user_id)
+        .bind(&listing_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .is_some();
+
+    Ok(Json(serde_json::json!({
+        "watched": exists,
+        "listing_id": listing_id
+    })))
+}

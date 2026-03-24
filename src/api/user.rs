@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     Json,
 };
@@ -256,4 +256,51 @@ pub async fn search_users(
         .collect();
 
     Ok(Json(UserSearchResponse { items, total }))
+}
+
+#[derive(Serialize)]
+pub struct UserPublicProfile {
+    pub user_id: String,
+    pub username: String,
+    pub listing_count: i64,
+    pub joined_at: String,
+}
+
+/// GET /api/users/:id - public user profile (no auth required)
+pub async fn get_user_profile(
+    State(state): State<AppState>,
+    Path(user_id): Path<String>,
+) -> Result<Json<UserPublicProfile>, (StatusCode, String)> {
+    let row = sqlx::query(
+        r#"
+        SELECT u.id as user_id, u.username, u.created_at,
+               COUNT(i.id) as listing_count
+        FROM users u
+        LEFT JOIN inventory i ON u.id = i.owner_id AND i.status = 'active'
+        WHERE u.id = $1
+        GROUP BY u.id, u.username, u.created_at
+        "#,
+    )
+    .bind(&user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("DB error: {}", e),
+        )
+    })?
+    .ok_or_else(|| (StatusCode::NOT_FOUND, "User not found".to_string()))?;
+
+    let created_at: String = row
+        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
+        .map(|dt| dt.to_rfc3339())
+        .unwrap_or_else(|_| String::new());
+
+    Ok(Json(UserPublicProfile {
+        user_id: row.get("user_id"),
+        username: row.get("username"),
+        listing_count: row.get("listing_count"),
+        joined_at: created_at,
+    }))
 }

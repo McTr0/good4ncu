@@ -97,6 +97,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/user/profile", get(user::get_profile))
         .route("/api/user/listings", get(user::get_user_listings))
         .route("/api/users/search", get(user::search_users))
+        .route("/api/users/{id}", get(user::get_user_profile))
         .route("/api/orders", get(orders::get_orders))
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
@@ -109,6 +110,10 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             get(conversations::get_conversation_messages),
         )
         .route("/api/watchlist", get(watchlist::get_watchlist))
+        .route(
+            "/api/watchlist/{listing_id}",
+            get(watchlist::check_watchlist),
+        )
         .route(
             "/api/watchlist/{listing_id}",
             post(watchlist::add_to_watchlist),
