@@ -19,18 +19,23 @@ pub struct AppConfig {
     pub database_url: String,
     pub llm_provider: String,
     pub vector_dim: usize,
+    pub cors_origins: Vec<String>,
 }
 
 impl fmt::Debug for AppConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AppConfig")
             .field("gemini_api_key", &"[REDACTED]")
-            .field("minimax_api_key", &self.minimax_api_key.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "minimax_api_key",
+                &self.minimax_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("minimax_api_base_url", &self.minimax_api_base_url)
             .field("jwt_secret", &"[REDACTED]")
             .field("database_url", &"[REDACTED]")
             .field("llm_provider", &self.llm_provider)
             .field("vector_dim", &self.vector_dim)
+            .field("cors_origins", &self.cors_origins)
             .finish()
     }
 }
@@ -43,7 +48,10 @@ impl AppConfig {
 
         // Validate provider
         if !["gemini", "minimax"].contains(&llm_provider.as_str()) {
-            panic!("LLM_PROVIDER must be 'gemini' or 'minimax', got: {}", llm_provider);
+            panic!(
+                "LLM_PROVIDER must be 'gemini' or 'minimax', got: {}",
+                llm_provider
+            );
         }
 
         let vector_dim: usize = std::env::var("VECTOR_DIM")
@@ -74,6 +82,10 @@ impl AppConfig {
                 .expect("DATABASE_URL must be set in environment"),
             llm_provider,
             vector_dim,
+            cors_origins: std::env::var("CORS_ORIGINS")
+                .ok()
+                .map(|s| s.split(',').map(|v| v.trim().to_string()).collect())
+                .unwrap_or_default(),
         })
     }
 }

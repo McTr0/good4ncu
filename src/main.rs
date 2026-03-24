@@ -33,7 +33,12 @@ async fn main() -> Result<(), anyhow::Error> {
                 .as_ref()
                 .expect("MINIMAX_API_KEY must be set when LLM_PROVIDER=minimax");
             let base_url = config.minimax_api_base_url.as_deref();
-            Arc::new(crate::llm::minimax::MiniMaxProvider::new(api_key, base_url, &config.gemini_api_key, config.vector_dim)?)
+            Arc::new(crate::llm::minimax::MiniMaxProvider::new(
+                api_key,
+                base_url,
+                &config.gemini_api_key,
+                config.vector_dim,
+            )?)
         }
         _ => {
             // Default to Gemini
@@ -41,7 +46,10 @@ async fn main() -> Result<(), anyhow::Error> {
             if api_key.is_empty() {
                 panic!("GEMINI_API_KEY must be set when LLM_PROVIDER=gemini");
             }
-            Arc::new(crate::llm::gemini::GeminiProvider::new(api_key, config.vector_dim)?)
+            Arc::new(crate::llm::gemini::GeminiProvider::new(
+                api_key,
+                config.vector_dim,
+            )?)
         }
     };
 
@@ -61,7 +69,7 @@ async fn main() -> Result<(), anyhow::Error> {
         gemini_api_key: config.gemini_api_key.clone(),
     };
 
-    let app = api::create_router(app_state);
+    let app = api::create_router(app_state, &config.cors_origins);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
     tracing::info!("Web Server started at http://127.0.0.1:3000");
 

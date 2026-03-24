@@ -64,11 +64,20 @@ pub struct AppState {
     pub gemini_api_key: String,
 }
 
-pub fn create_router(state: AppState) -> Router {
-    let cors = CorsLayer::new()
-        .allow_origin(Any)
-        .allow_methods(Any)
-        .allow_headers(Any);
+pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
+    let cors = if cors_origins.is_empty() {
+        // Default restrictive CORS — no origins allowed by default
+        CorsLayer::new().allow_methods(Any).allow_headers(Any)
+    } else {
+        let origins: Vec<axum::http::HeaderValue> = cors_origins
+            .iter()
+            .filter_map(|s| s.parse::<axum::http::HeaderValue>().ok())
+            .collect();
+        CorsLayer::new()
+            .allow_origin(origins)
+            .allow_methods(Any)
+            .allow_headers(Any)
+    };
 
     Router::new()
         .route("/api/health", get(health_check))
