@@ -229,14 +229,9 @@ pub async fn run_auto_negotiation(
     let _hitl_handle = tokio::spawn(run_cli_hitl_handler(hitl_rx));
 
     // Create seller and buyer agents via provider
-    let seller_agent: Box<dyn NegotiateAgent> = provider
-        .clone()
-        .create_negotiate_agent()
-        .await?;
+    let seller_agent: Box<dyn NegotiateAgent> = provider.clone().create_negotiate_agent().await?;
 
-    let buyer_agent: Box<dyn NegotiateAgent> = provider
-        .create_negotiate_agent()
-        .await?;
+    let buyer_agent: Box<dyn NegotiateAgent> = provider.create_negotiate_agent().await?;
 
     let current_message =
         "Hi, is this chair still available? I'm interested and would like to offer 1700 CNY."

@@ -15,7 +15,10 @@ use tokio::sync::mpsc;
 
 /// Type alias for the embedding function passed to tools.
 pub type EmbedFn = Arc<
-    dyn Fn(String, String) -> Pin<Box<dyn std::future::Future<Output = Result<(), ToolError>> + Send>>
+    dyn Fn(
+            String,
+            String,
+        ) -> Pin<Box<dyn std::future::Future<Output = Result<(), ToolError>> + Send>>
         + Send
         + Sync,
 >;

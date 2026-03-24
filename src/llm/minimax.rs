@@ -72,10 +72,8 @@ impl MiniMaxProvider {
             self.embedding_dim,
         );
         // RAG store: owned by dynamic_context (consumed at agent build time).
-        let rag_store = PostgresVectorStore::with_defaults(
-            embedding_model.clone(),
-            db_pool.clone(),
-        );
+        let rag_store =
+            PostgresVectorStore::with_defaults(embedding_model.clone(), db_pool.clone());
 
         // embed_fn creates a FRESH store instance per call for embedding + insertion.
         // Uses the same DB pool, so inserts are visible to rag_store queries.
@@ -88,8 +86,11 @@ impl MiniMaxProvider {
             let embedding_client = embedding_client_clone.clone();
             let client_for_insert = embedding_client.clone();
             Box::pin(async move {
-                let embedding_model =
-                    gemini::embedding::EmbeddingModel::new(embedding_client, gemini::EMBEDDING_001, dim);
+                let embedding_model = gemini::embedding::EmbeddingModel::new(
+                    embedding_client,
+                    gemini::EMBEDDING_001,
+                    dim,
+                );
                 let document = Document {
                     id: listing_id,
                     content,
@@ -161,9 +162,7 @@ impl super::LlmProvider for MiniMaxProvider {
         Ok(Box::new(MiniMaxMarketplaceAgent(agent)))
     }
 
-    async fn create_negotiate_agent(
-        self: Arc<Self>,
-    ) -> anyhow::Result<Box<dyn NegotiateAgent>> {
+    async fn create_negotiate_agent(self: Arc<Self>) -> anyhow::Result<Box<dyn NegotiateAgent>> {
         let agent = self
             .chat_client
             .agent(&self.model)

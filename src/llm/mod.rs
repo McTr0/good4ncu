@@ -27,9 +27,7 @@ pub trait LlmProvider: Send + Sync {
     ) -> anyhow::Result<Box<dyn MarketplaceAgent>>;
 
     /// Create a negotiation agent.
-    async fn create_negotiate_agent(
-        self: Arc<Self>,
-    ) -> anyhow::Result<Box<dyn NegotiateAgent>>;
+    async fn create_negotiate_agent(self: Arc<Self>) -> anyhow::Result<Box<dyn NegotiateAgent>>;
 }
 
 /// Marker trait for marketplace agents — erased via `Box<dyn MarketplaceAgent>`.
@@ -37,7 +35,11 @@ pub trait LlmProvider: Send + Sync {
 #[allow(dead_code)]
 pub trait MarketplaceAgent: Send + Sync {
     async fn prompt(&self, msg: String) -> anyhow::Result<String>;
-    async fn prompt_with_history(&self, msg: String, history: Vec<Message>) -> anyhow::Result<String>;
+    async fn prompt_with_history(
+        &self,
+        msg: String,
+        history: Vec<Message>,
+    ) -> anyhow::Result<String>;
 }
 
 /// Marker trait for negotiation agents.

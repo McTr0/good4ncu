@@ -5,8 +5,8 @@ use inquire::Select;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
-use crate::llm::LlmProvider;
 use crate::agents::negotiate;
+use crate::llm::LlmProvider;
 use crate::services::BusinessEvent;
 
 pub async fn run_cli(
@@ -53,7 +53,6 @@ async fn run_marketplace_agent_cli(
     provider: &Arc<dyn LlmProvider>,
     _db_pool: &PgPool,
 ) -> anyhow::Result<()> {
-
     println!("\n[System] Initializing Marketplace Agent with live platform inventory...");
 
     let _event_tx = tokio::sync::mpsc::channel::<BusinessEvent>(16).0;

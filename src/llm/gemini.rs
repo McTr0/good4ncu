@@ -57,10 +57,8 @@ impl GeminiProvider {
         );
         // RAG store: owned by dynamic_context (consumed at agent build time).
         // This store handles context retrieval (top_n queries).
-        let rag_store = PostgresVectorStore::with_defaults(
-            embedding_model.clone(),
-            db_pool.clone(),
-        );
+        let rag_store =
+            PostgresVectorStore::with_defaults(embedding_model.clone(), db_pool.clone());
 
         // embed_fn creates a FRESH store instance per call.
         // This is safe because both this store and rag_store share the same
@@ -90,7 +88,11 @@ impl GeminiProvider {
                 // Create a fresh store instance per call for insertion.
                 // This store hits the same DB as rag_store, so inserts are visible.
                 let insert_store = PostgresVectorStore::with_defaults(
-                    gemini::embedding::EmbeddingModel::new(client_for_insert, gemini::EMBEDDING_001, dim),
+                    gemini::embedding::EmbeddingModel::new(
+                        client_for_insert,
+                        gemini::EMBEDDING_001,
+                        dim,
+                    ),
                     db_pool,
                 );
                 insert_store
@@ -143,9 +145,7 @@ impl super::LlmProvider for GeminiProvider {
         Ok(Box::new(GeminiMarketplaceAgent(agent)))
     }
 
-    async fn create_negotiate_agent(
-        self: Arc<Self>,
-    ) -> anyhow::Result<Box<dyn NegotiateAgent>> {
+    async fn create_negotiate_agent(self: Arc<Self>) -> anyhow::Result<Box<dyn NegotiateAgent>> {
         let agent = self
             .client
             .agent("gemini-3-flash-preview")
