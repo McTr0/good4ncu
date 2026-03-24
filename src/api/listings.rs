@@ -297,6 +297,51 @@ pub async fn create_listing(
     }))
 }
 
+/// DELETE /api/listings/:id - delete a listing (owner only)
+pub async fn delete_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Check listing exists and belongs to user
+    let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let owner_id: String = row.get("owner_id");
+    let status: String = row.get("status");
+
+    if owner_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    if status == "sold" {
+        return Err(ApiError::BadRequest(
+            "Cannot delete a sold listing".to_string(),
+        ));
+    }
+
+    // Delete the listing (cascade deletes related records)
+    sqlx::query("DELETE FROM inventory WHERE id = $1")
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(listing_id = %id, deleted_by = %user_id, "Listing deleted");
+
+    Ok(Json(serde_json::json!({
+        "message": "Listing deleted successfully",
+        "id": id
+    })))
+}
+
 // ---------------------------------------------------------------------------
 // Item recognition from image
 // ---------------------------------------------------------------------------
