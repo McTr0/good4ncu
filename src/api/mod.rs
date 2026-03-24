@@ -11,6 +11,7 @@ pub mod conversations;
 pub mod error;
 pub mod listings;
 pub mod orders;
+pub mod stats;
 pub mod user;
 pub mod watchlist;
 use error::ApiError;
@@ -82,6 +83,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
 
     Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/stats", get(stats::get_stats))
         .route("/api/chat", post(handle_chat))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
