@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde::Serialize;
 use sqlx::{PgPool, Row};
 
 /// Maximum number of historical message pairs to include in conversation context
@@ -85,6 +86,57 @@ impl ChatService {
             })
             .collect())
     }
+
+    /// List all conversation IDs for a user with metadata.
+    pub async fn list_conversations(&self, user_id: &str) -> Result<Vec<ConversationSummary>> {
+        let rows = sqlx::query(
+            r#"
+            SELECT DISTINCT ON (cm.conversation_id)
+                   cm.conversation_id,
+                   cm.listing_id,
+                   i.title as listing_title,
+                   cm.content as last_message,
+                   cm.is_agent as last_message_is_agent,
+                   cm.timestamp as last_timestamp
+            FROM chat_messages cm
+            LEFT JOIN inventory i ON cm.listing_id = i.id
+            WHERE cm.sender = $1 OR cm.conversation_id LIKE $1 || '%'
+               OR cm.conversation_id LIKE '%:' || $1
+            ORDER BY cm.conversation_id, cm.timestamp DESC
+            "#,
+        )
+        .bind(user_id)
+        .fetch_all(&self.db)
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| ConversationSummary {
+                conversation_id: row.get("conversation_id"),
+                listing_id: row.get("listing_id"),
+                listing_title: row.try_get("listing_title").ok(),
+                last_message: row.get("last_message"),
+                last_message_is_agent: row.get("last_message_is_agent"),
+                last_timestamp: row
+                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(
+                        "last_timestamp",
+                    )
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default(),
+            })
+            .collect())
+    }
+}
+
+/// Summary of a conversation for listing
+#[derive(Debug, Clone, Serialize)]
+pub struct ConversationSummary {
+    pub conversation_id: String,
+    pub listing_id: String,
+    pub listing_title: Option<String>,
+    pub last_message: String,
+    pub last_message_is_agent: bool,
+    pub last_timestamp: String,
 }
 
 #[cfg(test)]

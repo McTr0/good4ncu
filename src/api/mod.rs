@@ -7,6 +7,7 @@ use axum::{
     Json, Router,
 };
 pub mod auth;
+pub mod conversations;
 pub mod error;
 pub mod listings;
 pub mod orders;
@@ -84,6 +85,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
         .route("/api/orders/{id}/confirm", post(orders::confirm_order))
+        .route("/api/conversations", get(conversations::list_conversations))
+        .route(
+            "/api/conversations/{id}/messages",
+            get(conversations::get_conversation_messages),
+        )
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .with_state(state)
