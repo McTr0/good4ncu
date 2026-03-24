@@ -310,3 +310,101 @@ pub async fn confirm_order(
         "order_id": order_id
     })))
 }
+
+/// POST /api/orders/:id/pay - initiate payment for an order (buyer only)
+pub async fn pay_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let order = sqlx::query("SELECT id, buyer_id, seller_id, status FROM orders WHERE id = $1")
+        .bind(&order_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let buyer_id: String = order.get("buyer_id");
+    let status: String = order.get("status");
+
+    if buyer_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    if status != "pending" {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot pay order with status '{}'. Order must be pending.",
+            status
+        )));
+    }
+
+    sqlx::query("UPDATE orders SET status = 'paid' WHERE id = $1")
+        .bind(&order_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(order_id = %order_id, paid_by = %user_id, "Order paid");
+
+    Ok(Json(serde_json::json!({
+        "message": "Payment initiated successfully",
+        "order_id": order_id
+    })))
+}
+
+/// POST /api/orders/:id/ship - mark order as shipped (seller only)
+pub async fn ship_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let order =
+        sqlx::query("SELECT id, buyer_id, seller_id, status, listing_id FROM orders WHERE id = $1")
+            .bind(&order_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+            .ok_or(ApiError::NotFound)?;
+
+    let seller_id: String = order.get("seller_id");
+    let listing_id: String = order.get("listing_id");
+    let status: String = order.get("status");
+
+    if seller_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    if status != "paid" {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot ship order with status '{}'. Order must be paid first.",
+            status
+        )));
+    }
+
+    // Update order status
+    sqlx::query("UPDATE orders SET status = 'shipped' WHERE id = $1")
+        .bind(&order_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    // Mark listing as sold
+    sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1")
+        .bind(&listing_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(order_id = %order_id, shipped_by = %user_id, "Order shipped");
+
+    Ok(Json(serde_json::json!({
+        "message": "Order marked as shipped",
+        "order_id": order_id
+    })))
+}

@@ -87,6 +87,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
         .route("/api/orders/{id}/confirm", post(orders::confirm_order))
+        .route("/api/orders/{id}/pay", post(orders::pay_order))
+        .route("/api/orders/{id}/ship", post(orders::ship_order))
         .route("/api/conversations", get(conversations::list_conversations))
         .route(
             "/api/conversations/{id}/messages",
