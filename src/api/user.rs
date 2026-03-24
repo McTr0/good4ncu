@@ -156,3 +156,104 @@ pub async fn get_user_listings(
         offset,
     }))
 }
+
+#[derive(Deserialize)]
+pub struct UserSearchQuery {
+    pub q: Option<String>,
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct UserSummary {
+    pub user_id: String,
+    pub username: String,
+    pub listing_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct UserSearchResponse {
+    pub items: Vec<UserSummary>,
+    pub total: i64,
+}
+
+/// GET /api/users/search?q=keyword - search/browse users
+pub async fn search_users(
+    State(state): State<AppState>,
+    Query(params): Query<UserSearchQuery>,
+) -> Result<Json<UserSearchResponse>, (StatusCode, String)> {
+    let limit = params.limit.unwrap_or(20).min(50);
+    let offset = params.offset.unwrap_or(0).max(0);
+
+    let (count_sql, items_sql, bind_params): (&str, &str, Vec<String>) =
+        if let Some(ref q) = params.q {
+            let pattern = format!("%{}%", q);
+            (
+                "SELECT COUNT(*) as cnt FROM users WHERE username ILIKE $1",
+                r#"
+                SELECT u.id as user_id, u.username,
+                       COUNT(i.id) as listing_count
+                FROM users u
+                LEFT JOIN inventory i ON u.id = i.owner_id AND i.status = 'active'
+                WHERE u.username ILIKE $1
+                GROUP BY u.id, u.username
+                ORDER BY listing_count DESC
+                LIMIT $2 OFFSET $3
+                "#,
+                vec![pattern],
+            )
+        } else {
+            (
+                "SELECT COUNT(*) as cnt FROM users",
+                r#"
+                SELECT u.id as user_id, u.username,
+                       COUNT(i.id) as listing_count
+                FROM users u
+                LEFT JOIN inventory i ON u.id = i.owner_id AND i.status = 'active'
+                GROUP BY u.id, u.username
+                ORDER BY listing_count DESC
+                LIMIT $1 OFFSET $2
+                "#,
+                vec![],
+            )
+        };
+
+    let mut count_q = sqlx::query(count_sql);
+    for p in &bind_params {
+        count_q = count_q.bind(p);
+    }
+    let count_row = count_q.fetch_one(&state.db).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("DB error: {}", e),
+        )
+    })?;
+    let total: i64 = count_row.try_get("cnt").unwrap_or(0);
+
+    let mut items_q = sqlx::query(items_sql);
+    for p in &bind_params {
+        items_q = items_q.bind(p);
+    }
+    let rows = items_q
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DB error: {}", e),
+            )
+        })?;
+
+    let items: Vec<UserSummary> = rows
+        .iter()
+        .map(|row| UserSummary {
+            user_id: row.get("user_id"),
+            username: row.get("username"),
+            listing_count: row.get("listing_count"),
+        })
+        .collect();
+
+    Ok(Json(UserSearchResponse { items, total }))
+}

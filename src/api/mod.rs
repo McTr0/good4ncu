@@ -94,6 +94,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/listings/{id}", delete(listings::delete_listing))
         .route("/api/user/profile", get(user::get_profile))
         .route("/api/user/listings", get(user::get_user_listings))
+        .route("/api/users/search", get(user::search_users))
         .route("/api/orders", get(orders::get_orders))
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
