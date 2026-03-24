@@ -1,0 +1,106 @@
+{
+  "@@locale": "zh",
+  "appTitle": "校园集市",
+  "homeTab": "首页",
+  "aiAssistantTab": "AI助手",
+  "publishTab": "发布",
+  "myListingsTab": "我的发布",
+  "profileTab": "我的",
+  "searchHint": "搜索商品...",
+  "allCategories": "全部",
+  "electronics": "电子产品",
+  "books": "书籍教材",
+  "digitalAccessories": "数码配件",
+  "dailyGoods": "生活用品",
+  "clothingShoes": "服饰鞋包",
+  "other": "其他",
+  "noProducts": "暂无商品",
+  "retry": "重试",
+  "login": "登录",
+  "register": "注册",
+  "username": "用户名",
+  "password": "密码",
+  "confirmPassword": "确认密码",
+  "loginSuccess": "登录成功",
+  "registerSuccess": "注册成功",
+  "loginError": "登录错误",
+  "registerError": "注册错误",
+  "sessionExpired": "会话已过期，请重新登录",
+  "logout": "退出登录",
+  "logoutSuccess": "退出登录成功",
+  "createListing": "发布商品",
+  "title": "标题",
+  "category": "分类",
+  "brand": "品牌",
+  "condition": "成色",
+  "price": "价格",
+  "description": "描述",
+  "defects": "缺陷",
+  "submit": "提交",
+  "cancel": "取消",
+  "createSuccess": "商品发布成功",
+  "createError": "发布失败",
+  "titleRequired": "请输入标题",
+  "myListings": "我的发布",
+  "active": "在售",
+  "sold": "已售",
+  "deleted": "已下架",
+  "edit": "编辑",
+  "delete": "删除",
+  "deleteConfirm": "确定要删除这件商品吗？",
+  "profile": "个人信息",
+  "memberSince": "注册于 {date}",
+  "@memberSince": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "totalListings": "共 {count} 件商品",
+  "@totalListings": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chat": "聊天",
+  "typeMessage": "输入消息...",
+  "send": "发送",
+  "aiGreeting": "你好！我是校园二手交易平台的智能助手。有什么我可以帮你的吗？",
+  "aiError": "抱歉，出现了一些问题，请重试。",
+  "listingDetail": "商品详情",
+  "contactSeller": "联系卖家",
+  "buyNow": "立即购买",
+  "priceLabel": "价格",
+  "conditionLabel": "成色",
+  "categoryLabel": "分类",
+  "brandLabel": "品牌",
+  "defectsLabel": "缺陷",
+  "descriptionLabel": "描述",
+  "owner": "卖家",
+  "status": "状态",
+  "createdAt": "发布时间",
+  "notFound": "未找到",
+  "error": "错误",
+  "loading": "加载中...",
+  "requestFailed": "请求失败: {code}",
+  "@requestFailed": {
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
+  },
+  "language": "语言",
+  "logoutConfirm": "确定要退出登录吗？",
+  "myListingsMenu": "查看和管理您的商品",
+  "myOrders": "我的订单",
+  "myOrdersSubtitle": "查看购买记录",
+  "myFavorites": "我的收藏",
+  "myFavoritesSubtitle": "您收藏的商品",
+  "settings": "设置",
+  "settingsSubtitle": "应用设置",
+  "comingSoon": "即将推出..."
+}

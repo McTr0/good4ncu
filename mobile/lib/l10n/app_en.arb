@@ -1,0 +1,106 @@
+{
+  "@@locale": "en",
+  "appTitle": "Campus Marketplace",
+  "homeTab": "Home",
+  "aiAssistantTab": "AI Assistant",
+  "publishTab": "Publish",
+  "myListingsTab": "My Listings",
+  "profileTab": "Profile",
+  "searchHint": "Search products...",
+  "allCategories": "All",
+  "electronics": "Electronics",
+  "books": "Books",
+  "digitalAccessories": "Digital Accessories",
+  "dailyGoods": "Daily Goods",
+  "clothingShoes": "Clothing & Shoes",
+  "other": "Other",
+  "noProducts": "No products available",
+  "retry": "Retry",
+  "login": "Login",
+  "register": "Register",
+  "username": "Username",
+  "password": "Password",
+  "confirmPassword": "Confirm Password",
+  "loginSuccess": "Login successful",
+  "registerSuccess": "Registration successful",
+  "loginError": "Login error",
+  "registerError": "Registration error",
+  "sessionExpired": "Session expired. Please login again.",
+  "logout": "Logout",
+  "logoutSuccess": "Logout successful",
+  "createListing": "Create Listing",
+  "title": "Title",
+  "category": "Category",
+  "brand": "Brand",
+  "condition": "Condition",
+  "price": "Price",
+  "description": "Description",
+  "defects": "Defects",
+  "submit": "Submit",
+  "cancel": "Cancel",
+  "createSuccess": "Listing created successfully",
+  "createError": "Failed to create listing",
+  "titleRequired": "Title is required",
+  "myListings": "My Listings",
+  "active": "Active",
+  "sold": "Sold",
+  "deleted": "Deleted",
+  "edit": "Edit",
+  "delete": "Delete",
+  "deleteConfirm": "Are you sure you want to delete this listing?",
+  "profile": "Profile",
+  "memberSince": "Member since {date}",
+  "@memberSince": {
+    "placeholders": {
+      "date": {
+        "type": "String"
+      }
+    }
+  },
+  "totalListings": "{count} listings",
+  "@totalListings": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "chat": "Chat",
+  "typeMessage": "Type a message...",
+  "send": "Send",
+  "aiGreeting": "Hello! I'm your campus secondhand trading assistant. How can I help you today?",
+  "aiError": "Sorry, something went wrong. Please try again.",
+  "listingDetail": "Listing Details",
+  "contactSeller": "Contact Seller",
+  "buyNow": "Buy Now",
+  "priceLabel": "Price",
+  "conditionLabel": "Condition",
+  "categoryLabel": "Category",
+  "brandLabel": "Brand",
+  "defectsLabel": "Defects",
+  "descriptionLabel": "Description",
+  "owner": "Owner",
+  "status": "Status",
+  "createdAt": "Created at",
+  "notFound": "Not found",
+  "error": "Error",
+  "loading": "Loading...",
+  "requestFailed": "Request failed: {code}",
+  "@requestFailed": {
+    "placeholders": {
+      "code": {
+        "type": "int"
+      }
+    }
+  },
+  "language": "Language",
+  "logoutConfirm": "Are you sure you want to logout?",
+  "myListingsMenu": "View and manage your listings",
+  "myOrders": "My Orders",
+  "myOrdersSubtitle": "View purchase history",
+  "myFavorites": "My Favorites",
+  "myFavoritesSubtitle": "Your favorite items",
+  "settings": "Settings",
+  "settingsSubtitle": "App settings",
+  "comingSoon": "Coming soon..."
+}
