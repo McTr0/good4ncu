@@ -86,7 +86,10 @@ pub async fn register(
         Ok(Ok(hash)) => hash,
         Ok(Err(e)) => {
             tracing::error!(err = %e, "Password hashing failed");
-            return Err(ApiError::Internal(anyhow::anyhow!("Password hashing failed: {}", e)));
+            return Err(ApiError::Internal(anyhow::anyhow!(
+                "Password hashing failed: {}",
+                e
+            )));
         }
         Err(e) => {
             tracing::error!(err = %e, "Spawning hashing task failed");
@@ -97,14 +100,12 @@ pub async fn register(
     let user_id = Uuid::new_v4().to_string();
 
     // Insert into database — unique constraint on username will trigger CONFLICT
-    let result = sqlx::query(
-        "INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)",
-    )
-    .bind(&user_id)
-    .bind(&payload.username)
-    .bind(&password_hash)
-    .execute(&state.db)
-    .await;
+    let result = sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)")
+        .bind(&user_id)
+        .bind(&payload.username)
+        .bind(&password_hash)
+        .execute(&state.db)
+        .await;
 
     match result {
         Ok(_) => {
@@ -198,6 +199,84 @@ pub async fn login(
             Err(ApiError::Internal(anyhow::anyhow!("Internal error: {}", e)))
         }
     }
+}
+
+#[derive(Deserialize)]
+pub struct ChangePasswordRequest {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// POST /api/auth/change-password — change password (requires auth)
+pub async fn change_password(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<ChangePasswordRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    if payload.new_password.len() < 8 {
+        return Err(ApiError::BadRequest(
+            "New password must be at least 8 characters".to_string(),
+        ));
+    }
+
+    let user_row = sqlx::query("SELECT password_hash FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::Unauthorized)?;
+
+    let stored_hash: String = user_row.get("password_hash");
+
+    let verify_result = tokio::task::spawn_blocking(move || -> bool {
+        let parsed_hash = match PasswordHash::new(&stored_hash) {
+            Ok(h) => h,
+            Err(_) => return false,
+        };
+        Argon2::default()
+            .verify_password(payload.current_password.as_bytes(), &parsed_hash)
+            .is_ok()
+    })
+    .await;
+
+    match verify_result {
+        Ok(true) => {}
+        Ok(false) => {
+            return Err(ApiError::BadRequest(
+                "Current password is incorrect".to_string(),
+            ));
+        }
+        Err(e) => {
+            tracing::error!(err = %e, "Password verification task failed");
+            return Err(ApiError::Internal(anyhow::anyhow!("Internal error: {}", e)));
+        }
+    }
+
+    let new_hash = tokio::task::spawn_blocking(move || {
+        let salt = SaltString::generate(&mut OsRng);
+        Argon2::default()
+            .hash_password(payload.new_password.as_bytes(), &salt)
+            .map(|h| h.to_string())
+    })
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Hashing error: {}", e)))?
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Hashing error: {}", e)))?;
+
+    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+        .bind(&new_hash)
+        .bind(&user_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(user_id = %user_id, "Password changed successfully");
+
+    Ok(Json(serde_json::json!({
+        "message": "Password changed successfully"
+    })))
 }
 
 /// Extract and validate the user_id from the Authorization header using the provided secret.
