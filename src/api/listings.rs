@@ -83,6 +83,17 @@ pub struct CreateListingResponse {
     pub message: String,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateListingRequest {
+    pub title: Option<String>,
+    pub category: Option<String>,
+    pub brand: Option<String>,
+    pub condition_score: Option<i32>,
+    pub suggested_price_cny: Option<f64>,
+    pub defects: Option<Vec<String>>,
+    pub description: Option<String>,
+}
+
 /// Parses a JSON-encoded defects array string into a Vec<String>.
 fn parse_defects(defects_text: &str) -> Vec<String> {
     serde_json::from_str(defects_text).unwrap_or_else(|_| vec![])
@@ -295,6 +306,122 @@ pub async fn create_listing(
         id: listing_id,
         message: "Listing created successfully".to_string(),
     }))
+}
+
+/// PUT /api/listings/:id - update a listing (owner only)
+pub async fn update_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+    Json(payload): Json<UpdateListingRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Check listing exists and belongs to user
+    let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let owner_id: String = row.get("owner_id");
+    let status: String = row.get("status");
+
+    if owner_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    if status == "sold" {
+        return Err(ApiError::BadRequest(
+            "Cannot update a sold listing".to_string(),
+        ));
+    }
+
+    // Build dynamic update query
+    let mut set_clauses: Vec<String> = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+    let mut param_idx = 1;
+
+    if let Some(ref title) = payload.title {
+        if title.is_empty() {
+            return Err(ApiError::BadRequest("title cannot be empty".to_string()));
+        }
+        set_clauses.push(format!("title = ${}", param_idx));
+        params.push(title.clone());
+        param_idx += 1;
+    }
+    if let Some(ref category) = payload.category {
+        set_clauses.push(format!("category = ${}", param_idx));
+        params.push(category.clone());
+        param_idx += 1;
+    }
+    if let Some(ref brand) = payload.brand {
+        set_clauses.push(format!("brand = ${}", param_idx));
+        params.push(brand.clone());
+        param_idx += 1;
+    }
+    if let Some(score) = payload.condition_score {
+        if !(1..=10).contains(&score) {
+            return Err(ApiError::BadRequest(
+                "condition_score must be between 1 and 10".to_string(),
+            ));
+        }
+        set_clauses.push(format!("condition_score = ${}", param_idx));
+        params.push(score.to_string());
+        param_idx += 1;
+    }
+    if let Some(price) = payload.suggested_price_cny {
+        if price < 0.0 {
+            return Err(ApiError::BadRequest(
+                "suggested_price_cny cannot be negative".to_string(),
+            ));
+        }
+        set_clauses.push(format!("suggested_price_cny = ${}", param_idx));
+        params.push(((price * 100.0).round() as i32).to_string());
+        param_idx += 1;
+    }
+    if let Some(ref defects) = payload.defects {
+        let defects_json = serde_json::to_string(defects)
+            .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
+        set_clauses.push(format!("defects = ${}", param_idx));
+        params.push(defects_json);
+        param_idx += 1;
+    }
+    if payload.description.is_some() {
+        set_clauses.push(format!("description = ${}", param_idx));
+        params.push(payload.description.clone().unwrap_or_default());
+        param_idx += 1;
+    }
+
+    if set_clauses.is_empty() {
+        return Err(ApiError::BadRequest("No fields to update".to_string()));
+    }
+
+    let sql = format!(
+        "UPDATE inventory SET {} WHERE id = ${}",
+        set_clauses.join(", "),
+        param_idx
+    );
+
+    let mut query = sqlx::query(&sql);
+    for param in &params {
+        query = query.bind(param);
+    }
+    query = query.bind(&id);
+
+    query
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(listing_id = %id, updated_by = %user_id, "Listing updated");
+
+    Ok(Json(serde_json::json!({
+        "message": "Listing updated successfully",
+        "id": id
+    })))
 }
 
 /// DELETE /api/listings/:id - delete a listing (owner only)

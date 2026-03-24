@@ -3,7 +3,7 @@ use crate::services::chat::ChatService;
 use crate::services::BusinessEvent;
 use axum::{
     extract::State,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
     Json, Router,
 };
 pub mod auth;
@@ -79,6 +79,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/listings", get(listings::get_listings))
         .route("/api/listings/recognize", post(listings::recognize_item))
         .route("/api/listings/{id}", get(listings::get_listing))
+        .route("/api/listings/{id}", put(listings::update_listing))
         .route("/api/listings", post(listings::create_listing))
         .route("/api/listings/{id}", delete(listings::delete_listing))
         .route("/api/user/profile", get(user::get_profile))
