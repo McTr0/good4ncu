@@ -100,81 +100,68 @@ pub async fn get_listings(
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
+    let category = params.category.as_ref();
+    let search = params.search.as_ref();
+
     // Count query
-    let count_sql = if params.category.is_some() && params.search.is_some() {
-        "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2)"
-    } else if params.category.is_some() {
-        "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1"
-    } else if params.search.is_some() {
-        let _pat = params.search.as_ref().unwrap();
-        "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1)"
-    } else {
-        "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'"
+    let (count_sql, count_bindings): (&str, Vec<String>) = match (category, search) {
+        (Some(cat), Some(srch)) => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2)",
+            vec![cat.clone(), format!("%{}%", srch)],
+        ),
+        (Some(cat), None) => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1",
+            vec![cat.clone()],
+        ),
+        (None, Some(srch)) => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1)",
+            vec![format!("%{}%", srch)],
+        ),
+        (None, None) => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'",
+            vec![],
+        ),
     };
 
-    let count_row = if params.category.is_some() && params.search.is_some() {
-        sqlx::query(count_sql)
-            .bind(params.category.as_ref().unwrap())
-            .bind(format!("%{}%", params.search.as_ref().unwrap()))
-            .fetch_one(&state.db)
-            .await
-    } else if params.category.is_some() {
-        sqlx::query(count_sql)
-            .bind(params.category.as_ref().unwrap())
-            .fetch_one(&state.db)
-            .await
-    } else if params.search.is_some() {
-        sqlx::query(count_sql)
-            .bind(format!("%{}%", params.search.as_ref().unwrap()))
-            .fetch_one(&state.db)
-            .await
-    } else {
-        sqlx::query(count_sql).fetch_one(&state.db).await
+    let mut count_q = sqlx::query(count_sql);
+    for binding in &count_bindings {
+        count_q = count_q.bind(binding);
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let count_row = count_q
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     let total: i64 = count_row.try_get("cnt").unwrap_or(0);
 
     // Items query
-    let items_sql = if params.category.is_some() && params.search.is_some() {
-        "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2) ORDER BY created_at DESC LIMIT $3 OFFSET $4"
-    } else if params.category.is_some() {
-        "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-    } else if params.search.is_some() {
-        "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1) ORDER BY created_at DESC LIMIT $2 OFFSET $3"
-    } else {
-        "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' ORDER BY created_at DESC LIMIT $1 OFFSET $2"
+    let (items_sql, items_bindings): (&str, Vec<String>) = match (category, search) {
+        (Some(cat), Some(srch)) => (
+            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2) ORDER BY created_at DESC LIMIT $3 OFFSET $4",
+            vec![cat.clone(), format!("%{}%", srch)],
+        ),
+        (Some(cat), None) => (
+            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+            vec![cat.clone()],
+        ),
+        (None, Some(srch)) => (
+            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1) ORDER BY created_at DESC LIMIT $2 OFFSET $3",
+            vec![format!("%{}%", srch)],
+        ),
+        (None, None) => (
+            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' ORDER BY created_at DESC LIMIT $1 OFFSET $2",
+            vec![],
+        ),
     };
 
-    let rows = if params.category.is_some() && params.search.is_some() {
-        sqlx::query(items_sql)
-            .bind(params.category.as_ref().unwrap())
-            .bind(format!("%{}%", params.search.as_ref().unwrap()))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-    } else if params.category.is_some() {
-        sqlx::query(items_sql)
-            .bind(params.category.as_ref().unwrap())
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-    } else if params.search.is_some() {
-        sqlx::query(items_sql)
-            .bind(format!("%{}%", params.search.as_ref().unwrap()))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-    } else {
-        sqlx::query(items_sql)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
+    let mut items_q = sqlx::query(items_sql);
+    for binding in &items_bindings {
+        items_q = items_q.bind(binding);
     }
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    items_q = items_q.bind(limit).bind(offset);
+    let rows = items_q
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let items: Vec<ListingSummary> = rows
         .iter()
@@ -407,17 +394,29 @@ Be honest about defects. If you cannot identify the item, return category="other
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to read response: {}", e)))?;
 
-    let parsed: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to parse response: {} - {}", e, response_text)))?;
+    let parsed: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!(
+            "Failed to parse response: {} - {}",
+            e,
+            response_text
+        ))
+    })?;
 
     let json_str = parsed["candidates"][0]["content"]["parts"][0]["text"]
         .as_str()
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("No text in response: {}", response_text)))?
+        .ok_or_else(|| {
+            ApiError::Internal(anyhow::anyhow!("No text in response: {}", response_text))
+        })?
         .trim();
 
     // Parse the JSON response from Gemini
-    let recognized: RecognizedItem = serde_json::from_str(json_str)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to parse item JSON: {} - JSON was: {}", e, json_str)))?;
+    let recognized: RecognizedItem = serde_json::from_str(json_str).map_err(|e| {
+        ApiError::Internal(anyhow::anyhow!(
+            "Failed to parse item JSON: {} - JSON was: {}",
+            e,
+            json_str
+        ))
+    })?;
 
     Ok(Json(recognized))
 }

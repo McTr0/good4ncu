@@ -15,6 +15,9 @@ pub enum ApiError {
     #[error("unauthorized")]
     Unauthorized,
 
+    #[error("forbidden")]
+    Forbidden,
+
     #[error("conflict: {0}")]
     Conflict(String),
 
@@ -33,6 +36,10 @@ impl IntoResponse for ApiError {
             ApiError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
                 "Authentication required. Please login first.".to_string(),
+            ),
+            ApiError::Forbidden => (
+                StatusCode::FORBIDDEN,
+                "You do not have permission to perform this action.".to_string(),
             ),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
             ApiError::RateLimitExceeded => (

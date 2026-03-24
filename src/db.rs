@@ -100,6 +100,20 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
     .await
     .ok(); // Ignore error if index already exists
 
+    // Order indexes for efficient order history queries
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id)")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_seller ON orders(seller_id)")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_listing ON orders(listing_id)")
+        .execute(pool)
+        .await
+        .ok();
+
     Ok(())
 }
 

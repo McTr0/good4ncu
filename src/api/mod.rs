@@ -2,13 +2,14 @@ use crate::llm::{LlmProvider, MarketplaceAgent};
 use crate::services::chat::ChatService;
 use crate::services::BusinessEvent;
 use axum::{
-    extract::{State},
+    extract::State,
     routing::{get, post},
     Json, Router,
 };
 pub mod auth;
 pub mod error;
 pub mod listings;
+pub mod orders;
 pub mod user;
 use error::ApiError;
 use rig::completion::Message;
@@ -46,9 +47,7 @@ where
             .extensions
             .get::<axum::extract::connect_info::ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0)
-            .or_else(|| {
-                parts.extensions.get::<std::net::SocketAddr>().copied()
-            })
+            .or_else(|| parts.extensions.get::<std::net::SocketAddr>().copied())
             .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
         Ok(PeerAddr(addr))
     }
@@ -81,6 +80,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/listings", post(listings::create_listing))
         .route("/api/user/profile", get(user::get_profile))
         .route("/api/user/listings", get(user::get_user_listings))
+        .route("/api/orders", get(orders::get_orders))
+        .route("/api/orders/{id}", get(orders::get_order))
+        .route("/api/orders/{id}/cancel", post(orders::cancel_order))
+        .route("/api/orders/{id}/confirm", post(orders::confirm_order))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .with_state(state)
