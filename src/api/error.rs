@@ -58,3 +58,94 @@ impl IntoResponse for ApiError {
         (status, Json(json!({ "error": msg }))).into_response()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::http::StatusCode;
+
+    #[test]
+    fn test_api_error_not_found_status() {
+        let error = ApiError::NotFound;
+        assert_eq!(error.to_string(), "not found");
+    }
+
+    #[test]
+    fn test_api_error_bad_request_status() {
+        let error = ApiError::BadRequest("Invalid input".to_string());
+        assert_eq!(error.to_string(), "bad request: Invalid input");
+    }
+
+    #[test]
+    fn test_api_error_unauthorized_status() {
+        let error = ApiError::Unauthorized;
+        assert_eq!(error.to_string(), "unauthorized");
+    }
+
+    #[test]
+    fn test_api_error_forbidden_status() {
+        let error = ApiError::Forbidden;
+        assert_eq!(error.to_string(), "forbidden");
+    }
+
+    #[test]
+    fn test_api_error_conflict_status() {
+        let error = ApiError::Conflict("Username taken".to_string());
+        assert_eq!(error.to_string(), "conflict: Username taken");
+    }
+
+    #[test]
+    fn test_api_error_rate_limit_status() {
+        let error = ApiError::RateLimitExceeded;
+        assert_eq!(error.to_string(), "rate limit exceeded");
+    }
+
+    #[test]
+    fn test_api_error_into_response_not_found() {
+        let error = ApiError::NotFound;
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn test_api_error_into_response_bad_request() {
+        let error = ApiError::BadRequest("test error".to_string());
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[test]
+    fn test_api_error_into_response_unauthorized() {
+        let error = ApiError::Unauthorized;
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_api_error_into_response_forbidden() {
+        let error = ApiError::Forbidden;
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[test]
+    fn test_api_error_into_response_rate_limit() {
+        let error = ApiError::RateLimitExceeded;
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[test]
+    fn test_api_error_into_response_internal() {
+        let error = ApiError::Internal(anyhow::anyhow!("secret error"));
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_api_error_conflict_into_response() {
+        let error = ApiError::Conflict("resource exists".to_string());
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+}
