@@ -89,10 +89,11 @@ impl Tool for CreateListingTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let owner =
-            self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("请先登录再进行操作".to_string())
-            })?;
+        let owner = self
+            .ctx
+            .current_user_id
+            .clone()
+            .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
         let listing_id = uuid::Uuid::new_v4().to_string();
         let defects_json =
             serde_json::to_string(&args.defects).unwrap_or_else(|_| "[]".to_string());
@@ -159,7 +160,8 @@ impl Tool for SearchInventoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "search_inventory".to_string(),
-            description: "搜索商品列表，支持关键词、分类、价格区间筛选。当用户想找特定商品时使用。".to_string(),
+            description: "搜索商品列表，支持关键词、分类、价格区间筛选。当用户想找特定商品时使用。"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -372,7 +374,8 @@ impl Tool for UpdateListingTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "update_listing".to_string(),
-            description: "修改商品的价格、标题或描述。当卖家想更新自己的商品信息时使用。".to_string(),
+            description: "修改商品的价格、标题或描述。当卖家想更新自己的商品信息时使用。"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -387,10 +390,11 @@ impl Tool for UpdateListingTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let owner_id =
-            self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("请先登录再进行操作".to_string())
-            })?;
+        let owner_id = self
+            .ctx
+            .current_user_id
+            .clone()
+            .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
 
         if args.new_price.is_none() && args.new_title.is_none() && args.new_description.is_none() {
             return Ok("No fields to update were provided.".to_string());
@@ -470,10 +474,11 @@ impl Tool for DeleteListingTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let owner_id =
-            self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("请先登录再进行操作".to_string())
-            })?;
+        let owner_id = self
+            .ctx
+            .current_user_id
+            .clone()
+            .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
 
         let result = sqlx::query(
             "UPDATE inventory SET status = 'deleted' WHERE id = $1 AND owner_id = $2 AND status = 'active'",
@@ -564,16 +569,15 @@ impl Tool for PurchaseItemIntentTool {
         }
 
         // Require authentication
-        let buyer_id =
-            self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("请先登录再进行操作".to_string())
-            })?;
+        let buyer_id = self
+            .ctx
+            .current_user_id
+            .clone()
+            .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
 
         // Cannot buy your own listing
         if buyer_id == listing.owner_id {
-            return Err(ToolError(
-                "不能购买自己发布的商品".to_string(),
-            ));
+            return Err(ToolError("不能购买自己发布的商品".to_string()));
         }
 
         // Validate offered price is within reasonable range of suggested price (±50%).
@@ -658,7 +662,10 @@ impl Tool for NegotiateItemTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let buyer_id = self.ctx.current_user_id.clone()
+        let buyer_id = self
+            .ctx
+            .current_user_id
+            .clone()
             .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
 
         // Fetch the listing to get the seller and check it's active
@@ -676,10 +683,7 @@ impl Tool for NegotiateItemTool {
         };
 
         if listing.status != "active" {
-            return Ok(format!(
-                "商品 {} 已下架或售出，无法还价",
-                args.listing_id
-            ));
+            return Ok(format!("商品 {} 已下架或售出，无法还价", args.listing_id));
         }
 
         if buyer_id == listing.owner_id {
@@ -716,8 +720,8 @@ impl Tool for NegotiateItemTool {
         let hitl_id = uuid::Uuid::new_v4().to_string();
         sqlx::query(
             r#"INSERT INTO hitl_requests
-               (id, listing_id, buyer_id, seller_id, proposed_price, reason, status)
-               VALUES ($1, $2, $3, $4, $5, $6, 'pending')"#,
+               (id, listing_id, buyer_id, seller_id, proposed_price, reason, status, expires_at)
+               VALUES ($1, $2, $3, $4, $5, $6, 'pending', CURRENT_TIMESTAMP + INTERVAL '48 hours')"#,
         )
         .bind(&hitl_id)
         .bind(&args.listing_id)
@@ -786,7 +790,8 @@ impl Tool for GetMyListingsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_my_listings".to_string(),
-            description: "获取当前用户发布的所有商品列表。当用户想查看或管理自己的商品时使用。".to_string(),
+            description: "获取当前用户发布的所有商品列表。当用户想查看或管理自己的商品时使用。"
+                .to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {},
@@ -796,10 +801,11 @@ impl Tool for GetMyListingsTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let owner_id =
-            self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("请先登录再进行操作".to_string())
-            })?;
+        let owner_id = self
+            .ctx
+            .current_user_id
+            .clone()
+            .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
 
         let rows = sqlx::query_as::<_, MyListingRow>(
             "SELECT id, title, status, suggested_price_cny FROM inventory WHERE owner_id = $1 ORDER BY status",

@@ -1,3 +1,4 @@
+use crate::agents::router::IntentRouter;
 use crate::llm::{LlmProvider, MarketplaceAgent};
 use crate::services::chat::ChatService;
 use crate::services::notification::NotificationService;
@@ -9,6 +10,7 @@ use axum::{
     routing::{delete, get, patch, post, put},
     Json, Router,
 };
+use futures::StreamExt;
 use sqlx::Row;
 pub mod auth;
 pub mod conversations;
@@ -17,7 +19,9 @@ pub mod listings;
 pub mod negotiate;
 pub mod notifications;
 pub mod orders;
+pub mod recommendations;
 pub mod stats;
+pub mod upload;
 pub mod user;
 pub mod watchlist;
 pub mod ws;
@@ -34,7 +38,7 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
-use crate::middleware::rate_limit::{RateLimitStateHandle, is_whitelisted};
+use crate::middleware::rate_limit::{is_whitelisted, RateLimitStateHandle};
 
 /// Security headers applied to all responses.
 async fn security_headers_middleware(
@@ -119,6 +123,13 @@ pub struct AppState {
     pub notification: NotificationService,
     #[allow(dead_code)]
     pub ws_connections: Arc<ws::WsConnections>,
+    pub router: IntentRouter,
+    /// Alibaba Cloud OSS configuration for STS direct-upload.
+    pub oss_endpoint: String,
+    pub oss_bucket: String,
+    pub oss_role_arn: Option<String>,
+    pub oss_access_key_id: Option<String>,
+    pub oss_access_key_secret: Option<String>,
 }
 
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
@@ -145,8 +156,11 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     Router::new()
         .route("/api/health", get(health_check))
         .route("/api/stats", get(stats::get_stats))
+        .route("/api/recommendations/feed", get(recommendations::get_recommendation_feed))
+        .route("/api/recommendations/similar", get(recommendations::get_similar_listings))
         .route("/api/categories", get(listings::get_categories))
         .route("/api/chat", post(handle_chat))
+        .route("/api/chat/stream", get(handle_chat_stream))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/change-password", post(auth::change_password))
@@ -208,11 +222,15 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/negotiations/{id}/reject",
             patch(negotiate::reject_counter_negotiation),
         )
+        .route("/api/upload/token", get(upload::get_upload_token))
         .route("/ws", get(ws::ws_handler))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(middleware::from_fn(security_headers_middleware))
-        .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            rate_limit_middleware,
+        ))
         .with_state(state)
 }
 
@@ -277,6 +295,23 @@ async fn handle_chat(
 
     let current_user_id = auth::extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
+
+    // Route: lightweight intent classification before doing any LLM work.
+    // Blocked content and simple chat greetings short-circuit here — no token spent.
+    let intent_result = state.router.classify(&payload.message);
+    tracing::debug!(intent = ?intent_result.intent.as_str(), confidence = %intent_result.confidence, "Router classification");
+
+    // Blocked: reject immediately, no LLM tokens consumed.
+    if let Some(reply) = intent_result.direct_response(&payload.message) {
+        let conversation_id = payload
+            .conversation_id
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        return Ok(Json(ChatResponse {
+            reply,
+            conversation_id,
+        }));
+    }
 
     // Resolve listing context: if listing_id is provided, look up the owner to use as
     // the message receiver. This anchors buyer→seller conversations to a specific listing
@@ -430,6 +465,193 @@ async fn handle_chat(
         reply,
         conversation_id,
     }))
+}
+
+/// Query params for SSE chat streaming.
+/// Token is required for auth; message is required to start a new turn.
+#[derive(Deserialize)]
+struct ChatStreamQuery {
+    token: String,
+    message: String,
+    /// Optional listing context — same as handle_chat.
+    listing_id: Option<String>,
+    /// Optional conversation_id — if provided, continues existing conversation.
+    conversation_id: Option<String>,
+}
+
+/// GET /api/chat/stream — SSE streaming chat endpoint.
+///
+/// Clients send: GET /api/chat/stream?token=<jwt>&message=hello&listing_id=xxx
+/// Server streams: text/event-stream with data: {"token": "..."} chunks.
+///
+/// Each chunk is a JSON object with a "token" field containing the text fragment.
+/// The stream closes when the LLM finishes responding (no more tool calls).
+async fn handle_chat_stream(
+    State(state): State<AppState>,
+    axum::extract::Query(params): axum::extract::Query<ChatStreamQuery>,
+) -> Result<impl axum::response::IntoResponse, ApiError> {
+    if params.message.len() > 2000 {
+        return Err(ApiError::BadRequest(
+            "Text message exceeds maximum length of 2000 characters.".to_string(),
+        ));
+    }
+
+    let current_user_id = auth::extract_user_id_from_token_str(&params.token, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Route: lightweight intent classification before doing any LLM work.
+    let intent_result = state.router.classify(&params.message);
+    tracing::debug!(intent = ?intent_result.intent.as_str(), confidence = %intent_result.confidence, "SSE Router classification");
+
+    // Blocked: reject immediately, no LLM tokens consumed.
+    if let Some(reply) = intent_result.direct_response(&params.message) {
+        let conversation_id = params
+            .conversation_id
+            .filter(|id| !id.is_empty())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        let payload = serde_json::json!({ "token": reply, "conversation_id": conversation_id });
+        let body = axum::body::Body::from(format!(
+            "data: {}\n\n",
+            serde_json::to_string(&payload).unwrap()
+        ));
+        return Ok(Response::builder()
+            .header("Content-Type", "text/event-stream")
+            .header("Cache-Control", "no-cache")
+            .header("X-Conversation-Id", &conversation_id)
+            .body(body)
+            .unwrap());
+    }
+
+    // Same listing resolution as handle_chat.
+    let listing_id: String;
+    let _receiver: Option<String>;
+    match params.listing_id {
+        Some(ref lid) if !lid.is_empty() => {
+            let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
+                .bind(lid)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+            match row {
+                Some(r) => {
+                    let owner_id: String = r.get("owner_id");
+                    let status: String = r.get("status");
+                    if status == "active" && owner_id != current_user_id {
+                        listing_id = lid.clone();
+                        _receiver = Some(owner_id);
+                    } else {
+                        listing_id = "global".to_string();
+                        _receiver = None;
+                    }
+                }
+                None => {
+                    listing_id = "global".to_string();
+                    _receiver = None;
+                }
+            }
+        }
+        _ => {
+            listing_id = "global".to_string();
+            _receiver = None;
+        }
+    };
+
+    let conversation_id = params
+        .conversation_id
+        .filter(|id| !id.is_empty())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
+
+    let chat_svc = ChatService::new(state.db.clone());
+
+    // Log user message before streaming.
+    let log_user = chat_svc.log_message(
+        &conversation_id,
+        &listing_id,
+        &current_user_id,
+        _receiver.as_deref(),
+        false,
+        &params.message,
+        None,
+        None,
+    );
+    if let Err(e) = log_user.await {
+        tracing::warn!(%e, "Failed to log user message for SSE stream");
+    }
+
+    let history_entries = chat_svc
+        .get_conversation_history(&conversation_id)
+        .await
+        .unwrap_or_default();
+
+    let chat_history: Vec<Message> = history_entries
+        .iter()
+        .map(|entry| {
+            if entry.is_agent {
+                Message::Assistant {
+                    id: None,
+                    content: OneOrMany::one(AssistantContent::Text(Text {
+                        text: entry.content.clone(),
+                    })),
+                }
+            } else {
+                Message::User {
+                    content: OneOrMany::one(UserContent::Text(Text {
+                        text: entry.content.clone(),
+                    })),
+                }
+            }
+        })
+        .collect();
+
+    let agent: Box<dyn MarketplaceAgent> = state
+        .llm_provider
+        .create_marketplace_agent(
+            &state.db,
+            state.event_tx.clone(),
+            Some(current_user_id.clone()),
+        )
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
+
+    let stream = agent.stream_chat(params.message.clone(), chat_history);
+
+    // Send ChatMessage event.
+    let chat_event = BusinessEvent::ChatMessage {
+        conversation_id: conversation_id.clone(),
+        listing_id: listing_id.to_string(),
+        sender: current_user_id,
+        content: params.message,
+        image_data: None,
+        audio_data: None,
+    };
+    let _ = state.event_tx.try_send(chat_event);
+
+    // Build SSE stream: each token becomes data: {"token": "..."}\n\n
+    let conv_id = conversation_id.clone();
+    let sse_stream = stream.map(move |result| {
+        let line = match result {
+            Ok(token) => {
+                let payload = serde_json::json!({ "token": token, "conversation_id": conv_id });
+                format!("data: {}\n\n", serde_json::to_string(&payload).unwrap())
+            }
+            Err(e) => {
+                let payload = serde_json::json!({ "error": e.to_string() });
+                format!("data: {}\n\n", serde_json::to_string(&payload).unwrap())
+            }
+        };
+        Ok::<_, std::convert::Infallible>(line.into_bytes())
+    });
+
+    let body = axum::body::Body::from_stream(sse_stream);
+
+    Ok(Response::builder()
+        .header("Content-Type", "text/event-stream")
+        .header("Cache-Control", "no-cache")
+        .header("Connection", "keep-alive")
+        .header("X-Conversation-Id", &conversation_id)
+        .body(body)
+        .unwrap())
 }
 
 #[cfg(test)]

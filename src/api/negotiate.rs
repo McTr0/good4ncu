@@ -27,6 +27,9 @@ pub struct HitlRequestItem {
     pub status: String,
     pub counter_price: Option<f64>,
     pub created_at: String,
+    /// When this pending request will automatically expire (ISO 8601).
+    /// Null for non-pending statuses.
+    pub expires_at: Option<String>,
 }
 
 /// GET /api/negotiations — list the current user's pending negotiation requests
@@ -39,19 +42,20 @@ pub async fn list_negotiations(
     let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    // Sellers see: pending (awaiting their response).
-    // Buyers see: countered (awaiting their accept/reject).
+    // Sellers see: pending (awaiting their response) and expired (auto-cancelled).
+    // Buyers see: countered (awaiting their accept/reject), approved/rejected (final),
+    // and expired (auto-cancelled).
     let rows = sqlx::query(
         r#"
         SELECT id, listing_id, buyer_id, seller_id, proposed_price, reason, status,
-               counter_price, created_at
+               counter_price, created_at, expires_at
         FROM hitl_requests
-        WHERE seller_id = $1 AND status = 'pending'
+        WHERE seller_id = $1 AND status IN ('pending', 'expired')
         UNION ALL
         SELECT id, listing_id, buyer_id, seller_id, proposed_price, reason, status,
-               counter_price, created_at
+               counter_price, created_at, expires_at
         FROM hitl_requests
-        WHERE buyer_id = $1 AND status = 'countered'
+        WHERE buyer_id = $1 AND status IN ('countered', 'approved', 'rejected', 'expired')
         ORDER BY created_at DESC
         LIMIT 20
         "#,
@@ -80,6 +84,13 @@ pub async fn list_negotiations(
                 .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
                 .map(|dt| dt.to_rfc3339())
                 .unwrap_or_else(|_| String::new()),
+            expires_at: row
+                .try_get::<Option<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>>, _>(
+                    "expires_at",
+                )
+                .ok()
+                .flatten()
+                .map(|dt| dt.to_rfc3339()),
         })
         .collect();
 
@@ -123,9 +134,7 @@ pub async fn respond_negotiation(
 
     let current_status: String = row.get("status");
     if current_status != "pending" {
-        return Err(ApiError::BadRequest(
-            "该议价请求已处理".to_string(),
-        ));
+        return Err(ApiError::BadRequest("该议价请求已处理".to_string()));
     }
 
     let listing_id: String = row.get("listing_id");
@@ -179,7 +188,10 @@ pub async fn respond_negotiation(
         ),
         "countered" => (
             "卖家还价了".to_string(),
-            format!("卖家提出还价 ¥{:.2}", crate::utils::cents_to_yuan(counter_price.unwrap())),
+            format!(
+                "卖家提出还价 ¥{:.2}",
+                crate::utils::cents_to_yuan(counter_price.unwrap())
+            ),
         ),
         _ => unreachable!(),
     };
@@ -198,31 +210,27 @@ pub async fn respond_negotiation(
 
     // Inject a system message into the conversation so the buyer sees it in chat history.
     // Uses sender='system' as a convention; the Flutter UI renders system messages distinctly.
-    let (system_content, final_price_for_deal): (String, Option<i64>) =
-        match new_status {
-            "approved" => {
-                let price = proposed_price;
-                (
-                    format!(
-                        "系统：卖家接受了您的还价 ¥{:.2}，订单已创建",
-                        crate::utils::cents_to_yuan(price)
-                    ),
-                    Some(price),
-                )
-            }
-            "rejected" => (
-                "系统：卖家拒绝了您的还价，交易取消".to_string(),
-                None,
-            ),
-            "countered" => (
+    let (system_content, final_price_for_deal): (String, Option<i64>) = match new_status {
+        "approved" => {
+            let price = proposed_price;
+            (
                 format!(
-                    "系统：卖家还价 ¥{:.2}",
-                    crate::utils::cents_to_yuan(counter_price.unwrap())
+                    "系统：卖家接受了您的还价 ¥{:.2}，订单已创建",
+                    crate::utils::cents_to_yuan(price)
                 ),
-                None,
+                Some(price),
+            )
+        }
+        "rejected" => ("系统：卖家拒绝了您的还价，交易取消".to_string(), None),
+        "countered" => (
+            format!(
+                "系统：卖家还价 ¥{:.2}",
+                crate::utils::cents_to_yuan(counter_price.unwrap())
             ),
-            _ => unreachable!(),
-        };
+            None,
+        ),
+        _ => unreachable!(),
+    };
     let conversation_id = format!("negotiate:{}", listing_id);
     let _ = sqlx::query(
         r#"INSERT INTO chat_messages (conversation_id, sender, is_agent, content, listing_id)
@@ -455,10 +463,12 @@ mod tests {
             status: "pending".to_string(),
             counter_price: None,
             created_at: "2024-01-01T00:00:00Z".to_string(),
+            expires_at: Some("2024-01-03T00:00:00Z".to_string()),
         };
         let json = serde_json::to_string(&item).unwrap();
         assert!(json.contains("\"proposed_price\":180.5"));
         assert!(json.contains("\"status\":\"pending\""));
+        assert!(json.contains("\"expires_at\""));
     }
 
     #[test]

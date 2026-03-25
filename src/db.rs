@@ -259,6 +259,12 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
         .execute(pool)
         .await?;
 
+    // Add expires_at column for tracking when a pending request times out (48h).
+    // Computed at insert time: created_at + INTERVAL '48 hours'.
+    sqlx::query("ALTER TABLE hitl_requests ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
