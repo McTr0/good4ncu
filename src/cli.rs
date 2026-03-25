@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use inquire::Select;
+use inquire::error::InquireError;
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
@@ -34,7 +35,17 @@ pub async fn run_cli(
     ];
 
     loop {
-        let ans = Select::new("What would you like to do?", options.clone()).prompt()?;
+        let ans = match Select::new("What would you like to do?", options.clone()).prompt() {
+            Ok(a) => a,
+            Err(InquireError::OperationInterrupted) | Err(InquireError::OperationCanceled) => {
+                println!("\nUse 'exit' option to quit, or press Enter to continue.");
+                continue;
+            }
+            Err(e) => {
+                tracing::error!(%e, "CLI prompt error");
+                continue;
+            }
+        };
 
         match ans {
             "Talk to Marketplace Assistant (Buy & Sell)" => {
@@ -72,7 +83,17 @@ async fn run_marketplace_agent_cli(
 
     println!("[System] Ready for searches and selling requests!\n");
 
-    let mut current_prompt = inquire::Text::new("What are you looking for?").prompt()?;
+    let mut current_prompt = match inquire::Text::new("What are you looking for?").prompt() {
+        Ok(p) => p,
+        Err(InquireError::OperationInterrupted) | Err(InquireError::OperationCanceled) => {
+            println!("\nExiting marketplace chat.");
+            return Ok(());
+        }
+        Err(e) => {
+            tracing::error!(%e, "Prompt error");
+            return Ok(());
+        }
+    };
     loop {
         if current_prompt.trim().to_lowercase() == "exit"
             || current_prompt.trim().to_lowercase() == "quit"
@@ -84,7 +105,17 @@ async fn run_marketplace_agent_cli(
         let response = agent.prompt(current_prompt.clone()).await?;
         println!("\n🤖: {}\n", response);
 
-        current_prompt = inquire::Text::new("You (type exit to quit):").prompt()?;
+        current_prompt = match inquire::Text::new("You (type exit to quit):").prompt() {
+            Ok(p) => p,
+            Err(InquireError::OperationInterrupted) | Err(InquireError::OperationCanceled) => {
+                println!("\nExiting marketplace chat.");
+                break;
+            }
+            Err(e) => {
+                tracing::error!(%e, "Prompt error");
+                break;
+            }
+        };
     }
 
     Ok(())

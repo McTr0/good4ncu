@@ -172,6 +172,7 @@ pub async fn run_cli_hitl_handler(
     mut rx: mpsc::Receiver<(HitlRequest, tokio::sync::oneshot::Sender<HitlResult>)>,
 ) {
     use inquire::{Select, Text};
+    use inquire::error::InquireError;
 
     while let Some((request, response_tx)) = rx.recv().await {
         println!("\n🔔 [HITL] AGENT IS ASKING FOR YOUR GUIDANCE:");
@@ -205,7 +206,12 @@ pub async fn run_cli_hitl_handler(
                 };
                 let _ = response_tx.send(result);
             }
-            Err(_) => {
+            Err(InquireError::OperationInterrupted) | Err(InquireError::OperationCanceled) => {
+                println!("\nOffer cancelled - rejecting.");
+                let _ = response_tx.send(HitlResult::Rejected);
+            }
+            Err(e) => {
+                tracing::error!(%e, "HITL prompt error");
                 let _ = response_tx.send(HitlResult::Rejected);
             }
         }
