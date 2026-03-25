@@ -907,7 +907,7 @@ class _ChatBubble extends StatelessWidget {
             ),
           ),
         ),
-        ?trailingCard,
+        if (trailingCard != null) trailingCard,
       ],
     );
   }
