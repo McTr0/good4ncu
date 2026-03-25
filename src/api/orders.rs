@@ -51,6 +51,11 @@ pub struct OrderDetail {
     pub final_price_cny: f64,
     pub status: String,
     pub created_at: String,
+    pub paid_at: Option<String>,
+    pub shipped_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub cancelled_at: Option<String>,
+    pub cancellation_reason: Option<String>,
 }
 
 /// GET /api/orders - list orders for current user
@@ -163,7 +168,9 @@ pub async fn get_order(
     let row = sqlx::query(
         r#"
         SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
-               o.status, o.created_at, i.title as listing_title,
+               o.status, o.created_at, o.paid_at, o.shipped_at, o.completed_at,
+               o.cancelled_at, o.cancellation_reason,
+               i.title as listing_title,
                b.username as buyer_username, s.username as seller_username
         FROM orders o
         JOIN inventory i ON o.listing_id = i.id
@@ -184,6 +191,24 @@ pub async fn get_order(
         .map(|dt| dt.to_rfc3339())
         .unwrap_or_else(|_| String::new());
 
+    let paid_at: Option<String> = row
+        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("paid_at")
+        .ok()
+        .map(|dt| dt.to_rfc3339());
+    let shipped_at: Option<String> = row
+        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("shipped_at")
+        .ok()
+        .map(|dt| dt.to_rfc3339());
+    let completed_at: Option<String> = row
+        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("completed_at")
+        .ok()
+        .map(|dt| dt.to_rfc3339());
+    let cancelled_at: Option<String> = row
+        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("cancelled_at")
+        .ok()
+        .map(|dt| dt.to_rfc3339());
+    let cancellation_reason: Option<String> = row.try_get("cancellation_reason").ok();
+
     Ok(Json(OrderDetail {
         id: row.get("id"),
         listing_id: row.get("listing_id"),
@@ -195,6 +220,11 @@ pub async fn get_order(
         final_price_cny: cents_to_yuan(row.get::<i32, _>("final_price") as i64),
         status: row.get("status"),
         created_at,
+        paid_at,
+        shipped_at,
+        completed_at,
+        cancelled_at,
+        cancellation_reason,
     }))
 }
 
@@ -613,6 +643,11 @@ mod tests {
             final_price_cny: 12999.0,
             status: "completed".to_string(),
             created_at: "2024-01-15T12:00:00Z".to_string(),
+            paid_at: None,
+            shipped_at: None,
+            completed_at: Some("2024-01-16T10:00:00Z".to_string()),
+            cancelled_at: None,
+            cancellation_reason: None,
         };
         let json = serde_json::to_string(&detail).unwrap();
         assert!(json.contains("order-789"));
@@ -620,6 +655,7 @@ mod tests {
         assert!(json.contains("buyeruser"));
         assert!(json.contains("selleruser"));
         assert!(json.contains("\"status\":\"completed\""));
+        assert!(json.contains("completed_at"));
     }
 
     #[test]
