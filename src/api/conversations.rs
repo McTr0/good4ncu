@@ -85,9 +85,14 @@ pub async fn get_conversation_messages(
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    // Verify user has access to this conversation (IDOR fix)
+    // Verify user has access to this conversation (IDOR fix).
+    // A user can access a conversation if they are EITHER the sender or receiver
+    // of at least one message in it. A null receiver means the message author
+    // is the only legitimate accessor for that message.
     let has_access = sqlx::query(
-        "SELECT 1 FROM chat_messages WHERE conversation_id = $1 AND sender = $2 LIMIT 1",
+        "SELECT 1 FROM chat_messages \
+         WHERE conversation_id = $1 AND (sender = $2 OR receiver = $2) \
+         LIMIT 1",
     )
     .bind(&conversation_id)
     .bind(&user_id)

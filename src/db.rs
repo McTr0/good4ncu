@@ -59,17 +59,23 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
             conversation_id TEXT NOT NULL,
             listing_id TEXT NOT NULL,
             sender TEXT NOT NULL,
+            receiver TEXT,
             is_agent BOOLEAN NOT NULL DEFAULT FALSE,
             content TEXT NOT NULL,
             image_data TEXT,
             audio_data TEXT,
             timestamp TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY(listing_id) REFERENCES inventory(id) ON DELETE CASCADE,
             FOREIGN KEY(sender) REFERENCES users(id) ON DELETE CASCADE
         )"#,
     )
     .execute(pool)
     .await?;
+
+    // Add receiver column if it doesn't exist (fixes IDOR: must check both sender and receiver)
+    sqlx::query("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS receiver TEXT")
+        .execute(pool)
+        .await
+        .ok(); // Ignore error if column already exists
 
     // Add conversation_id column if it doesn't exist (for existing SQLite-migrated dbs)
     sqlx::query("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS conversation_id TEXT")

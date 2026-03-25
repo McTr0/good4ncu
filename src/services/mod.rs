@@ -102,11 +102,17 @@ impl ServiceManager {
                         image_data,
                         audio_data,
                     } => {
+                        // receiver is None here — the event-based path is a fallback for
+                        // message logging and doesn't carry receiver context. The primary
+                        // path (api/mod.rs handle_chat) also passes None since it has no
+                        // listing context. Proper receiver population requires a follow-up
+                        // to thread listing context through the event.
                         if let Err(e) = chat_svc
                             .log_message(
                                 &conversation_id,
                                 &listing_id,
                                 &sender,
+                                None,
                                 false, // user message, not agent
                                 &content,
                                 image_data.as_deref(),
@@ -197,7 +203,12 @@ mod tests {
         }"#;
         let event: BusinessEvent = serde_json::from_str(json).unwrap();
         match event {
-            BusinessEvent::DealReached { listing_id, buyer_id, seller_id, final_price } => {
+            BusinessEvent::DealReached {
+                listing_id,
+                buyer_id,
+                seller_id,
+                final_price,
+            } => {
                 assert_eq!(listing_id, "listing-x");
                 assert_eq!(buyer_id, "buyer-y");
                 assert_eq!(seller_id, "seller-z");

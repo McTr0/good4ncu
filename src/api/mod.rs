@@ -226,10 +226,14 @@ async fn handle_chat(
     let chat_svc = ChatService::new(state.db.clone());
 
     // Log user message BEFORE LLM call — prevents data loss if LLM times out or request is aborted.
+    // receiver is None here because handle_chat has no listing context (listing_id = "global").
+    // The IDOR fix in get_conversation_messages checks sender OR receiver, so messages
+    // without a receiver are only accessible to the sender — which is correct.
     let log_user = chat_svc.log_message(
         &conversation_id,
         listing_id,
         &current_user_id,
+        None,
         false,
         &payload.message,
         payload.image.as_deref(),
@@ -285,10 +289,12 @@ async fn handle_chat(
         })?;
 
     // Log agent reply — fire and forget, errors are non-fatal.
+    // Agent messages have no receiver (they're broadcast-style from the AI assistant).
     let log_agent = chat_svc.log_message(
         &conversation_id,
         listing_id,
         "assistant",
+        None,
         true,
         &reply,
         None,

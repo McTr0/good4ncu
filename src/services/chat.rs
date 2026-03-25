@@ -29,24 +29,27 @@ impl ChatService {
     }
 
     /// Log a chat message to the database.
+    /// receiver is the intended recipient (listing owner for item inquiries, null for global/agent messages).
     #[allow(clippy::too_many_arguments)]
     pub async fn log_message(
         &self,
         conversation_id: &str,
         listing_id: &str,
         sender: &str,
+        receiver: Option<&str>,
         is_agent: bool,
         content: &str,
         image_data: Option<&str>,
         audio_data: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO chat_messages (conversation_id, listing_id, sender, is_agent, content, image_data, audio_data) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(conversation_id)
         .bind(listing_id)
         .bind(sender)
+        .bind(receiver)
         .bind(is_agent)
         .bind(content)
         .bind(image_data)
@@ -299,7 +302,16 @@ mod tests {
         insert_user(&pool, "user-1", "user1").await;
         insert_listing(&pool, "listing-1", "user-1").await;
         ChatService::new(pool.clone())
-            .log_message("conv-1", "listing-1", "user-1", false, "Hello!", None, None)
+            .log_message(
+                "conv-1",
+                "listing-1",
+                "user-1",
+                None,
+                false,
+                "Hello!",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -323,15 +335,42 @@ mod tests {
 
         // Log multiple messages in the same conversation
         chat_svc
-            .log_message("conv-test", "listing-1", "user-1", false, "First message", None, None)
+            .log_message(
+                "conv-test",
+                "listing-1",
+                "user-1",
+                None,
+                false,
+                "First message",
+                None,
+                None,
+            )
             .await
             .unwrap();
         chat_svc
-            .log_message("conv-test", "listing-1", "user-1", true, "Agent reply", None, None)
+            .log_message(
+                "conv-test",
+                "listing-1",
+                "user-1",
+                None,
+                true,
+                "Agent reply",
+                None,
+                None,
+            )
             .await
             .unwrap();
         chat_svc
-            .log_message("conv-test", "listing-1", "user-1", false, "Third message", None, None)
+            .log_message(
+                "conv-test",
+                "listing-1",
+                "user-1",
+                None,
+                false,
+                "Third message",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -373,17 +412,44 @@ mod tests {
 
         // Create conversations for user-1
         chat_svc
-            .log_message("conv-1", "listing-1", "user-1", false, "Message in conv 1", None, None)
+            .log_message(
+                "conv-1",
+                "listing-1",
+                "user-1",
+                None,
+                false,
+                "Message in conv 1",
+                None,
+                None,
+            )
             .await
             .unwrap();
         chat_svc
-            .log_message("conv-2", "listing-1", "user-1", false, "Message in conv 2", None, None)
+            .log_message(
+                "conv-2",
+                "listing-1",
+                "user-1",
+                None,
+                false,
+                "Message in conv 2",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
         // Create conversation for user-2 (should not appear for user-1)
         chat_svc
-            .log_message("conv-3", "listing-1", "user-2", false, "User-2 message", None, None)
+            .log_message(
+                "conv-3",
+                "listing-1",
+                "user-2",
+                None,
+                false,
+                "User-2 message",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
@@ -408,7 +474,16 @@ mod tests {
 
         let chat_svc = ChatService::new(pool.clone());
         chat_svc
-            .log_message("conv-1", "listing-1", "user-1", false, "Hello", None, None)
+            .log_message(
+                "conv-1",
+                "listing-1",
+                "user-1",
+                None,
+                false,
+                "Hello",
+                None,
+                None,
+            )
             .await
             .unwrap();
 
