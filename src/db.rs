@@ -169,6 +169,30 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
     .await
     .ok();
 
+    // Notifications table: seller receives an in-app notification when a buyer places an order.
+    // Eliminates the need for sellers to poll /api/orders to detect new sales.
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS notifications (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            event_type TEXT NOT NULL,
+            title TEXT NOT NULL,
+            body TEXT NOT NULL,
+            related_order_id TEXT,
+            related_listing_id TEXT,
+            is_read BOOLEAN NOT NULL DEFAULT FALSE,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read, created_at)")
+        .execute(pool)
+        .await
+        .ok();
+
     Ok(())
 }
 
