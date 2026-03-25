@@ -44,6 +44,8 @@ pub struct MessageEntry {
     pub content: String,
     pub is_agent: bool,
     pub timestamp: String,
+    pub image_data: Option<String>,
+    pub audio_data: Option<String>,
 }
 
 /// GET /api/conversations - list user's conversations (paginated)
@@ -106,7 +108,7 @@ pub async fn get_conversation_messages(
 
     let rows = sqlx::query(
         r#"
-        SELECT sender, content, is_agent, timestamp
+        SELECT sender, content, is_agent, timestamp, image_data, audio_data
         FROM chat_messages
         WHERE conversation_id = $1
         ORDER BY id DESC
@@ -141,6 +143,8 @@ pub async fn get_conversation_messages(
                 content: row.get("content"),
                 is_agent: row.get("is_agent"),
                 timestamp,
+                image_data: row.try_get("image_data").ok(),
+                audio_data: row.try_get("audio_data").ok(),
             }
         })
         .collect();
@@ -193,11 +197,14 @@ mod tests {
             content: "Hello!".to_string(),
             is_agent: false,
             timestamp: "2024-01-01T00:00:00Z".to_string(),
+            image_data: Some("base64img".to_string()),
+            audio_data: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("user-123"));
         assert!(json.contains("Hello!"));
         assert!(json.contains("\"is_agent\":false"));
+        assert!(json.contains("base64img"));
     }
 
     #[test]
