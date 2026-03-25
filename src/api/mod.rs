@@ -1,5 +1,6 @@
 use crate::llm::{LlmProvider, MarketplaceAgent};
 use crate::services::chat::ChatService;
+use crate::services::notification::NotificationService;
 use crate::services::BusinessEvent;
 use axum::{
     extract::State,
@@ -13,6 +14,7 @@ pub mod auth;
 pub mod conversations;
 pub mod error;
 pub mod listings;
+pub mod notifications;
 pub mod orders;
 pub mod stats;
 pub mod user;
@@ -84,6 +86,7 @@ pub struct AppState {
     pub rate_limit: RateLimitStateHandle,
     pub jwt_secret: String,
     pub gemini_api_key: String,
+    pub notification: NotificationService,
 }
 
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
@@ -150,6 +153,15 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route(
             "/api/watchlist/{listing_id}",
             delete(watchlist::remove_from_watchlist),
+        )
+        .route("/api/notifications", get(notifications::get_notifications))
+        .route(
+            "/api/notifications/{id}/read",
+            post(notifications::mark_notification_read),
+        )
+        .route(
+            "/api/notifications/read-all",
+            post(notifications::mark_all_notifications_read),
         )
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))

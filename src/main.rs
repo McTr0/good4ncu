@@ -66,6 +66,7 @@ async fn main() -> Result<(), anyhow::Error> {
         rate_limit: middleware::rate_limit::make_rate_limit_state(),
         jwt_secret: config.jwt_secret.clone(),
         gemini_api_key: config.gemini_api_key.clone(),
+        notification: crate::services::notification::NotificationService::new(db_pool.clone()),
     };
 
     let app = api::create_router(app_state, &config.cors_origins);
