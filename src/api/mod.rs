@@ -28,11 +28,12 @@ use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use tokio::time::{timeout, Duration};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
-use crate::middleware::rate_limit::RateLimitStateHandle;
+use crate::middleware::rate_limit::{RateLimitStateHandle, is_whitelisted};
 
 /// Security headers applied to all responses.
 async fn security_headers_middleware(
@@ -49,6 +50,34 @@ async fn security_headers_middleware(
         "max-age=31536000; includeSubDomains".parse().unwrap(),
     );
     response
+}
+
+/// Rate-limit middleware that checks rate limits before passing requests to handlers.
+pub async fn rate_limit_middleware(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    use axum::response::IntoResponse;
+
+    let path = request.uri().path().to_string();
+
+    if is_whitelisted(&path) {
+        return next.run(request).await;
+    }
+
+    // Extract peer address from TCP socket — cannot be spoofed by clients.
+    let peer_addr = request
+        .extensions()
+        .get::<SocketAddr>()
+        .copied()
+        .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+
+    if !state.rate_limit.check_rate_limit(&peer_addr.to_string()) {
+        return ApiError::RateLimitExceeded.into_response();
+    }
+
+    next.run(request).await
 }
 
 /// Extractor that provides the direct TCP peer address of the connected client.
@@ -166,6 +195,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(middleware::from_fn(security_headers_middleware))
+        .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware))
         .with_state(state)
 }
 
@@ -226,10 +256,6 @@ async fn handle_chat(
 
     if let Some(proxy_ip) = client_ip {
         tracing::debug!(client_ip = %proxy_ip, peer = %addr, "Chat request");
-    }
-
-    if !state.rate_limit.check_rate_limit(&addr.to_string()) {
-        return Err(ApiError::RateLimitExceeded);
     }
 
     let current_user_id = auth::extract_user_id_from_token(&headers, &state.jwt_secret)
@@ -361,19 +387,24 @@ async fn handle_chat(
         tracing::warn!(%e, "Failed to log agent reply");
     }
 
-    if state
-        .event_tx
-        .try_send(BusinessEvent::ChatMessage {
-            conversation_id: conversation_id.clone(),
-            listing_id: listing_id.to_string(),
-            sender: current_user_id,
-            content: payload.message,
-            image_data: payload.image,
-            audio_data: payload.audio,
-        })
-        .is_err()
+    // Send event with backpressure: wait up to 5 seconds, then log and continue.
+    // Using send instead of try_send prevents silent event loss under load.
+    let chat_event = BusinessEvent::ChatMessage {
+        conversation_id: conversation_id.clone(),
+        listing_id: listing_id.to_string(),
+        sender: current_user_id,
+        content: payload.message,
+        image_data: payload.image,
+        audio_data: payload.audio,
+    };
+    if timeout(
+        Duration::from_secs(5),
+        state.event_tx.send(chat_event),
+    )
+    .await
+    .is_err()
     {
-        tracing::warn!("Event bus full, dropping ChatMessage");
+        tracing::error!("Event bus unresponsive for 5s, dropping ChatMessage event");
     }
 
     Ok(Json(ChatResponse {

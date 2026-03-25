@@ -282,9 +282,8 @@ pub async fn change_password(
     match verify_result {
         Ok(true) => {}
         Ok(false) => {
-            return Err(ApiError::BadRequest(
-                "当前密码错误".to_string(),
-            ));
+            tracing::warn!(user_id = %user_id, "Password change failed — wrong current password");
+            return Err(ApiError::Unauthorized);
         }
         Err(e) => {
             tracing::error!(err = %e, "Password verification task failed");

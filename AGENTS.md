@@ -45,14 +45,14 @@ cargo test -- --nocapture
 cd mobile && flutter pub get && flutter run
 ```
 
-No CI pipeline exists. No test suite exists yet — the project is prototype-stage.
+No CI pipeline exists yet. Unit tests are run locally with `cargo test`.
 
 ## Environment
 
 - Rust edition 2021, Cargo lock version 4
-- Requires `.env` file with `GEMINI_API_KEY` set (loaded via `dotenvy`)
-- SQLite databases: `secondhand.db` (relational + vector) — gitignored, created at runtime
-- Dependencies from crates.io: `rig-core` 0.33.0, `rig-sqlite` 0.2.2
+- Requires `.env` file with `GEMINI_API_KEY` and `DATABASE_URL` set (loaded via `dotenvy`)
+- PostgreSQL database (relational + pgvector for vector similarity search) — connection via `DATABASE_URL`
+- Dependencies from crates.io: `rig-core` 0.33.0, `rig-postgres` 0.2.2
 - Uses `rustls` TLS backend for reqwest (not native-tls) — required for proxy compatibility
 - Flutter SDK required for mobile app development
 
@@ -61,7 +61,7 @@ No CI pipeline exists. No test suite exists yet — the project is prototype-sta
 ```
 src/                         # Rust backend
 ├── main.rs                  # Entry point: DB init, Gemini client, event bus, Axum server, CLI
-├── db.rs                    # SQLite init (sqlx pool + rusqlite/sqlite-vec for vectors)
+├── db.rs                    # PostgreSQL + pgvector init (sqlx pool, CREATE EXTENSION IF NOT EXISTS vector)
 ├── cli.rs                   # Interactive CLI menu (inquire)
 ├── api/
 │   └── mod.rs               # Axum REST API (health check, chat endpoint with multimodal support)
@@ -98,7 +98,7 @@ Key patterns:
 
 - Platform scaffolding (`mobile/android/`, `mobile/ios/`, `mobile/web/`, `mobile/linux/`, `mobile/macos/`, `mobile/windows/`, `mobile/test/`) is gitignored — regenerate with `flutter create`
 - Generated files (`pubspec.lock`, `generated_plugin_registrant.*`) are gitignored
-- `.env`, `*.db`, `.DS_Store` are gitignored — never commit secrets or databases
+- `.env`, `.DS_Store` are gitignored — never commit secrets
 - Commit style: conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `style:`)
 
 ## Code Style
@@ -121,7 +121,7 @@ Key patterns:
 ### Types
 - Use `anyhow::Result` for application-level error propagation
 - Use `thiserror::Error` for domain-specific error types (e.g., `ToolError`, `HumanInteractionError`)
-- Derive `Clone` on service structs and tool structs (they hold `SqlitePool` / `Arc` handles)
+- Derive `Clone` on service structs and tool structs (they hold `sqlx::PgPool` / `Arc` handles)
 - Use `serde::{Serialize, Deserialize}` for all data transfer types
 - Use `schemars::JsonSchema` for types used with Rig's extractor
 - Use `sqlx::FromRow` for database row types (keep them private to the module)
@@ -143,24 +143,24 @@ Key patterns:
 - Doc comments (`///`) on public functions and key structs
 
 ### Async
-- All DB operations are async (sqlx queries, tokio-rusqlite)
+- All DB operations are async (sqlx queries with `PgPool`)
 - Use `tokio::spawn` for background tasks (event loop, web server)
 - Use `mpsc::UnboundedSender` / `UnboundedReceiver` for event bus
 - Shared state across async boundaries uses `Arc<T>` (e.g., `Arc<Connection>`)
 
 ### Database
-- SQLite via two drivers: `sqlx` (relational queries) and `tokio-rusqlite` + `sqlite-vec` (vector store)
+- PostgreSQL with pgvector extension: relational data + vector similarity search in one DB
 - UUIDs as TEXT primary keys (generated via `uuid::Uuid::new_v4().to_string()`)
 - Soft deletes: `status` column with values `'active'`, `'sold'`, `'deleted'`
-- SQL uses `?` bind parameters — never interpolate user input directly into SQL strings
-- Schema defined inline in `db::init_db()` with `CREATE TABLE IF NOT EXISTS`
+- SQL uses `$1, $2` bind parameters (PostgreSQL style) — never interpolate user input directly into SQL strings
+- Schema defined inline in `db::init_db()` with `CREATE TABLE IF NOT EXISTS` and `CREATE EXTENSION IF NOT EXISTS vector`
 
 ### API (Axum)
 - State passed via `AppState` struct with `#[derive(Clone)]`
 - CORS: permissive (`Any` origin/methods/headers) — prototype only
 - Request/response types: private structs with `Deserialize` / `Serialize`
 - Handlers return `Json<T>` directly
-- Errors returned as `ChatResponse { reply: format!("Error: {}", e) }` — no HTTP error codes yet
+- Errors returned via `ApiError` enum → structured JSON responses with HTTP status codes
 
 ### Rig Framework
 - Agent model: `gemini-3-flash-preview`
@@ -174,11 +174,10 @@ Key patterns:
 | Crate | Version | Purpose |
 |-------|---------|---------|
 | `rig-core` | 0.33.0 | LLM agent framework |
-| `rig-sqlite` | 0.2.2 | Vector store integration |
+| `rig-postgres` | 0.2.2 | Vector store integration (pgvector) |
 | `axum` | 0.8 | HTTP server |
-| `sqlx` | 0.8.6 | Async SQL (SQLite) |
-| `tokio-rusqlite` / `rusqlite` | 0.6 / 0.32 | Sync SQLite for sqlite-vec |
-| `sqlite-vec` | 0.1.6 | Vector similarity search extension |
+| `sqlx` | 0.8.6 | Async SQL (PostgreSQL) |
+| `pgvector` | 0.4 | Vector similarity search extension |
 | `serde` / `serde_json` | 1.0 | Serialization |
 | `schemars` | 1.0.4 | JSON Schema generation for Rig extractors |
 | `anyhow` / `thiserror` | 1.0 | Error handling |
@@ -191,7 +190,6 @@ Key patterns:
 
 ## Notes
 
-- This is a prototype — no auth, no proper HTTP error handling, no tests yet
+- This is a prototype — no auth (prototype stage), no proper HTTP error handling (being improved), no tests yet
 - Agent preambles and user-facing strings are in Chinese (Simplified)
-- `secondhand.db` is created at runtime; do not commit it
 - Flutter platform directories are gitignored — regenerate with `cd mobile && flutter create .`

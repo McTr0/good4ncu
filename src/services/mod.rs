@@ -105,28 +105,61 @@ impl ServiceManager {
                     }
                     BusinessEvent::OrderPaid { order_id } => {
                         tracing::info!(order_id, "OrderPaid event received");
-                        if let Err(e) = settlement_svc.finalize_payment(&order_id).await {
-                            tracing::error!(%e, order_id, "Failed to finalize payment");
-                        }
+
+                        // First get order details — needed for notifications regardless of
+                        // settlement outcome. Must fetch before spawning to get seller_id.
+                        let order_details = order_svc.get_order(&order_id).await;
+                        let (seller_id, listing_id) = match order_details {
+                            Ok(Some((sid, lid))) => (sid, lid),
+                            Ok(None) => {
+                                tracing::error!(order_id, "Order not found");
+                                return;
+                            }
+                            Err(e) => {
+                                tracing::error!(%e, order_id, "Failed to get order");
+                                return;
+                            }
+                        };
+
+                        // Spawn settlement as independent task — does not block event loop.
+                        // Settlement failure does NOT block order status update + notification.
+                        let order_id_clone = order_id.clone();
+                        let settlement_svc_clone = settlement_svc.clone();
+                        let seller_id_clone = seller_id.clone();
+                        let notification_svc_clone = notification_svc.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = settlement_svc_clone.finalize_payment(&order_id_clone).await {
+                                tracing::error!(%e, order_id_clone, "Settlement failed");
+                                // Notify seller of settlement failure
+                                let _ = notification_svc_clone
+                                    .create(
+                                        &seller_id_clone,
+                                        "settlement_failed",
+                                        "结算失败",
+                                        &format!("订单结算失败: {}", e),
+                                        Some(&order_id_clone),
+                                        None,
+                                    )
+                                    .await;
+                            }
+                        });
+
+                        // Order status update and payment notification run in main event loop
                         if let Err(e) = order_svc.update_order_status(&order_id, "paid").await
                         {
                             tracing::error!(%e, order_id, "Failed to update order status");
                         }
                         // Notify seller that payment was received
-                        if let Some(Ok((seller_id, listing_id))) =
-                            order_svc.get_order(&order_id).await.transpose()
-                        {
-                            let _ = notification_svc
-                                .create(
-                                    &seller_id,
-                                    "order_paid",
-                                    "款项已到账",
-                                    "买家已付款，请尽快发货",
-                                    Some(&order_id),
-                                    Some(&listing_id),
-                                )
-                                .await;
-                        }
+                        let _ = notification_svc
+                            .create(
+                                &seller_id,
+                                "order_paid",
+                                "款项已到账",
+                                "买家已付款，请尽快发货",
+                                Some(&order_id),
+                                Some(&listing_id),
+                            )
+                            .await;
                     }
                     BusinessEvent::ChatMessage {
                         conversation_id,
