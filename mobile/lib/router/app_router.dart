@@ -9,6 +9,8 @@ import '../pages/my_listings_page.dart';
 import '../pages/profile_page.dart';
 import '../pages/chat_page.dart';
 import '../pages/login_page.dart';
+import '../pages/order_detail_page.dart';
+import '../pages/trust_page.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
 
@@ -36,6 +38,17 @@ final GoRouter appRouter = GoRouter(
     GoRoute(
       path: '/login',
       builder: (context, state) => const LoginPage(),
+    ),
+    GoRoute(
+      path: '/trust',
+      builder: (context, state) => const TrustPage(),
+    ),
+    GoRoute(
+      path: '/order/:id',
+      pageBuilder: (context, state) {
+        final id = state.pathParameters['id']!;
+        return NoTransitionPage(child: OrderDetailPage(orderId: id));
+      },
     ),
     ShellRoute(
       builder: (context, state, child) => _ShellScaffold(child: child),

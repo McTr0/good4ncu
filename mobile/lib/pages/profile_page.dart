@@ -181,6 +181,12 @@ class _ProfilePageState extends State<ProfilePage> {
             },
           ),
           _MenuCard(
+            icon: Icons.verified_user_outlined,
+            title: '交易保障',
+            subtitle: '平台托管 + 7天确认收货',
+            onTap: () => context.push('/trust'),
+          ),
+          _MenuCard(
             icon: Icons.favorite_border,
             title: l.myFavorites,
             subtitle: l.myFavoritesSubtitle,
