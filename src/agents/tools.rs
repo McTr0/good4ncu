@@ -191,9 +191,10 @@ impl Tool for SearchInventoryTool {
         }
         if args.max_price.is_some() {
             sql.push_str(&format!(" AND suggested_price_cny <= ${}", param_idx));
+            param_idx += 1;
         }
-        if let Some(min_c) = args.min_condition {
-            sql.push_str(&format!(" AND condition_score >= {}", min_c));
+        if args.min_condition.is_some() {
+            sql.push_str(&format!(" AND condition_score >= ${}", param_idx));
         }
         sql.push_str(" LIMIT 10");
 
@@ -207,6 +208,9 @@ impl Tool for SearchInventoryTool {
         }
         if let Some(max_p) = args.max_price {
             query = query.bind(max_p);
+        }
+        if let Some(min_c) = args.min_condition {
+            query = query.bind(min_c as i32);
         }
 
         let rows = query
@@ -666,4 +670,176 @@ struct MyListingRow {
     title: String,
     status: String,
     suggested_price_cny: i64,
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (no DB required)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tool_error_display() {
+        let err = ToolError("test error message".to_string());
+        assert_eq!(err.to_string(), "Tool error: test error message");
+    }
+
+    #[test]
+    fn test_tool_error_debug() {
+        let err = ToolError("debug test".to_string());
+        let debug_str = format!("{:?}", err);
+        assert!(debug_str.contains("ToolError"));
+        assert!(debug_str.contains("debug test"));
+    }
+
+    #[test]
+    fn test_create_listing_args_deserialization() {
+        let json = r#"{
+            "title": "iPhone 13",
+            "category": "electronics",
+            "brand": "Apple",
+            "condition_score": 8,
+            "suggested_price_cny": 500000,
+            "defects": ["Minor scratch"],
+            "original_description": "Barely used"
+        }"#;
+        let args: CreateListingArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.title, "iPhone 13");
+        assert_eq!(args.category, "electronics");
+        assert_eq!(args.brand, "Apple");
+        assert_eq!(args.condition_score, 8);
+        assert_eq!(args.suggested_price_cny, 500000);
+        assert!(args.defects.contains(&"Minor scratch".to_string()));
+        assert_eq!(args.original_description, "Barely used");
+    }
+
+    #[test]
+    fn test_create_listing_args_empty_defects() {
+        let json = r#"{
+            "title": "Book",
+            "category": "books",
+            "brand": "Publisher",
+            "condition_score": 7,
+            "suggested_price_cny": 5000,
+            "defects": [],
+            "original_description": "Like new"
+        }"#;
+        let args: CreateListingArgs = serde_json::from_str(json).unwrap();
+        assert!(args.defects.is_empty());
+    }
+
+    #[test]
+    fn test_search_inventory_args_partial() {
+        // Only keyword provided
+        let json = r#"{"keyword": "iphone"}"#;
+        let args: SearchInventoryArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.keyword, Some("iphone".to_string()));
+        assert_eq!(args.category, None);
+        assert_eq!(args.max_price, None);
+        assert_eq!(args.min_condition, None);
+    }
+
+    #[test]
+    fn test_search_inventory_args_all_filters() {
+        let json = r#"{
+            "keyword": "laptop",
+            "category": "electronics",
+            "max_price": 500000,
+            "min_condition": 7
+        }"#;
+        let args: SearchInventoryArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.keyword, Some("laptop".to_string()));
+        assert_eq!(args.category, Some("electronics".to_string()));
+        assert_eq!(args.max_price, Some(500000));
+        assert_eq!(args.min_condition, Some(7));
+    }
+
+    #[test]
+    fn test_search_inventory_args_empty() {
+        let json = r#"{}"#;
+        let args: SearchInventoryArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.keyword, None);
+        assert_eq!(args.category, None);
+        assert_eq!(args.max_price, None);
+        assert_eq!(args.min_condition, None);
+    }
+
+    #[test]
+    fn test_get_listing_details_args() {
+        let json = r#"{"listing_id": "listing-123"}"#;
+        let args: GetListingDetailsArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.listing_id, "listing-123");
+    }
+
+    #[test]
+    fn test_update_listing_args_partial() {
+        // Only new_price provided
+        let json = r#"{"listing_id": "listing-456", "new_price": 450000}"#;
+        let args: UpdateListingArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.listing_id, "listing-456");
+        assert_eq!(args.new_price, Some(450000));
+        assert_eq!(args.new_title, None);
+        assert_eq!(args.new_description, None);
+    }
+
+    #[test]
+    fn test_update_listing_args_all_fields() {
+        let json = r#"{
+            "listing_id": "listing-789",
+            "new_price": 400000,
+            "new_title": "Updated Title",
+            "new_description": "New description"
+        }"#;
+        let args: UpdateListingArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.listing_id, "listing-789");
+        assert_eq!(args.new_price, Some(400000));
+        assert_eq!(args.new_title, Some("Updated Title".to_string()));
+        assert_eq!(args.new_description, Some("New description".to_string()));
+    }
+
+    #[test]
+    fn test_delete_listing_args() {
+        let json = r#"{"listing_id": "listing-delete-1"}"#;
+        let args: DeleteListingArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.listing_id, "listing-delete-1");
+    }
+
+    #[test]
+    fn test_purchase_item_intent_args() {
+        let json = r#"{"listing_id": "listing-buy-1", "offered_price": 450000}"#;
+        let args: PurchaseItemIntentArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.listing_id, "listing-buy-1");
+        assert_eq!(args.offered_price, 450000);
+    }
+
+    #[test]
+    fn test_get_my_listings_args_empty() {
+        let json = r#"{}"#;
+        let args: GetMyListingsArgs = serde_json::from_str(json).unwrap();
+        // Empty struct deserializes successfully
+        let _ = args;
+    }
+
+    #[test]
+    fn test_tool_context_clone() {
+        // ToolContext is Clone, verify it compiles
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<ToolContext>();
+    }
+
+    #[test]
+    fn test_create_listing_tool_clone() {
+        // CreateListingTool is Clone, verify it compiles
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<CreateListingTool>();
+    }
+
+    #[test]
+    fn test_search_inventory_tool_clone() {
+        // SearchInventoryTool is Clone, verify it compiles
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<SearchInventoryTool>();
+    }
 }
