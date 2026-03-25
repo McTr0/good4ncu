@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 
 pub mod chat;
+pub mod hitl_expire;
 pub mod notification;
 pub mod order;
 pub mod product;
@@ -131,7 +132,9 @@ impl ServiceManager {
                         let seller_id_clone = seller_id.clone();
                         let notification_svc_clone = notification_svc.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = settlement_svc_clone.finalize_payment(&order_id_clone).await {
+                            if let Err(e) =
+                                settlement_svc_clone.finalize_payment(&order_id_clone).await
+                            {
                                 tracing::error!(%e, order_id_clone, "Settlement failed");
                                 // Notify seller of settlement failure
                                 let _ = notification_svc_clone
@@ -148,8 +151,7 @@ impl ServiceManager {
                         });
 
                         // Order status update and payment notification run in main event loop
-                        if let Err(e) = order_svc.update_order_status(&order_id, "paid").await
-                        {
+                        if let Err(e) = order_svc.update_order_status(&order_id, "paid").await {
                             tracing::error!(%e, order_id, "Failed to update order status");
                         }
                         // Notify seller that payment was received
