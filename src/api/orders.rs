@@ -9,7 +9,7 @@ use sqlx::Row;
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::utils::cents_to_yuan;
+use crate::utils::{cents_to_yuan, yuan_to_cents};
 
 #[derive(Deserialize)]
 pub struct OrderQuery {
@@ -417,6 +417,103 @@ pub async fn ship_order(
     Ok(Json(serde_json::json!({
         "message": "Order marked as shipped",
         "order_id": order_id
+    })))
+}
+
+/// Request body for POST /api/orders (direct order creation, bypassing AI agent)
+#[derive(Deserialize)]
+pub struct CreateOrderRequest {
+    pub listing_id: String,
+    pub offered_price_cny: f64,
+}
+
+/// POST /api/orders - create an order directly (buyer only, bypassing AI agent)
+pub async fn create_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateOrderRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let buyer_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Look up the listing
+    let listing = sqlx::query("SELECT owner_id, suggested_price_cny, status FROM inventory WHERE id = $1")
+        .bind(&payload.listing_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let owner_id: String = listing.get("owner_id");
+    let suggested_price: i64 = listing.get("suggested_price_cny");
+    let status: String = listing.get("status");
+
+    if status != "active" {
+        return Err(ApiError::BadRequest(format!(
+            "Listing is not available (status: {}). Only active listings can be purchased.",
+            status
+        )));
+    }
+
+    if owner_id == buyer_id {
+        return Err(ApiError::BadRequest(
+            "You cannot purchase your own listing.".to_string(),
+        ));
+    }
+
+    // Validate offered price is within ±50% of suggested price (same rule as AI agent).
+    const PRICE_TOLERANCE: f64 = 0.50;
+    let min_price = (suggested_price as f64 * (1.0 - PRICE_TOLERANCE)) as i64;
+    let max_price = (suggested_price as f64 * (1.0 + PRICE_TOLERANCE)) as i64;
+    let offered_price_cents = yuan_to_cents(payload.offered_price_cny);
+    if offered_price_cents < min_price || offered_price_cents > max_price {
+        return Err(ApiError::BadRequest(format!(
+            "Offered price {:.2} CNY is outside the acceptable range ({:.2} - {:.2} CNY). \
+             Seller listed this item at {:.2} CNY.",
+            payload.offered_price_cny,
+            cents_to_yuan(min_price),
+            cents_to_yuan(max_price),
+            cents_to_yuan(suggested_price),
+        )));
+    }
+
+    // Create the order
+    let order_id = uuid::Uuid::new_v4().to_string();
+    sqlx::query(
+        "INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status) \
+         VALUES ($1, $2, $3, $4, $5, 'pending')",
+    )
+    .bind(&order_id)
+    .bind(&payload.listing_id)
+    .bind(&buyer_id)
+    .bind(&owner_id)
+    .bind(offered_price_cents)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    // Mark listing as sold immediately (no negotiation phase)
+    sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1")
+        .bind(&payload.listing_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(
+        order_id = %order_id,
+        listing_id = %payload.listing_id,
+        buyer_id = %buyer_id,
+        seller_id = %owner_id,
+        price = %offered_price_cents,
+        "Direct order created (REST API)"
+    );
+
+    Ok(Json(serde_json::json!({
+        "message": "Order created successfully",
+        "order_id": order_id,
+        "listing_id": payload.listing_id,
+        "price_cny": payload.offered_price_cny,
+        "status": "pending"
     })))
 }
 

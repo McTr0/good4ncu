@@ -127,6 +127,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/users/search", get(user::search_users))
         .route("/api/users/{id}", get(user::get_user_profile))
         .route("/api/orders", get(orders::get_orders))
+        .route("/api/orders", post(orders::create_order))
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
         .route("/api/orders/{id}/confirm", post(orders::confirm_order))
