@@ -200,6 +200,14 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/negotiations/{id}/respond",
             patch(negotiate::respond_negotiation),
         )
+        .route(
+            "/api/negotiations/{id}/accept",
+            patch(negotiate::accept_counter_negotiation),
+        )
+        .route(
+            "/api/negotiations/{id}/reject",
+            patch(negotiate::reject_counter_negotiation),
+        )
         .route("/ws", get(ws::ws_handler))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))

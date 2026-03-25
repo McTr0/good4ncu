@@ -39,12 +39,19 @@ pub async fn list_negotiations(
     let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
+    // Sellers see: pending (awaiting their response).
+    // Buyers see: countered (awaiting their accept/reject).
     let rows = sqlx::query(
         r#"
         SELECT id, listing_id, buyer_id, seller_id, proposed_price, reason, status,
                counter_price, created_at
         FROM hitl_requests
         WHERE seller_id = $1 AND status = 'pending'
+        UNION ALL
+        SELECT id, listing_id, buyer_id, seller_id, proposed_price, reason, status,
+               counter_price, created_at
+        FROM hitl_requests
+        WHERE buyer_id = $1 AND status = 'countered'
         ORDER BY created_at DESC
         LIMIT 20
         "#,
@@ -244,6 +251,178 @@ pub async fn respond_negotiation(
     Ok(Json(NegotiationResponseResult {
         status: new_status.to_string(),
         message: format!("议价请求已更新为 {}", new_status),
+    }))
+}
+
+/// PATCH /api/negotiations/{id}/accept — buyer accepts seller's counter-offer
+///
+/// After seller counters (status = 'countered'), buyer can accept the counter_price.
+/// This creates a DealReached event and notifies the seller.
+pub async fn accept_counter_negotiation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<NegotiationResponseResult>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Fetch the request and verify the buyer owns it.
+    let row = sqlx::query(
+        "SELECT id, buyer_id, seller_id, listing_id, status, counter_price FROM hitl_requests WHERE id = $1",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let buyer_id: String = row.get("buyer_id");
+    if buyer_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let status: String = row.get("status");
+    if status != "countered" {
+        return Err(ApiError::BadRequest(
+            "只能接受卖家的还价（状态必须为 countered）".to_string(),
+        ));
+    }
+
+    let counter_price: i64 = row.get::<i32, _>("counter_price") as i64;
+    let listing_id: String = row.get("listing_id");
+    let seller_id: String = row.get("seller_id");
+
+    // Record buyer's acceptance.
+    sqlx::query(
+        r#"UPDATE hitl_requests
+           SET buyer_action = 'accepted', resolved_at = CURRENT_TIMESTAMP
+           WHERE id = $1"#,
+    )
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    // Inject system message into conversation.
+    let system_content = format!(
+        "系统：买家接受了卖家的还价 ¥{:.2}，订单已创建",
+        crate::utils::cents_to_yuan(counter_price)
+    );
+    let conversation_id = format!("negotiate:{}", listing_id);
+    let _ = sqlx::query(
+        r#"INSERT INTO chat_messages (conversation_id, sender, is_agent, content, listing_id)
+           VALUES ($1, 'system', FALSE, $2, $3)"#,
+    )
+    .bind(&conversation_id)
+    .bind(&system_content)
+    .bind(&listing_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| tracing::warn!(%e, "Failed to inject system message"));
+
+    // Notify seller.
+    let _ = state
+        .notification
+        .create(
+            &seller_id,
+            "negotiation_buyer_accepted",
+            "买家接受了您的还价",
+            "买家接受了您的还价，订单已创建",
+            Some(&id),
+            Some(&listing_id),
+        )
+        .await;
+
+    // Emit DealReached to create the order.
+    let chat_event = crate::services::BusinessEvent::DealReached {
+        listing_id: listing_id.clone(),
+        buyer_id,
+        seller_id,
+        final_price: counter_price,
+    };
+    if let Err(e) = state.event_tx.send(chat_event).await {
+        tracing::error!(%e, "Failed to emit DealReached after buyer accepted counter");
+    }
+
+    Ok(Json(NegotiationResponseResult {
+        status: "buyer_accepted".to_string(),
+        message: "已接受卖家还价，订单创建中".to_string(),
+    }))
+}
+
+/// PATCH /api/negotiations/{id}/reject — buyer rejects seller's counter-offer
+///
+/// After seller counters, buyer can reject. The negotiation closes without a deal.
+pub async fn reject_counter_negotiation(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<NegotiationResponseResult>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let row = sqlx::query(
+        "SELECT id, buyer_id, seller_id, listing_id, status FROM hitl_requests WHERE id = $1",
+    )
+    .bind(&id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let buyer_id: String = row.get("buyer_id");
+    if buyer_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let status: String = row.get("status");
+    if status != "countered" {
+        return Err(ApiError::BadRequest(
+            "只能拒绝卖家的还价（状态必须为 countered）".to_string(),
+        ));
+    }
+
+    let listing_id: String = row.get("listing_id");
+    let seller_id: String = row.get("seller_id");
+
+    sqlx::query(
+        r#"UPDATE hitl_requests
+           SET buyer_action = 'rejected', resolved_at = CURRENT_TIMESTAMP
+           WHERE id = $1"#,
+    )
+    .bind(&id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let system_content = "系统：买家拒绝了卖家的还价，交易取消".to_string();
+    let conversation_id = format!("negotiate:{}", listing_id);
+    let _ = sqlx::query(
+        r#"INSERT INTO chat_messages (conversation_id, sender, is_agent, content, listing_id)
+           VALUES ($1, 'system', FALSE, $2, $3)"#,
+    )
+    .bind(&conversation_id)
+    .bind(&system_content)
+    .bind(&listing_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| tracing::warn!(%e, "Failed to inject system message"));
+
+    let _ = state
+        .notification
+        .create(
+            &seller_id,
+            "negotiation_buyer_rejected",
+            "买家拒绝了您的还价",
+            "抱歉，买家未能接受您的还价",
+            Some(&id),
+            Some(&listing_id),
+        )
+        .await;
+
+    Ok(Json(NegotiationResponseResult {
+        status: "buyer_rejected".to_string(),
+        message: "已拒绝卖家还价".to_string(),
     }))
 }
 

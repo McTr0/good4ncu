@@ -251,6 +251,14 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Add buyer_action column for tracking buyer's response to seller's counter-offer.
+    // This is a no-op if the column already exists (e.g., existing dev DBs).
+    // accepted: buyer accepted seller's counter → triggers DealReached
+    // rejected: buyer declined seller's counter → final rejection
+    sqlx::query("ALTER TABLE hitl_requests ADD COLUMN IF NOT EXISTS buyer_action TEXT")
+        .execute(pool)
+        .await?;
+
     Ok(())
 }
 
