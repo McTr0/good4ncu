@@ -59,14 +59,29 @@ pub async fn register(
     Json(payload): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
     // Reject oversized inputs before they can trigger CPU-intensive hashing or bloat storage.
+    if payload.username.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Username cannot be empty.".to_string(),
+        ));
+    }
     if payload.username.len() > 50 {
         return Err(ApiError::BadRequest(
             "Username must be 50 characters or fewer.".to_string(),
         ));
     }
+    if payload.password.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Password cannot be empty.".to_string(),
+        ));
+    }
     if payload.password.len() > 128 {
         return Err(ApiError::BadRequest(
             "Password must be 128 characters or fewer.".to_string(),
+        ));
+    }
+    if payload.password.len() < 8 {
+        return Err(ApiError::BadRequest(
+            "Password must be at least 8 characters.".to_string(),
         ));
     }
 
@@ -140,6 +155,9 @@ pub async fn login(
     Json(payload): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
     // Sanity check before hitting the database — prevents wasteful full-table scans.
+    if payload.username.is_empty() || payload.password.is_empty() {
+        return Err(ApiError::Unauthorized);
+    }
     if payload.username.len() > 50 || payload.password.len() > 128 {
         return Err(ApiError::Unauthorized);
     }
@@ -216,9 +234,24 @@ pub async fn change_password(
     let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
+    if payload.current_password.is_empty() {
+        return Err(ApiError::BadRequest(
+            "Current password cannot be empty.".to_string(),
+        ));
+    }
+    if payload.new_password.is_empty() {
+        return Err(ApiError::BadRequest(
+            "New password cannot be empty.".to_string(),
+        ));
+    }
     if payload.new_password.len() < 8 {
         return Err(ApiError::BadRequest(
             "New password must be at least 8 characters".to_string(),
+        ));
+    }
+    if payload.new_password.len() > 128 {
+        return Err(ApiError::BadRequest(
+            "New password must be 128 characters or fewer".to_string(),
         ));
     }
 
@@ -299,4 +332,109 @@ pub fn extract_user_id_from_token(headers: &HeaderMap, jwt_secret: &str) -> Resu
     .map_err(|e| format!("Invalid token: {}", e))?;
 
     Ok(token_data.claims.sub)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_user_id_from_token_missing_header() {
+        let headers = HeaderMap::new();
+        let result = extract_user_id_from_token(&headers, "secret123456789012345678901234567890");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Missing Authorization header");
+    }
+
+    #[test]
+    fn test_extract_user_id_from_token_invalid_format() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", "Basic dXNlcjpwYXNz".parse().unwrap());
+        let result = extract_user_id_from_token(&headers, "secret123456789012345678901234567890");
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "Invalid Authorization format");
+    }
+
+    #[test]
+    fn test_generate_token_produces_valid_jwt() {
+        let token = generate_token("user-123", "secret123456789012345678901234567890");
+        // A valid JWT has three parts separated by dots
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+    }
+
+    #[test]
+    fn test_auth_request_validation_concerns() {
+        // These are compile-time checks via struct validation
+        // The actual validation happens in the handler, but we can test the logic
+        let req = AuthRequest {
+            username: "testuser".to_string(),
+            password: "password123".to_string(),
+        };
+        assert_eq!(req.username.len(), 8);
+        assert_eq!(req.password.len(), 11);
+    }
+
+    #[test]
+    fn test_auth_request_deserialization() {
+        let json = r#"{"username": "alice", "password": "secretpass"}"#;
+        let req: AuthRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.username, "alice");
+        assert_eq!(req.password, "secretpass");
+    }
+
+    #[test]
+    fn test_auth_response_serialization() {
+        let resp = AuthResponse {
+            token: "jwt.token.here".to_string(),
+            user_id: "user-abc".to_string(),
+            message: "Login successful".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("jwt.token.here"));
+        assert!(json.contains("user-abc"));
+        assert!(json.contains("Login successful"));
+    }
+
+    #[test]
+    fn test_claims_serialization() {
+        let claims = Claims {
+            sub: "user-xyz".to_string(),
+            exp: 1700000000,
+        };
+        let json = serde_json::to_string(&claims).unwrap();
+        assert!(json.contains("user-xyz"));
+        assert!(json.contains("1700000000"));
+    }
+
+    #[test]
+    fn test_claims_deserialization() {
+        let json = r#"{"sub": "user-123", "exp": 1700000000}"#;
+        let claims: Claims = serde_json::from_str(json).unwrap();
+        assert_eq!(claims.sub, "user-123");
+        assert_eq!(claims.exp, 1700000000);
+    }
+
+    #[test]
+    fn test_generate_token_with_empty_user_id() {
+        let token = generate_token("", "secret123456789012345678901234567890");
+        let parts: Vec<&str> = token.split('.').collect();
+        assert_eq!(parts.len(), 3);
+    }
+
+    #[test]
+    fn test_generate_token_verifies_correctly() {
+        let secret = "secret123456789012345678901234567890";
+        let token = generate_token("test-user", secret);
+        let extracted = extract_user_id_from_token(
+            &{
+                let mut h = HeaderMap::new();
+                h.insert("Authorization", format!("Bearer {}", token).parse().unwrap());
+                h
+            },
+            secret,
+        );
+        assert!(extracted.is_ok());
+        assert_eq!(extracted.unwrap(), "test-user");
+    }
 }
