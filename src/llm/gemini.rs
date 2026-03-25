@@ -3,14 +3,18 @@ use crate::agents::models::Document;
 use crate::agents::tools::{EmbedFn, ToolContext, ToolError};
 use crate::services::BusinessEvent;
 use async_trait::async_trait;
+use futures::Stream;
+use futures::StreamExt;
 use rig::agent::Agent;
 use rig::client::CompletionClient;
 use rig::completion::{Message, Prompt};
 use rig::embeddings::EmbeddingsBuilder;
 use rig::providers::gemini;
+use rig::streaming::{StreamedAssistantContent, StreamingCompletion};
 use rig::vector_store::InsertDocuments;
 use rig_postgres::PostgresVectorStore;
 use sqlx::PgPool;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -178,6 +182,76 @@ impl MarketplaceAgent for GeminiMarketplaceAgent {
             .with_history(&mut h)
             .await?;
         Ok(reply)
+    }
+
+    fn stream_chat(
+        &self,
+        msg: String,
+        history: Vec<Message>,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, anyhow::Error>> + Send>> {
+        let h = history;
+        let agent = self.0.clone();
+        Box::pin(::async_stream::try_stream! {
+            let mut current_msg = Message::user(msg);
+            let mut chat_history = h;
+            let mut did_call_tool = false;
+
+            loop {
+                let mut stream = agent
+                    .stream_completion(current_msg.clone(), chat_history.clone())
+                    .await
+                    .map_err(|e| anyhow::anyhow!("stream error: {}", e))?
+                    .stream()
+                    .await
+                    .map_err(|e| anyhow::anyhow!("stream error: {}", e))?;
+
+                chat_history.push(current_msg.clone());
+                let mut tool_calls = vec![];
+
+                while let Some(content) = stream.next().await {
+                    match content.map_err(|e| anyhow::anyhow!("completion error: {}", e))? {
+                        StreamedAssistantContent::Text(text) => {
+                            yield text.text;
+                            did_call_tool = false;
+                        }
+                        StreamedAssistantContent::ToolCall { tool_call, internal_call_id: _ } => {
+                            let args_str = tool_call.function.arguments.to_string();
+                            let result = agent
+                                .tool_server_handle
+                                .call_tool(&tool_call.function.name, &args_str)
+                                .await
+                                .map_err(|e| anyhow::anyhow!("tool error: {}", e))?;
+                            tool_calls.push((tool_call.id.clone(), tool_call.call_id.clone(), result));
+                            did_call_tool = true;
+                        }
+                        StreamedAssistantContent::Reasoning(reasoning) => {
+                            let rendered = reasoning.display_text();
+                            if !rendered.is_empty() {
+                                yield rendered;
+                            }
+                            did_call_tool = false;
+                        }
+                        StreamedAssistantContent::ToolCallDelta { .. } => {}
+                        StreamedAssistantContent::ReasoningDelta { .. } => {}
+                        StreamedAssistantContent::Final(_) => {}
+                    }
+                }
+
+                if !tool_calls.is_empty() {
+                    for (id, call_id, result) in tool_calls {
+                        chat_history.push(Message::tool_result_with_call_id(
+                            id, call_id, result,
+                        ));
+                    }
+                }
+
+                if !did_call_tool {
+                    break;
+                }
+
+                current_msg = chat_history.last().cloned().unwrap_or(current_msg);
+            }
+        })
     }
 }
 
