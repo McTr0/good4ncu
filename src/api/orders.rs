@@ -232,11 +232,13 @@ pub async fn cancel_order(
         return Err(ApiError::Forbidden);
     }
 
-    // Atomic update prevents race condition
+    // Atomic update prevents race condition; store cancellation reason and timestamp
     let updated = sqlx::query(
-        "UPDATE orders SET status = 'cancelled' WHERE id = $1 AND status IN ('pending', 'paid') RETURNING id"
+        "UPDATE orders SET status = 'cancelled', cancellation_reason = $2, cancelled_at = CURRENT_TIMESTAMP \
+         WHERE id = $1 AND status IN ('pending', 'paid') RETURNING id",
     )
     .bind(&order_id)
+    .bind(&payload.reason)
     .fetch_optional(&state.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
@@ -296,7 +298,8 @@ pub async fn confirm_order(
     // Can only confirm received orders — atomic update enforces the shipped→completed transition.
     // State machine: pending → paid → shipped → completed
     let updated = sqlx::query(
-        "UPDATE orders SET status = 'completed' WHERE id = $1 AND status = 'shipped' RETURNING id",
+        "UPDATE orders SET status = 'completed', completed_at = CURRENT_TIMESTAMP \
+         WHERE id = $1 AND status = 'shipped' RETURNING id",
     )
     .bind(&order_id)
     .fetch_optional(&state.db)
@@ -341,9 +344,10 @@ pub async fn pay_order(
         return Err(ApiError::Forbidden);
     }
 
-    // Atomic update prevents race condition
+    // Atomic update prevents race condition; record payment timestamp
     let updated = sqlx::query(
-        "UPDATE orders SET status = 'paid' WHERE id = $1 AND status = 'pending' RETURNING id",
+        "UPDATE orders SET status = 'paid', paid_at = CURRENT_TIMESTAMP \
+         WHERE id = $1 AND status = 'pending' RETURNING id",
     )
     .bind(&order_id)
     .fetch_optional(&state.db)
@@ -389,9 +393,10 @@ pub async fn ship_order(
         return Err(ApiError::Forbidden);
     }
 
-    // Atomic update prevents race condition
+    // Atomic update prevents race condition; record ship timestamp
     let updated = sqlx::query(
-        "UPDATE orders SET status = 'shipped' WHERE id = $1 AND status = 'paid' RETURNING id",
+        "UPDATE orders SET status = 'shipped', shipped_at = CURRENT_TIMESTAMP \
+         WHERE id = $1 AND status = 'paid' RETURNING id",
     )
     .bind(&order_id)
     .fetch_optional(&state.db)

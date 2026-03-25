@@ -53,6 +53,30 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
     .execute(pool)
     .await?;
 
+    // Add cancellation_reason column if it doesn't exist (for audit trail)
+    sqlx::query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancellation_reason TEXT")
+        .execute(pool)
+        .await
+        .ok();
+
+    // Add timestamps for order lifecycle tracking
+    sqlx::query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMPTZ")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMPTZ")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE orders ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ")
+        .execute(pool)
+        .await
+        .ok();
+
     sqlx::query(
         r#"CREATE TABLE IF NOT EXISTS chat_messages (
             id BIGSERIAL PRIMARY KEY,
