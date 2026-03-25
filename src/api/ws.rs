@@ -4,24 +4,31 @@
 //! to associate the WebSocket connection with a user_id. When a notification is
 //! created via NotificationService.create(), it is immediately pushed to all
 //! connected clients for that user via the global WS_CONNECTIONS map.
+//!
+//! Multi-connection support: each user can have multiple active connections
+//! (e.g., iPhone + iPad simultaneously). Each connection is independently
+//! heartbeated via ping/pong. Dead connections are cleaned up automatically.
 
+use axum::extract::ws::Message as WsMsg;
+use axum::http::StatusCode;
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
 };
-use axum::extract::ws::Message as WsMsg;
-use axum::http::StatusCode;
 use dashmap::DashMap;
 use futures_util::{SinkExt, StreamExt};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::interval;
 
 use crate::api::auth::extract_user_id_from_token_str;
 use crate::api::AppState;
 
-/// Connection table: user_id → tx channel to that user's socket.
+/// Connection table: user_id → list of tx channels (one per connected device).
 /// DashMap handles concurrent access from multiple tokio tasks.
-pub type WsConnections = DashMap<String, mpsc::Sender<Message>>;
+/// Dead senders are pruned on broadcast or heartbeat timeout.
+pub type WsConnections = DashMap<String, Vec<mpsc::Sender<Message>>>;
 
 /// Global WebSocket connections registry.
 /// Uses LazyLock so it is initialized on first access (at startup, not lazily per request).
@@ -32,10 +39,29 @@ pub fn new_ws_state() -> Arc<WsConnections> {
     Arc::clone(&WS_CONNECTIONS)
 }
 
-/// Global broadcast — pushes a JSON payload to a specific user if they are currently connected.
+/// Global broadcast — pushes a JSON payload to ALL active connections for a user.
+/// Automatically removes dead senders (channel closed).
 pub fn broadcast_to_user(user_id: &str, payload: &str) {
-    if let Some(tx) = WS_CONNECTIONS.get(user_id) {
-        let _ = tx.try_send(Message::Text(payload.into()));
+    if let Some(connections) = WS_CONNECTIONS.get(user_id) {
+        let mut dead_indices = vec![];
+        for (i, tx) in connections.value().iter().enumerate() {
+            if tx.try_send(Message::Text(payload.into())).is_err() {
+                dead_indices.push(i);
+            }
+        }
+        drop(connections);
+        // Remove dead connections (reverse order to preserve indices).
+        if !dead_indices.is_empty() {
+            if let Some(mut connections) = WS_CONNECTIONS.get_mut(user_id) {
+                for i in dead_indices.into_iter().rev() {
+                    connections.value_mut().remove(i);
+                }
+                if connections.value().is_empty() {
+                    drop(connections);
+                    WS_CONNECTIONS.remove(user_id);
+                }
+            }
+        }
     }
 }
 
@@ -51,15 +77,17 @@ pub async fn ws_handler(
     axum::extract::Query(params): axum::extract::Query<WsQuery>,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    // Validate JWT from query param; reject with 401 if invalid.
     let token = params.token.as_deref().unwrap_or("");
     let user_id = match extract_user_id_from_token_str(token, &state.jwt_secret) {
         Ok(uid) => uid,
         Err(_) => {
-            return (StatusCode::UNAUTHORIZED, axum::response::Json(serde_json::json!({
-                "error": "Invalid or missing token"
-            })))
-            .into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                axum::response::Json(serde_json::json!({
+                    "error": "Invalid or missing token"
+                })),
+            )
+                .into_response();
         }
     };
 
@@ -79,28 +107,43 @@ pub struct WsQuery {
 /// send and receive halves that run concurrently in separate spawned tasks:
 ///
 /// - Send task: pulls from `rx` mpsc channel and sends over the wire.
-/// - Recv task: receives from the wire and discards (we only push, no echo).
+///   Also drives heartbeat pings every 30s. Handles pong relay from recv task.
+/// - Recv task: receives from the wire, forwards ping data to sender task via mpsc.
+///   Detects connection death and signals sender to exit.
 /// - A oneshot channel signals the sender when the receiver closes.
-/// - When the recv task exits, it drops `tx` (via WS_CONNECTIONS removal) to signal the sender.
+/// - On close, this specific connection tx is removed from WS_CONNECTIONS.
 async fn handle_socket(socket: WebSocket, user_id: String) {
-    // Split the socket into independent send/receive halves.
-    // This consumes `socket` and returns two handles that can be moved into separate tasks.
     let (ws_sender, mut ws_receiver) = socket.split();
+
+    // Channel for relaying ping data from recv task to sender task.
+    let (ping_tx, mut ping_rx) = mpsc::channel::<Vec<u8>>(8);
 
     // Create a channel for this connection — buffer up to 64 pending messages.
     let (tx, rx) = mpsc::channel::<Message>(64);
 
-    // Register this user's tx so broadcast_to_user can find them.
-    WS_CONNECTIONS.insert(user_id.clone(), tx);
+    // Register this connection.
+    WS_CONNECTIONS
+        .entry(user_id.clone())
+        .or_default()
+        .push(tx.clone());
+
+    tracing::debug!(
+        user_id = %user_id,
+        total_connections = WS_CONNECTIONS.get(&user_id).map(|c| c.value().len()).unwrap_or(0),
+        "WS connection registered"
+    );
 
     // Signal sender when recv task exits.
     let (close_tx, close_rx) = oneshot::channel::<()>();
 
-    // Spawn sender task: drives ws_sender until rx closes or close_rx fires.
+    // Spawn sender task: drives ws_sender, sends pings, handles rx and ping_rx.
     tokio::spawn(async move {
         let mut ws_sender = ws_sender;
         let mut rx = rx;
         let mut close_rx = close_rx;
+        let mut heartbeat = interval(Duration::from_secs(30));
+        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             tokio::select! {
                 msg = rx.recv() => {
@@ -113,6 +156,18 @@ async fn handle_socket(socket: WebSocket, user_id: String) {
                         None => break,
                     }
                 }
+                ping_data = ping_rx.recv() => {
+                    // Forward a pong response from the recv task.
+                    if let Some(data) = ping_data {
+                        let _ = ws_sender.send(Message::Pong(data.into())).await;
+                    }
+                }
+                _ = heartbeat.tick() => {
+                    // Send heartbeat ping. If the connection is dead, the send will fail.
+                    if ws_sender.send(Message::Ping(vec![].into())).await.is_err() {
+                        break;
+                    }
+                }
                 _ = &mut close_rx => {
                     // Receiver closed — graceful shutdown.
                     let _ = ws_sender.close().await;
@@ -122,12 +177,16 @@ async fn handle_socket(socket: WebSocket, user_id: String) {
         }
     });
 
-    // Recv task (main): drives ws_receiver, discards all messages.
-    // When the socket closes (None), drop tx and signal sender to exit.
+    // Recv task (main): drives ws_receiver, forwards ping data.
     loop {
         match ws_receiver.next().await {
             Some(Ok(WsMsg::Close(_))) | None => break,
-            Some(Ok(_)) => {} // Ignore client→server messages.
+            Some(Ok(WsMsg::Ping(data))) => {
+                // Relay ping data to sender task for pong response.
+                // If the channel is full (sender stalled), just drop and continue.
+                let _ = ping_tx.try_send(data.to_vec());
+            }
+            Some(Ok(_)) => {} // Ignore other client→server messages.
             Some(Err(e)) => {
                 tracing::warn!(%e, "WS receive error");
                 break;
@@ -135,8 +194,17 @@ async fn handle_socket(socket: WebSocket, user_id: String) {
         }
     }
 
-    // Socket closed. Clean up: remove from registry, signal sender.
-    WS_CONNECTIONS.remove(&user_id);
+    // Socket closed. Clean up: remove this specific tx from the user's connection list.
+    if let Some(mut connections) = WS_CONNECTIONS.get_mut(&user_id) {
+        connections.value_mut().retain(|t| !t.is_closed());
+        if connections.value().is_empty() {
+            drop(connections);
+            WS_CONNECTIONS.remove(&user_id);
+            tracing::debug!(%user_id, "WS: last connection closed, user removed");
+        } else {
+            tracing::debug!(%user_id, remaining = connections.value().len(), "WS: connection cleaned up");
+        }
+    }
     let _ = close_tx.send(());
 }
 
