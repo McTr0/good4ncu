@@ -74,12 +74,14 @@ async fn main() -> Result<(), anyhow::Error> {
     tracing::info!("Web Server started at http://127.0.0.1:3000");
 
     let server_handle = tokio::spawn(async move {
-        axum::serve(listener, app).await.unwrap();
+        if let Err(e) = axum::serve(listener, app).await {
+            tracing::error!(%e, "Server error");
+        }
     });
 
     // Spawn the CLI as a background task — it will exit immediately in non-TTY environments.
     // The HTTP server continues running regardless.
-    let _cli_handle = tokio::spawn(cli::run_cli(db_pool, llm_provider, event_tx));
+    let cli_handle = tokio::spawn(cli::run_cli(db_pool, llm_provider, event_tx));
 
     // Wait for Ctrl+C to shut down gracefully
     tokio::signal::ctrl_c().await?;
@@ -87,6 +89,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     server_handle.abort();
     event_loop_handle.abort();
+    cli_handle.abort();
 
     Ok(())
 }
