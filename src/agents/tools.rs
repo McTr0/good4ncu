@@ -174,6 +174,17 @@ impl Tool for SearchInventoryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Reject oversized keywords before they can cause performance issues with LIKE on large tables.
+        const MAX_KEYWORD_LEN: usize = 200;
+        if let Some(ref kw) = args.keyword {
+            if kw.len() > MAX_KEYWORD_LEN {
+                return Err(ToolError(format!(
+                    "keyword exceeds maximum length of {} characters",
+                    MAX_KEYWORD_LEN
+                )));
+            }
+        }
+
         let mut sql = String::from("SELECT id, title, brand, category, condition_score, suggested_price_cny FROM inventory WHERE status = 'active'");
         let mut param_idx: usize = 1;
 
