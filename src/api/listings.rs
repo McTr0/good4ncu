@@ -10,6 +10,17 @@ use uuid::Uuid;
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
+use crate::utils::cents_to_yuan;
+
+/// Valid marketplace categories for listings.
+pub const MARKETPLACE_CATEGORIES: &[&str] = &[
+    "electronics",
+    "books",
+    "digitalAccessories",
+    "dailyGoods",
+    "clothingShoes",
+    "other",
+];
 
 // ---------------------------------------------------------------------------
 // Query params
@@ -21,6 +32,7 @@ pub struct ListingQuery {
     pub offset: Option<i64>,
     pub category: Option<String>,
     pub search: Option<String>,
+    pub sort: Option<String>, // "newest" (default), "price_asc", "price_desc", "condition_desc"
 }
 
 // ---------------------------------------------------------------------------
@@ -114,65 +126,100 @@ pub async fn get_listings(
     let category = params.category.as_ref();
     let search = params.search.as_ref();
 
-    // Count query
-    let (count_sql, count_bindings): (&str, Vec<String>) = match (category, search) {
-        (Some(cat), Some(srch)) => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2)",
-            vec![cat.clone(), format!("%{}%", srch)],
-        ),
-        (Some(cat), None) => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1",
-            vec![cat.clone()],
-        ),
-        (None, Some(srch)) => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1)",
-            vec![format!("%{}%", srch)],
-        ),
-        (None, None) => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'",
-            vec![],
-        ),
+    // Determine sort order
+    let order_by = match params.sort.as_deref() {
+        Some("price_asc") => "suggested_price_cny ASC",
+        Some("price_desc") => "suggested_price_cny DESC",
+        Some("condition_desc") => "condition_score DESC",
+        _ => "created_at DESC", // default: newest
     };
 
-    let mut count_q = sqlx::query(count_sql);
-    for binding in &count_bindings {
-        count_q = count_q.bind(binding);
-    }
-    let count_row = count_q
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let (count_row, rows) = match (category, search) {
+        (Some(cat), Some(srch)) => {
+            let pattern = format!("%{}%", srch);
+            let count_row = sqlx::query(
+                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2)"
+            )
+            .bind(cat)
+            .bind(&pattern)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            let rows = sqlx::query(&format!(
+                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2) ORDER BY {} LIMIT $3 OFFSET $4",
+                order_by
+            ))
+            .bind(cat)
+            .bind(&pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            (count_row, rows)
+        }
+        (Some(cat), None) => {
+            let count_row = sqlx::query(
+                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1"
+            )
+            .bind(cat)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            let rows = sqlx::query(&format!(
+                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 ORDER BY {} LIMIT $2 OFFSET $3",
+                order_by
+            ))
+            .bind(cat)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            (count_row, rows)
+        }
+        (None, Some(srch)) => {
+            let pattern = format!("%{}%", srch);
+            let count_row = sqlx::query(
+                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1)"
+            )
+            .bind(&pattern)
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            let rows = sqlx::query(&format!(
+                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1) ORDER BY {} LIMIT $2 OFFSET $3",
+                order_by
+            ))
+            .bind(&pattern)
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            (count_row, rows)
+        }
+        (None, None) => {
+            let count_row = sqlx::query(
+                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'"
+            )
+            .fetch_one(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            let rows = sqlx::query(&format!(
+                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' ORDER BY {} LIMIT $1 OFFSET $2",
+                order_by
+            ))
+            .bind(limit)
+            .bind(offset)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            (count_row, rows)
+        }
+    };
+
     let total: i64 = count_row.try_get("cnt").unwrap_or(0);
-
-    // Items query
-    let (items_sql, items_bindings): (&str, Vec<String>) = match (category, search) {
-        (Some(cat), Some(srch)) => (
-            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2) ORDER BY created_at DESC LIMIT $3 OFFSET $4",
-            vec![cat.clone(), format!("%{}%", srch)],
-        ),
-        (Some(cat), None) => (
-            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            vec![cat.clone()],
-        ),
-        (None, Some(srch)) => (
-            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1) ORDER BY created_at DESC LIMIT $2 OFFSET $3",
-            vec![format!("%{}%", srch)],
-        ),
-        (None, None) => (
-            "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' ORDER BY created_at DESC LIMIT $1 OFFSET $2",
-            vec![],
-        ),
-    };
-
-    let mut items_q = sqlx::query(items_sql);
-    for binding in &items_bindings {
-        items_q = items_q.bind(binding);
-    }
-    items_q = items_q.bind(limit).bind(offset);
-    let rows = items_q
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let items: Vec<ListingSummary> = rows
         .iter()
@@ -187,7 +234,7 @@ pub async fn get_listings(
                 brand: row.get("brand"),
                 condition_score: row.get("condition_score"),
                 // stored as integer cents, display as yuan
-                suggested_price_cny: row.get::<i32, _>("suggested_price_cny") as f64 / 100.0,
+                suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
                 status: row.get("status"),
                 thumbnail_hint,
             }
@@ -242,7 +289,7 @@ pub async fn get_listing(
         category: row.get("category"),
         brand: row.get("brand"),
         condition_score: row.get("condition_score"),
-        suggested_price_cny: row.get::<i32, _>("suggested_price_cny") as f64 / 100.0,
+        suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
         defects,
         description: row.try_get("description").ok(),
         owner_id: row.get("owner_id"),
@@ -265,6 +312,25 @@ pub async fn create_listing(
     if payload.title.is_empty() {
         return Err(ApiError::BadRequest("title is required".to_string()));
     }
+    if payload.title.len() > 200 {
+        return Err(ApiError::BadRequest(
+            "title must be 200 characters or fewer".to_string(),
+        ));
+    }
+    if payload.brand.is_empty() {
+        return Err(ApiError::BadRequest("brand is required".to_string()));
+    }
+    if payload.brand.len() > 100 {
+        return Err(ApiError::BadRequest(
+            "brand must be 100 characters or fewer".to_string(),
+        ));
+    }
+    if !MARKETPLACE_CATEGORIES.contains(&payload.category.as_str()) {
+        return Err(ApiError::BadRequest(format!(
+            "category must be one of: {}",
+            MARKETPLACE_CATEGORIES.join(", ")
+        )));
+    }
     if payload.condition_score < 1 || payload.condition_score > 10 {
         return Err(ApiError::BadRequest(
             "condition_score must be between 1 and 10".to_string(),
@@ -273,6 +339,12 @@ pub async fn create_listing(
     if payload.suggested_price_cny < 0.0 {
         return Err(ApiError::BadRequest(
             "suggested_price_cny cannot be negative".to_string(),
+        ));
+    }
+    // Max 10 million yuan (100 million cents) — prevents i32 overflow in storage
+    if payload.suggested_price_cny > 10_000_000.0 {
+        return Err(ApiError::BadRequest(
+            "suggested_price_cny cannot exceed 10,000,000 CNY".to_string(),
         ));
     }
 
@@ -348,16 +420,35 @@ pub async fn update_listing(
         if title.is_empty() {
             return Err(ApiError::BadRequest("title cannot be empty".to_string()));
         }
+        if title.len() > 200 {
+            return Err(ApiError::BadRequest(
+                "title must be 200 characters or fewer".to_string(),
+            ));
+        }
         set_clauses.push(format!("title = ${}", param_idx));
         params.push(title.clone());
         param_idx += 1;
     }
     if let Some(ref category) = payload.category {
+        if !MARKETPLACE_CATEGORIES.contains(&category.as_str()) {
+            return Err(ApiError::BadRequest(format!(
+                "category must be one of: {}",
+                MARKETPLACE_CATEGORIES.join(", ")
+            )));
+        }
         set_clauses.push(format!("category = ${}", param_idx));
         params.push(category.clone());
         param_idx += 1;
     }
     if let Some(ref brand) = payload.brand {
+        if brand.is_empty() {
+            return Err(ApiError::BadRequest("brand cannot be empty".to_string()));
+        }
+        if brand.len() > 100 {
+            return Err(ApiError::BadRequest(
+                "brand must be 100 characters or fewer".to_string(),
+            ));
+        }
         set_clauses.push(format!("brand = ${}", param_idx));
         params.push(brand.clone());
         param_idx += 1;
@@ -376,6 +467,11 @@ pub async fn update_listing(
         if price < 0.0 {
             return Err(ApiError::BadRequest(
                 "suggested_price_cny cannot be negative".to_string(),
+            ));
+        }
+        if price > 10_000_000.0 {
+            return Err(ApiError::BadRequest(
+                "suggested_price_cny cannot exceed 10,000,000 CNY".to_string(),
             ));
         }
         set_clauses.push(format!("suggested_price_cny = ${}", param_idx));
@@ -591,4 +687,227 @@ Be honest about defects. If you cannot identify the item, return category="other
     })?;
 
     Ok(Json(recognized))
+}
+
+/// GET /api/categories - returns valid marketplace categories
+pub async fn get_categories() -> Json<Vec<&'static str>> {
+    Json(MARKETPLACE_CATEGORIES.to_vec())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_marketplace_categories_defined() {
+        assert_eq!(MARKETPLACE_CATEGORIES.len(), 6);
+        assert!(MARKETPLACE_CATEGORIES.contains(&"electronics"));
+        assert!(MARKETPLACE_CATEGORIES.contains(&"books"));
+        assert!(MARKETPLACE_CATEGORIES.contains(&"digitalAccessories"));
+        assert!(MARKETPLACE_CATEGORIES.contains(&"dailyGoods"));
+        assert!(MARKETPLACE_CATEGORIES.contains(&"clothingShoes"));
+        assert!(MARKETPLACE_CATEGORIES.contains(&"other"));
+    }
+
+    #[test]
+    fn test_valid_category_strings() {
+        for cat in MARKETPLACE_CATEGORIES {
+            assert!(!cat.is_empty());
+            assert!(cat.len() < 50);
+        }
+    }
+
+    #[test]
+    fn test_listing_query_defaults() {
+        let query: ListingQuery = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(query.limit, None);
+        assert_eq!(query.offset, None);
+        assert_eq!(query.category, None);
+        assert_eq!(query.search, None);
+        assert_eq!(query.sort, None);
+    }
+
+    #[test]
+    fn test_listing_query_with_sort() {
+        let query: ListingQuery = serde_json::from_str(r#"{"sort": "price_asc"}"#).unwrap();
+        assert_eq!(query.sort, Some("price_asc".to_string()));
+
+        let query2: ListingQuery = serde_json::from_str(r#"{"sort": "price_desc"}"#).unwrap();
+        assert_eq!(query2.sort, Some("price_desc".to_string()));
+
+        let query3: ListingQuery = serde_json::from_str(r#"{"sort": "condition_desc"}"#).unwrap();
+        assert_eq!(query3.sort, Some("condition_desc".to_string()));
+    }
+
+    #[test]
+    fn test_listing_query_with_all_params() {
+        let query: ListingQuery = serde_json::from_str(
+            r#"{"limit": 10, "offset": 20, "category": "electronics", "search": "iphone", "sort": "newest"}"#,
+        )
+        .unwrap();
+        assert_eq!(query.limit, Some(10));
+        assert_eq!(query.offset, Some(20));
+        assert_eq!(query.category, Some("electronics".to_string()));
+        assert_eq!(query.search, Some("iphone".to_string()));
+        assert_eq!(query.sort, Some("newest".to_string()));
+    }
+
+    #[test]
+    fn test_create_listing_request_deserialization() {
+        let json = r#"{
+            "title": "iPhone 13",
+            "category": "electronics",
+            "brand": "Apple",
+            "condition_score": 8,
+            "suggested_price_cny": 4999.0,
+            "defects": ["Minor scratch"],
+            "description": "Like new"
+        }"#;
+        let req: CreateListingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.title, "iPhone 13");
+        assert_eq!(req.category, "electronics");
+        assert_eq!(req.brand, "Apple");
+        assert_eq!(req.condition_score, 8);
+        assert_eq!(req.suggested_price_cny, 4999.0);
+        assert_eq!(req.defects.len(), 1);
+        assert_eq!(req.description, Some("Like new".to_string()));
+    }
+
+    #[test]
+    fn test_create_listing_request_without_optional_fields() {
+        let json = r#"{
+            "title": "Book",
+            "category": "books",
+            "brand": "Publisher",
+            "condition_score": 7,
+            "suggested_price_cny": 99.0,
+            "defects": []
+        }"#;
+        let req: CreateListingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.title, "Book");
+        assert_eq!(req.description, None);
+        assert!(req.defects.is_empty());
+    }
+
+    #[test]
+    fn test_create_listing_response_serialization() {
+        let resp = CreateListingResponse {
+            id: "listing-123".to_string(),
+            message: "Listing created successfully".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("listing-123"));
+        assert!(json.contains("created successfully"));
+    }
+
+    #[test]
+    fn test_listing_summary_serialization() {
+        let summary = ListingSummary {
+            id: "listing-456".to_string(),
+            title: "MacBook Pro".to_string(),
+            category: "electronics".to_string(),
+            brand: "Apple".to_string(),
+            condition_score: 9,
+            suggested_price_cny: 12999.0,
+            status: "active".to_string(),
+            thumbnail_hint: Some("https://example.com/img.jpg".to_string()),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("MacBook Pro"));
+        assert!(json.contains("Apple"));
+        assert!(json.contains("\"status\":\"active\""));
+        assert!(json.contains("12999"));
+    }
+
+    #[test]
+    fn test_listing_summary_without_thumbnail() {
+        let summary = ListingSummary {
+            id: "listing-789".to_string(),
+            title: "Book".to_string(),
+            category: "books".to_string(),
+            brand: "Publisher".to_string(),
+            condition_score: 5,
+            suggested_price_cny: 99.0,
+            status: "active".to_string(),
+            thumbnail_hint: None,
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("Book"));
+        assert!(json.contains("\"thumbnail_hint\":null"));
+    }
+
+    #[test]
+    fn test_listings_response_serialization() {
+        let response = ListingsResponse {
+            items: vec![],
+            total: 0,
+            limit: 20,
+            offset: 0,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"items\":[]"));
+        assert!(json.contains("\"total\":0"));
+    }
+
+    #[test]
+    fn test_listing_detail_serialization() {
+        let detail = ListingDetail {
+            id: "listing-detail-1".to_string(),
+            title: "iPhone 15".to_string(),
+            category: "electronics".to_string(),
+            brand: "Apple".to_string(),
+            condition_score: 10,
+            suggested_price_cny: 7999.0,
+            defects: vec!["None".to_string()],
+            description: Some("Brand new".to_string()),
+            owner_id: "user-owner".to_string(),
+            owner_username: Some("seller1".to_string()),
+            status: "active".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&detail).unwrap();
+        assert!(json.contains("iPhone 15"));
+        assert!(json.contains("seller1"));
+        assert!(json.contains("\"defects\":[\"None\"]"));
+    }
+
+    #[test]
+    fn test_update_listing_request_deserialization() {
+        let json = r#"{"title": "Updated Title", "description": "New description"}"#;
+        let req: UpdateListingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.title, Some("Updated Title".to_string()));
+        assert_eq!(req.description, Some("New description".to_string()));
+        assert_eq!(req.category, None);
+        assert_eq!(req.brand, None);
+    }
+
+    #[test]
+    fn test_update_listing_request_partial() {
+        let json = r#"{"suggested_price_cny": 4500.0}"#;
+        let req: UpdateListingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.suggested_price_cny, Some(4500.0));
+        assert_eq!(req.title, None);
+        assert_eq!(req.description, None);
+    }
+
+    #[test]
+    fn test_update_listing_request_all_fields() {
+        let json = r#"{
+            "title": "New Title",
+            "category": "electronics",
+            "brand": "Apple",
+            "condition_score": 9,
+            "suggested_price_cny": 5999.0,
+            "defects": ["Scratched"],
+            "description": "Updated desc"
+        }"#;
+        let req: UpdateListingRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.title, Some("New Title".to_string()));
+        assert_eq!(req.category, Some("electronics".to_string()));
+        assert_eq!(req.brand, Some("Apple".to_string()));
+        assert_eq!(req.condition_score, Some(9));
+        assert_eq!(req.suggested_price_cny, Some(5999.0));
+        assert_eq!(req.defects, Some(vec!["Scratched".to_string()]));
+        assert_eq!(req.description, Some("Updated desc".to_string()));
+    }
 }
