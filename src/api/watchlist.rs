@@ -50,11 +50,15 @@ pub async fn get_watchlist(
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let count_row = sqlx::query("SELECT COUNT(*) as cnt FROM watchlist WHERE user_id = $1")
-        .bind(&user_id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let count_row = sqlx::query(
+        "SELECT COUNT(*) as cnt FROM watchlist w \
+         JOIN inventory i ON w.listing_id = i.id \
+         WHERE w.user_id = $1 AND i.status = 'active'",
+    )
+    .bind(&user_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     let total: i64 = count_row.try_get("cnt").unwrap_or(0);
 
     let rows = sqlx::query(
@@ -63,7 +67,7 @@ pub async fn get_watchlist(
                i.suggested_price_cny, i.status, i.owner_id, i.created_at
         FROM watchlist w
         JOIN inventory i ON w.listing_id = i.id
-        WHERE w.user_id = $1
+        WHERE w.user_id = $1 AND i.status = 'active'
         ORDER BY w.created_at DESC
         LIMIT $2 OFFSET $3
         "#,
