@@ -100,6 +100,12 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
     .await
     .ok(); // Ignore error if index already exists
 
+    // Index on sender for list_conversations query
+    sqlx::query("CREATE INDEX IF NOT EXISTS idx_chat_sender ON chat_messages(sender)")
+        .execute(pool)
+        .await
+        .ok();
+
     // Order indexes for efficient order history queries
     sqlx::query("CREATE INDEX IF NOT EXISTS idx_orders_buyer ON orders(buyer_id)")
         .execute(pool)
@@ -141,6 +147,7 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
 pub async fn init_db(database_url: &str) -> Result<PgPool> {
     // Create a PgPool for relational + vector data
     let db_pool = PgPoolOptions::new()
+        .min_connections(2) // Pre-warm pool to reduce cold-start latency
         .max_connections(20)
         .connect(database_url)
         .await?;
