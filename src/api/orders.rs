@@ -214,7 +214,7 @@ pub async fn cancel_order(
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Fetch order and verify ownership
-    let order = sqlx::query("SELECT id, buyer_id, seller_id, status FROM orders WHERE id = $1")
+    let order = sqlx::query("SELECT buyer_id, seller_id, status, listing_id FROM orders WHERE id = $1")
         .bind(&order_id)
         .fetch_optional(&state.db)
         .await
@@ -223,6 +223,7 @@ pub async fn cancel_order(
 
     let buyer_id: String = order.get("buyer_id");
     let seller_id: String = order.get("seller_id");
+    let listing_id: String = order.get("listing_id");
     let status: String = order.get("status");
 
     // Only buyer or seller can cancel
@@ -230,23 +231,25 @@ pub async fn cancel_order(
         return Err(ApiError::Forbidden);
     }
 
-    // Can only cancel pending or paid orders
-    if status != "pending" && status != "paid" {
+    // Atomic update prevents race condition
+    let updated = sqlx::query(
+        "UPDATE orders SET status = 'cancelled' WHERE id = $1 AND status IN ('pending', 'paid') RETURNING id"
+    )
+    .bind(&order_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
             "Cannot cancel order with status '{}'",
             status
         )));
     }
 
-    sqlx::query("UPDATE orders SET status = 'cancelled' WHERE id = $1")
-        .bind(&order_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
     // Reactivate the listing
-    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = (SELECT listing_id FROM orders WHERE id = $1)")
-        .bind(&order_id)
+    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = $1")
+        .bind(&listing_id)
         .execute(&state.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
@@ -274,7 +277,7 @@ pub async fn confirm_order(
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Fetch order and verify buyer is confirming
-    let order = sqlx::query("SELECT id, buyer_id, seller_id, status FROM orders WHERE id = $1")
+    let order = sqlx::query("SELECT buyer_id, status FROM orders WHERE id = $1")
         .bind(&order_id)
         .fetch_optional(&state.db)
         .await
@@ -289,19 +292,21 @@ pub async fn confirm_order(
         return Err(ApiError::Forbidden);
     }
 
-    // Can only confirm paid orders
-    if status != "paid" {
+    // Can only confirm paid orders - atomic update prevents race condition
+    let updated = sqlx::query(
+        "UPDATE orders SET status = 'completed' WHERE id = $1 AND status = 'paid' RETURNING id"
+    )
+    .bind(&order_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
             "Cannot confirm order with status '{}'. Order must be paid first.",
             status
         )));
     }
-
-    sqlx::query("UPDATE orders SET status = 'completed' WHERE id = $1")
-        .bind(&order_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     tracing::info!(order_id = %order_id, confirmed_by = %user_id, "Order confirmed");
 
@@ -320,7 +325,7 @@ pub async fn pay_order(
     let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    let order = sqlx::query("SELECT id, buyer_id, seller_id, status FROM orders WHERE id = $1")
+    let order = sqlx::query("SELECT buyer_id, status FROM orders WHERE id = $1")
         .bind(&order_id)
         .fetch_optional(&state.db)
         .await
@@ -334,18 +339,21 @@ pub async fn pay_order(
         return Err(ApiError::Forbidden);
     }
 
-    if status != "pending" {
+    // Atomic update prevents race condition
+    let updated = sqlx::query(
+        "UPDATE orders SET status = 'paid' WHERE id = $1 AND status = 'pending' RETURNING id"
+    )
+    .bind(&order_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
             "Cannot pay order with status '{}'. Order must be pending.",
             status
         )));
     }
-
-    sqlx::query("UPDATE orders SET status = 'paid' WHERE id = $1")
-        .bind(&order_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     tracing::info!(order_id = %order_id, paid_by = %user_id, "Order paid");
 
@@ -365,7 +373,7 @@ pub async fn ship_order(
         .map_err(|_| ApiError::Unauthorized)?;
 
     let order =
-        sqlx::query("SELECT id, buyer_id, seller_id, status, listing_id FROM orders WHERE id = $1")
+        sqlx::query("SELECT seller_id, listing_id, status FROM orders WHERE id = $1")
             .bind(&order_id)
             .fetch_optional(&state.db)
             .await
@@ -380,19 +388,21 @@ pub async fn ship_order(
         return Err(ApiError::Forbidden);
     }
 
-    if status != "paid" {
+    // Atomic update prevents race condition
+    let updated = sqlx::query(
+        "UPDATE orders SET status = 'shipped' WHERE id = $1 AND status = 'paid' RETURNING id"
+    )
+    .bind(&order_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
             "Cannot ship order with status '{}'. Order must be paid first.",
             status
         )));
     }
-
-    // Update order status
-    sqlx::query("UPDATE orders SET status = 'shipped' WHERE id = $1")
-        .bind(&order_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     // Mark listing as sold
     sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1")
@@ -407,4 +417,151 @@ pub async fn ship_order(
         "message": "Order marked as shipped",
         "order_id": order_id
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_order_query_defaults() {
+        let query: OrderQuery = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(query.role, None);
+        assert_eq!(query.limit, None);
+        assert_eq!(query.offset, None);
+    }
+
+    #[test]
+    fn test_order_query_with_filters() {
+        let query: OrderQuery = serde_json::from_str(r#"{"role": "buyer", "limit": 10, "offset": 20}"#).unwrap();
+        assert_eq!(query.role, Some("buyer".to_string()));
+        assert_eq!(query.limit, Some(10));
+        assert_eq!(query.offset, Some(20));
+    }
+
+    #[test]
+    fn test_order_query_role_values() {
+        for role in &["buyer", "seller", "all"] {
+            let query: OrderQuery = serde_json::from_str(&format!(r#"{{"role": "{}"}}"#, role)).unwrap();
+            assert_eq!(query.role, Some(role.to_string()));
+        }
+    }
+
+    #[test]
+    fn test_order_summary_serialization() {
+        let summary = OrderSummary {
+            id: "order-123".to_string(),
+            listing_id: "listing-456".to_string(),
+            listing_title: "iPhone 13".to_string(),
+            buyer_id: "buyer-1".to_string(),
+            seller_id: "seller-1".to_string(),
+            final_price_cny: 4999.0,
+            status: "pending".to_string(),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            role: "buyer".to_string(),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("order-123"));
+        assert!(json.contains("iPhone 13"));
+        assert!(json.contains("\"status\":\"pending\""));
+        assert!(json.contains("\"role\":\"buyer\""));
+    }
+
+    #[test]
+    fn test_orders_response_serialization() {
+        let response = OrdersResponse {
+            items: vec![],
+            total: 0,
+            limit: 20,
+            offset: 0,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"items\":[]"));
+        assert!(json.contains("\"total\":0"));
+        assert!(json.contains("\"limit\":20"));
+        assert!(json.contains("\"offset\":0"));
+    }
+
+    #[test]
+    fn test_order_detail_serialization() {
+        let detail = OrderDetail {
+            id: "order-789".to_string(),
+            listing_id: "listing-123".to_string(),
+            listing_title: "MacBook Pro".to_string(),
+            buyer_id: "buyer-2".to_string(),
+            seller_id: "seller-3".to_string(),
+            buyer_username: "buyeruser".to_string(),
+            seller_username: "selleruser".to_string(),
+            final_price_cny: 12999.0,
+            status: "completed".to_string(),
+            created_at: "2024-01-15T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&detail).unwrap();
+        assert!(json.contains("order-789"));
+        assert!(json.contains("MacBook Pro"));
+        assert!(json.contains("buyeruser"));
+        assert!(json.contains("selleruser"));
+        assert!(json.contains("\"status\":\"completed\""));
+    }
+
+    #[test]
+    fn test_order_action_request_deserialization() {
+        let req: OrderActionRequest = serde_json::from_str(r#"{"reason": "Changed my mind"}"#).unwrap();
+        assert_eq!(req.reason, Some("Changed my mind".to_string()));
+    }
+
+    #[test]
+    fn test_order_action_request_without_reason() {
+        let req: OrderActionRequest = serde_json::from_str(r#"{}"#).unwrap();
+        assert_eq!(req.reason, None);
+    }
+
+    #[test]
+    fn test_order_query_role_all() {
+        let query: OrderQuery = serde_json::from_str(r#"{"role": "all"}"#).unwrap();
+        assert_eq!(query.role, Some("all".to_string()));
+    }
+
+    #[test]
+    fn test_order_summary_seller_role() {
+        let summary = OrderSummary {
+            id: "order-seller-1".to_string(),
+            listing_id: "listing-abc".to_string(),
+            listing_title: "Nintendo Switch".to_string(),
+            buyer_id: "buyer-x".to_string(),
+            seller_id: "seller-y".to_string(),
+            final_price_cny: 1999.0,
+            status: "shipped".to_string(),
+            created_at: "2024-02-01T10:00:00Z".to_string(),
+            role: "seller".to_string(),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("seller"));
+        assert!(json.contains("shipped"));
+    }
+
+    #[test]
+    fn test_orders_response_with_items() {
+        let response = OrdersResponse {
+            items: vec![
+                OrderSummary {
+                    id: "order-1".to_string(),
+                    listing_id: "l1".to_string(),
+                    listing_title: "Item 1".to_string(),
+                    buyer_id: "b1".to_string(),
+                    seller_id: "s1".to_string(),
+                    final_price_cny: 100.0,
+                    status: "pending".to_string(),
+                    created_at: "2024-01-01".to_string(),
+                    role: "buyer".to_string(),
+                },
+            ],
+            total: 1,
+            limit: 10,
+            offset: 0,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("Item 1"));
+        assert!(json.contains("\"total\":1"));
+    }
 }

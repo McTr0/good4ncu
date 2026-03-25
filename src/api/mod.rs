@@ -3,6 +3,8 @@ use crate::services::chat::ChatService;
 use crate::services::BusinessEvent;
 use axum::{
     extract::State,
+    middleware,
+    response::Response,
     routing::{delete, get, post, put},
     Json, Router,
 };
@@ -28,6 +30,23 @@ use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
 use crate::middleware::rate_limit::RateLimitStateHandle;
+
+/// Security headers applied to all responses.
+async fn security_headers_middleware(
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
+    headers.insert(
+        "Strict-Transport-Security",
+        "max-age=31536000; includeSubDomains".parse().unwrap(),
+    );
+    response
+}
 
 /// Extractor that provides the direct TCP peer address of the connected client.
 /// Unlike ConnectInfo, this works with the plain axum::serve without special server configuration.
@@ -84,6 +103,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     Router::new()
         .route("/api/health", get(health_check))
         .route("/api/stats", get(stats::get_stats))
+        .route("/api/categories", get(listings::get_categories))
         .route("/api/chat", post(handle_chat))
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
@@ -124,11 +144,20 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         )
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
+        .layer(middleware::from_fn(security_headers_middleware))
         .with_state(state)
 }
 
-async fn health_check() -> &'static str {
-    "OK"
+async fn health_check(State(state): State<AppState>) -> Result<&'static str, ApiError> {
+    // Verify database connectivity — critical for production deployments
+    sqlx::query("SELECT 1")
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| {
+            tracing::error!(%e, "Health check failed: database unreachable");
+            ApiError::Internal(anyhow::anyhow!("Database unreachable: {}", e))
+        })?;
+    Ok("OK")
 }
 
 #[derive(Deserialize)]
@@ -283,4 +312,73 @@ async fn handle_chat(
         reply,
         conversation_id,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chat_request_with_message() {
+        let json = r#"{"message": "Hello!", "conversation_id": "conv-1"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Hello!");
+        assert_eq!(req.conversation_id, Some("conv-1".to_string()));
+        assert_eq!(req.image, None);
+        assert_eq!(req.audio, None);
+    }
+
+    #[test]
+    fn test_chat_request_with_media() {
+        let json = r#"{"message": "Check this", "image": "base64data", "audio": "base64audio"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Check this");
+        assert_eq!(req.image, Some("base64data".to_string()));
+        assert_eq!(req.audio, Some("base64audio".to_string()));
+    }
+
+    #[test]
+    fn test_chat_request_without_conversation_id() {
+        let json = r#"{"message": "Hello!"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Hello!");
+        assert_eq!(req.conversation_id, None);
+    }
+
+    #[test]
+    fn test_chat_request_empty_conversation_id() {
+        let json = r#"{"message": "Hi", "conversation_id": ""}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Hi");
+        assert_eq!(req.conversation_id, Some("".to_string()));
+    }
+
+    #[test]
+    fn test_chat_response_serialization() {
+        let resp = ChatResponse {
+            reply: "Hello back!".to_string(),
+            conversation_id: "conv-123".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("Hello back!"));
+        assert!(json.contains("conv-123"));
+    }
+
+    #[test]
+    fn test_peer_addr_clone() {
+        use std::net::SocketAddr;
+        let addr: SocketAddr = "127.0.0.1:8080".parse().unwrap();
+        let peer = PeerAddr(addr);
+        let _cloned = peer.clone();
+    }
+
+    #[test]
+    fn test_peer_addr_debug() {
+        use std::net::SocketAddr;
+        let addr: SocketAddr = "192.168.1.1:3000".parse().unwrap();
+        let peer = PeerAddr(addr);
+        let debug_str = format!("{:?}", peer);
+        assert!(debug_str.contains("PeerAddr"));
+        assert!(debug_str.contains("192.168.1.1"));
+    }
 }
