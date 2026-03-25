@@ -116,6 +116,12 @@ abstract class AppLocalizations {
   /// **'AI Assistant'**
   String get aiAssistantTab;
 
+  /// No description provided for @messagesTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Messages'**
+  String get messagesTab;
+
   /// No description provided for @publishTab.
   ///
   /// In en, this message translates to:

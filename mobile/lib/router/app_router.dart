@@ -132,7 +132,7 @@ class _ShellScaffold extends StatefulWidget {
 class _ShellScaffoldState extends State<_ShellScaffold> {
   int _currentIndex = 0;
 
-  static const _routes = ['/', '/chat', '/create', '/my-listings', '/profile'];
+  static const _routes = ['/', '/conversations', '/create', '/my-listings', '/profile'];
 
   @override
   Widget build(BuildContext context) {
@@ -158,7 +158,7 @@ class _ShellScaffoldState extends State<_ShellScaffold> {
           NavigationDestination(
             icon: const Icon(Icons.chat_bubble_outline),
             selectedIcon: const Icon(Icons.chat_bubble),
-            label: l.aiAssistantTab,
+            label: l.messagesTab,
           ),
           NavigationDestination(
             icon: const Icon(Icons.add_circle_outline),

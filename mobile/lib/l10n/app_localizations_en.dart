@@ -18,6 +18,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get aiAssistantTab => 'AI Assistant';
 
   @override
+  String get messagesTab => 'Messages';
+
+  @override
   String get publishTab => 'Publish';
 
   @override

@@ -18,6 +18,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get aiAssistantTab => 'AI助手';
 
   @override
+  String get messagesTab => '消息';
+
+  @override
   String get publishTab => '发布';
 
   @override

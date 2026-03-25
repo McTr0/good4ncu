@@ -37,6 +37,55 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     }
   }
 
+  Future<void> _handleContactSeller(BuildContext context) async {
+    final listing = _listing;
+    if (listing == null || listing.ownerId == null) return;
+
+    // Can't chat with yourself
+    try {
+      final profile = await _apiService.getUserProfile();
+      if (!mounted) return;
+      final currentUserId = profile['id']?.toString();
+      if (currentUserId == listing.ownerId) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('不能和自己聊天')),
+        );
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      // Check existing connections
+      final connections = await _apiService.getConnections();
+      if (!mounted) return;
+      final existing = connections.where((c) => c.otherUserId == listing.ownerId).toList();
+
+      if (existing.isNotEmpty) {
+        // Already have a connection — go to chat
+        final conv = existing.first;
+        context.push('/chat/${conv.id}', extra: {
+          'conversationId': conv.id,
+          'otherUserId': conv.otherUserId,
+          'otherUsername': conv.otherUsername,
+        });
+      } else {
+        // Send connection request
+        await _apiService.requestConnection(listing.ownerId!, listingId: listing.id);
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('已发送连接请求，等待对方接受'), duration: Duration(seconds: 3)),
+        );
+        // Navigate to conversation list so user can see the pending state
+        context.push('/conversations');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('连接失败: $e'), duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
@@ -227,11 +276,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
           children: [
             Expanded(
               child: OutlinedButton.icon(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Contact seller coming soon...')),
-                  );
-                },
+                onPressed: () => _handleContactSeller(context),
                 icon: const Icon(Icons.chat_bubble_outline),
                 label: Text(l.contactSeller),
               ),
