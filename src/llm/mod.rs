@@ -13,6 +13,7 @@ use tokio::sync::mpsc;
 /// providing agent creation with provider-specific types kept internal.
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
+    #[allow(dead_code)]
     fn name(&self) -> &str;
 
     /// Create a RAG-enabled marketplace agent.

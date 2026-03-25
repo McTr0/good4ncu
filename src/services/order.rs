@@ -56,22 +56,31 @@ impl OrderService {
         expected_current: &str,
         new_status: &str,
     ) -> Result<bool> {
-        let result = sqlx::query(
-            "UPDATE orders SET status = $1 WHERE id = $2 AND status = $3 RETURNING id"
-        )
-        .bind(new_status)
-        .bind(order_id)
-        .bind(expected_current)
-        .fetch_optional(&self.db)
-        .await?;
+        let result =
+            sqlx::query("UPDATE orders SET status = $1 WHERE id = $2 AND status = $3 RETURNING id")
+                .bind(new_status)
+                .bind(order_id)
+                .bind(expected_current)
+                .fetch_optional(&self.db)
+                .await?;
 
         match result {
             Some(_) => {
-                tracing::info!(order_id, expected_current, new_status, "Order status transitioned");
+                tracing::info!(
+                    order_id,
+                    expected_current,
+                    new_status,
+                    "Order status transitioned"
+                );
                 Ok(true)
             }
             None => {
-                tracing::warn!(order_id, expected_current, new_status, "Order status transition failed - not in expected state");
+                tracing::warn!(
+                    order_id,
+                    expected_current,
+                    new_status,
+                    "Order status transition failed - not in expected state"
+                );
                 Ok(false)
             }
         }

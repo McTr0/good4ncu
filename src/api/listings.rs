@@ -160,7 +160,7 @@ pub async fn get_listings(
         }
         (Some(cat), None) => {
             let count_row = sqlx::query(
-                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1"
+                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1",
             )
             .bind(cat)
             .fetch_one(&state.db)
@@ -200,12 +200,11 @@ pub async fn get_listings(
             (count_row, rows)
         }
         (None, None) => {
-            let count_row = sqlx::query(
-                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'"
-            )
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+            let count_row =
+                sqlx::query("SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'")
+                    .fetch_one(&state.db)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
             let rows = sqlx::query(&format!(
                 "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' ORDER BY {} LIMIT $1 OFFSET $2",
                 order_by

@@ -429,7 +429,10 @@ mod tests {
         let extracted = extract_user_id_from_token(
             &{
                 let mut h = HeaderMap::new();
-                h.insert("Authorization", format!("Bearer {}", token).parse().unwrap());
+                h.insert(
+                    "Authorization",
+                    format!("Bearer {}", token).parse().unwrap(),
+                );
                 h
             },
             secret,

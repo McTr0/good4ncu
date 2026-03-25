@@ -171,8 +171,8 @@ impl Tool for HumanApprovalTool {
 pub async fn run_cli_hitl_handler(
     mut rx: mpsc::Receiver<(HitlRequest, tokio::sync::oneshot::Sender<HitlResult>)>,
 ) {
-    use inquire::{Select, Text};
     use inquire::error::InquireError;
+    use inquire::{Select, Text};
 
     while let Some((request, response_tx)) = rx.recv().await {
         println!("\n🔔 [HITL] AGENT IS ASKING FOR YOUR GUIDANCE:");

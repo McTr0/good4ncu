@@ -50,13 +50,11 @@ pub async fn get_watchlist(
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let count_row = sqlx::query(
-        "SELECT COUNT(*) as cnt FROM watchlist WHERE user_id = $1"
-    )
-    .bind(&user_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let count_row = sqlx::query("SELECT COUNT(*) as cnt FROM watchlist WHERE user_id = $1")
+        .bind(&user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     let total: i64 = count_row.try_get("cnt").unwrap_or(0);
 
     let rows = sqlx::query(
@@ -98,7 +96,12 @@ pub async fn get_watchlist(
         })
         .collect();
 
-    Ok(Json(WatchlistResponse { items, total, limit, offset }))
+    Ok(Json(WatchlistResponse {
+        items,
+        total,
+        limit,
+        offset,
+    }))
 }
 
 /// POST /api/watchlist/:listing_id - add listing to watchlist

@@ -1,5 +1,5 @@
-use thiserror::Error;
 use sqlx::{PgPool, Row};
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum SettlementError {
@@ -96,7 +96,10 @@ mod unit_tests {
 
     #[test]
     fn test_settlement_error_display() {
-        assert_eq!(SettlementError::OrderNotFound.to_string(), "Order not found");
+        assert_eq!(
+            SettlementError::OrderNotFound.to_string(),
+            "Order not found"
+        );
         assert_eq!(
             SettlementError::InvalidState("pending".to_string()).to_string(),
             "Invalid order state: pending"

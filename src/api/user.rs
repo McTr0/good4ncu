@@ -290,7 +290,8 @@ mod tests {
 
     #[test]
     fn test_pagination_params_with_values() {
-        let params: PaginationParams = serde_json::from_str(r#"{"limit": 10, "offset": 20}"#).unwrap();
+        let params: PaginationParams =
+            serde_json::from_str(r#"{"limit": 10, "offset": 20}"#).unwrap();
         assert_eq!(params.limit, Some(10));
         assert_eq!(params.offset, Some(20));
     }

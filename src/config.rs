@@ -73,7 +73,8 @@ impl AppConfig {
             panic!("GEMINI_API_KEY must be set when LLM_PROVIDER=minimax (used for embeddings)");
         }
 
-        let jwt_secret = std::env::var("JWT_SECRET").expect("JWT_SECRET must be set in environment");
+        let jwt_secret =
+            std::env::var("JWT_SECRET").expect("JWT_SECRET must be set in environment");
         // Enforce minimum secret length to prevent weak JWT signatures
         if jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters for security");
@@ -143,10 +144,7 @@ mod tests {
     #[test]
     fn test_cors_origins_parsing() {
         let origins = "https://example.com,https://app.example.com, http://localhost:3000";
-        let parsed: Vec<String> = origins
-            .split(',')
-            .map(|v| v.trim().to_string())
-            .collect();
+        let parsed: Vec<String> = origins.split(',').map(|v| v.trim().to_string()).collect();
         assert_eq!(parsed.len(), 3);
         assert_eq!(parsed[0], "https://example.com");
         assert_eq!(parsed[1], "https://app.example.com");

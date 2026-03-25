@@ -26,8 +26,9 @@ async fn count_query(db: &sqlx::PgPool, sql: &str) -> Result<i64, crate::api::er
         .fetch_one(db)
         .await
         .map_err(|e| crate::api::error::ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    row.try_get::<i64, _>("cnt")
-        .map_err(|_| crate::api::error::ApiError::Internal(anyhow::anyhow!("Failed to parse count")))
+    row.try_get::<i64, _>("cnt").map_err(|_| {
+        crate::api::error::ApiError::Internal(anyhow::anyhow!("Failed to parse count"))
+    })
 }
 
 /// GET /api/stats - public marketplace statistics
@@ -36,7 +37,10 @@ pub async fn get_stats(
 ) -> Result<Json<MarketplaceStats>, crate::api::error::ApiError> {
     let (total_listings, active_listings, total_users, total_orders) = try_join!(
         count_query(&state.db, "SELECT COUNT(*) as cnt FROM inventory"),
-        count_query(&state.db, "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'"),
+        count_query(
+            &state.db,
+            "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'"
+        ),
         count_query(&state.db, "SELECT COUNT(*) as cnt FROM users"),
         count_query(&state.db, "SELECT COUNT(*) as cnt FROM orders"),
     )?;
