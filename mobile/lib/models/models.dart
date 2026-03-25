@@ -97,6 +97,8 @@ class ChatMessage {
   final String? imageBase64;
   final String? audioBase64;
   final DateTime timestamp;
+  /// True while the SSE stream is still delivering tokens (typing indicator).
+  final bool isPartial;
 
   ChatMessage({
     required this.sender,
@@ -104,11 +106,77 @@ class ChatMessage {
     this.imageBase64,
     this.audioBase64,
     required this.timestamp,
+    this.isPartial = false,
   });
+
+  ChatMessage copyWith({
+    String? sender,
+    String? content,
+    String? imageBase64,
+    String? audioBase64,
+    DateTime? timestamp,
+    bool? isPartial,
+  }) {
+    return ChatMessage(
+      sender: sender ?? this.sender,
+      content: content ?? this.content,
+      imageBase64: imageBase64 ?? this.imageBase64,
+      audioBase64: audioBase64 ?? this.audioBase64,
+      timestamp: timestamp ?? this.timestamp,
+      isPartial: isPartial ?? this.isPartial,
+    );
+  }
 
   Map<String, dynamic> toJson() => {
         'message': content,
         'image': imageBase64,
         'audio': audioBase64,
       };
+}
+
+/// HITL negotiation request — received via WS push or GET /api/negotiations.
+class HitlRequest {
+  final String id;
+  final String listingId;
+  final String buyerId;
+  final String sellerId;
+  final double proposedPrice;
+  final String reason;
+  final String status; // pending | countered | approved | rejected | expired
+  final double? counterPrice;
+  final String createdAt;
+  final String? expiresAt;
+
+  HitlRequest({
+    required this.id,
+    required this.listingId,
+    required this.buyerId,
+    required this.sellerId,
+    required this.proposedPrice,
+    required this.reason,
+    required this.status,
+    this.counterPrice,
+    required this.createdAt,
+    this.expiresAt,
+  });
+
+  factory HitlRequest.fromJson(Map<String, dynamic> json) {
+    return HitlRequest(
+      id: json['id'] ?? '',
+      listingId: json['listing_id'] ?? '',
+      buyerId: json['buyer_id'] ?? '',
+      sellerId: json['seller_id'] ?? '',
+      proposedPrice: (json['proposed_price'] ?? 0).toDouble(),
+      reason: json['reason'] ?? '',
+      status: json['status'] ?? 'pending',
+      counterPrice: json['counter_price']?.toDouble(),
+      createdAt: json['created_at'] ?? '',
+      expiresAt: json['expires_at'],
+    );
+  }
+
+  bool get isPending => status == 'pending';
+  bool get isCountered => status == 'countered';
+  bool get isExpired => status == 'expired';
+  bool get isFinal => status == 'approved' || status == 'rejected';
 }

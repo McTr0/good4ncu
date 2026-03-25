@@ -382,6 +382,66 @@ class ApiService {
     );
     _handleResponse(response, (_) {});
   }
+
+  // ---------------------------------------------------------------------------
+  // Negotiations (HITL)
+  // ---------------------------------------------------------------------------
+
+  /// List pending negotiation requests for the current user.
+  /// Sellers see pending + expired; buyers see countered + approved + rejected + expired.
+  Future<List<HitlRequest>> getNegotiations() async {
+    final headers = await _authHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/negotiations'),
+      headers: headers,
+    );
+    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
+    final items = data['items'] as List<dynamic>? ?? [];
+    return items
+        .map((e) => HitlRequest.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// Seller responds to a pending negotiation.
+  /// action: 'approve' | 'reject' | 'counter'
+  /// counter_price: required when action == 'counter' (in yuan, not cents)
+  Future<Map<String, dynamic>> respondNegotiation(
+    String id, {
+    required String action,
+    double? counterPrice,
+  }) async {
+    final headers = await _authHeaders();
+    final body = <String, dynamic>{'action': action};
+    if (counterPrice != null) body['counter_price'] = counterPrice;
+    final response = await http.patch(
+      Uri.parse('$baseUrl/api/negotiations/$id/respond'),
+      headers: headers,
+      body: jsonEncode(body),
+    );
+    return _handleResponse(response, (d) => d as Map<String, dynamic>);
+  }
+
+  /// Buyer accepts seller's counter-offer.
+  Future<Map<String, dynamic>> acceptCounterNegotiation(String id) async {
+    final headers = await _authHeaders();
+    final response = await http.patch(
+      Uri.parse('$baseUrl/api/negotiations/$id/accept'),
+      headers: headers,
+      body: '{}',
+    );
+    return _handleResponse(response, (d) => d as Map<String, dynamic>);
+  }
+
+  /// Buyer rejects seller's counter-offer.
+  Future<Map<String, dynamic>> rejectCounterNegotiation(String id) async {
+    final headers = await _authHeaders();
+    final response = await http.patch(
+      Uri.parse('$baseUrl/api/negotiations/$id/reject'),
+      headers: headers,
+      body: '{}',
+    );
+    return _handleResponse(response, (d) => d as Map<String, dynamic>);
+  }
 }
 
 class RecognizedItem {
