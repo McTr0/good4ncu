@@ -62,13 +62,23 @@ async fn main() -> Result<(), anyhow::Error> {
     // WebSocket global state — shared across all connections.
     let ws_state = api::ws::new_ws_state();
 
-    // Build the notification service with WebSocket broadcast wired in.
-    // broadcast_to_user uses the global WS_CONNECTIONS registry so it doesn't
-    // need a direct reference to ws_state here.
-    let notification = crate::services::notification::NotificationService::new(db_pool.clone())
-        .with_broadcast(Arc::new(|user_id: String, payload: String| {
+    // Shared broadcast callback for WS push — passed to both NotificationService and hitl_expire.
+    let broadcast: crate::services::notification::NotificationBroadcast =
+        Arc::new(|user_id: String, payload: String| {
             api::ws::broadcast_to_user(&user_id, &payload);
-        }));
+        });
+
+    // Build the notification service with WebSocket broadcast wired in.
+    let notification = crate::services::notification::NotificationService::new(db_pool.clone())
+        .with_broadcast(Arc::clone(&broadcast));
+
+    let router = crate::agents::router::IntentRouter::new(config.blocked_keywords.clone());
+
+    // HITL expiration worker: scans every 10 min for pending requests > 48h old.
+    let hitl_expire_handle = tokio::spawn(services::hitl_expire::run(
+        db_pool.clone(),
+        Arc::clone(&broadcast),
+    ));
 
     let app_state = api::AppState {
         db: db_pool.clone(),
@@ -79,6 +89,12 @@ async fn main() -> Result<(), anyhow::Error> {
         gemini_api_key: config.gemini_api_key.clone(),
         notification,
         ws_connections: ws_state,
+        router,
+        oss_endpoint: config.oss_endpoint.clone(),
+        oss_bucket: config.oss_bucket.clone(),
+        oss_role_arn: config.oss_role_arn.clone(),
+        oss_access_key_id: config.oss_access_key_id.clone(),
+        oss_access_key_secret: config.oss_access_key_secret.clone(),
     };
 
     let app = api::create_router(app_state, &config.cors_origins);
@@ -97,6 +113,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     server_handle.abort();
     event_loop_handle.abort();
+    hitl_expire_handle.abort();
 
     // Gracefully close the DB pool so Postgres can cleanly收回所有连接
     // and flush any pending transaction results in the buffer.

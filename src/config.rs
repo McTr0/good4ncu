@@ -20,6 +20,13 @@ pub struct AppConfig {
     pub llm_provider: String,
     pub vector_dim: usize,
     pub cors_origins: Vec<String>,
+    pub blocked_keywords: Vec<String>,
+    /// Alibaba Cloud OSS config (optional — upload_token endpoint fails gracefully if not set).
+    pub oss_endpoint: String,
+    pub oss_bucket: String,
+    pub oss_role_arn: Option<String>,
+    pub oss_access_key_id: Option<String>,
+    pub oss_access_key_secret: Option<String>,
 }
 
 impl fmt::Debug for AppConfig {
@@ -36,6 +43,12 @@ impl fmt::Debug for AppConfig {
             .field("llm_provider", &self.llm_provider)
             .field("vector_dim", &self.vector_dim)
             .field("cors_origins", &self.cors_origins)
+            .field("blocked_keywords", &self.blocked_keywords)
+            .field("oss_endpoint", &self.oss_endpoint)
+            .field("oss_bucket", &self.oss_bucket)
+            .field("oss_role_arn", &self.oss_role_arn.as_ref().map(|_| "[REDACTED]"))
+            .field("oss_access_key_id", &self.oss_access_key_id.as_ref().map(|_| "[REDACTED]"))
+            .field("oss_access_key_secret", &self.oss_access_key_secret.as_ref().map(|_| "[REDACTED]"))
             .finish()
     }
 }
@@ -93,6 +106,17 @@ impl AppConfig {
                 .ok()
                 .map(|s| s.split(',').map(|v| v.trim().to_string()).collect())
                 .unwrap_or_default(),
+            blocked_keywords: std::env::var("BLOCKED_KEYWORDS")
+                .ok()
+                .map(|s| s.split(',').map(|v| v.trim().to_string()).collect())
+                .unwrap_or_default(),
+            oss_endpoint: std::env::var("OSS_ENDPOINT")
+                .unwrap_or_else(|_| "https://oss-cn-beijing.aliyuncs.com".into()),
+            oss_bucket: std::env::var("OSS_BUCKET")
+                .unwrap_or_else(|_| "good4ncu".into()),
+            oss_role_arn: std::env::var("OSS_ROLE_ARN").ok(),
+            oss_access_key_id: std::env::var("OSS_ACCESS_KEY_ID").ok(),
+            oss_access_key_secret: std::env::var("OSS_ACCESS_KEY_SECRET").ok(),
         })
     }
 }
@@ -112,6 +136,12 @@ mod tests {
             llm_provider: "gemini".to_string(),
             vector_dim: 768,
             cors_origins: vec!["https://example.com".to_string()],
+            blocked_keywords: vec!["毒品".to_string(), "武器".to_string()],
+            oss_endpoint: "https://oss-cn-beijing.aliyuncs.com".to_string(),
+            oss_bucket: "good4ncu".to_string(),
+            oss_role_arn: Some("acs:ram::123456:role/TestRole".to_string()),
+            oss_access_key_id: Some("oss-key-id".to_string()),
+            oss_access_key_secret: Some("oss-secret".to_string()),
         };
 
         let debug_str = format!("{:?}", config);
