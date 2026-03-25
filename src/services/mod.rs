@@ -3,6 +3,7 @@ use sqlx::PgPool;
 use tokio::sync::mpsc;
 
 pub mod chat;
+pub mod notification;
 pub mod order;
 pub mod product;
 pub mod settlement;
@@ -32,6 +33,7 @@ pub struct ServiceManager {
     pub product: product::ProductService,
     pub order: order::OrderService,
     pub chat: chat::ChatService,
+    pub notification: notification::NotificationService,
     pub settlement: settlement::SettlementService,
     pub event_tx: mpsc::Sender<BusinessEvent>,
 }
@@ -50,6 +52,7 @@ impl ServiceManager {
             product: product::ProductService::new(db.clone()),
             order: order::OrderService::new(db.clone()),
             chat: chat::ChatService::new(db.clone()),
+            notification: notification::NotificationService::new(db.clone()),
             settlement: settlement::SettlementService::new(db),
             event_tx: tx,
         };
@@ -64,6 +67,7 @@ impl ServiceManager {
             let product_svc = self.product.clone();
             let settlement_svc = self.settlement.clone();
             let chat_svc = self.chat.clone();
+            let notification_svc = self.notification.clone();
 
             tokio::spawn(async move {
                 match event {
@@ -74,24 +78,54 @@ impl ServiceManager {
                         final_price,
                     } => {
                         tracing::info!(listing_id, "DealReached event received");
-                        if let Err(e) = order_svc
+                        let order_id = match order_svc
                             .create_order(&listing_id, &buyer_id, &seller_id, final_price)
                             .await
                         {
-                            tracing::error!(%e, listing_id, "Failed to create order");
-                        }
+                            Ok(id) => id,
+                            Err(e) => {
+                                tracing::error!(%e, listing_id, "Failed to create order");
+                                return;
+                            }
+                        };
                         if let Err(e) = product_svc.mark_as_sold(&listing_id).await {
                             tracing::error!(%e, listing_id, "Failed to mark listing as sold");
                         }
+                        // Notify seller that their item was purchased
+                        let _ = notification_svc
+                            .create(
+                                &seller_id,
+                                "deal_reached",
+                                "订单已创建",
+                                &format!("商品已被购买，成交价 ¥{:.2}", final_price as f64 / 100.0),
+                                Some(&order_id),
+                                Some(&listing_id),
+                            )
+                            .await;
                     }
                     BusinessEvent::OrderPaid { order_id } => {
                         tracing::info!(order_id, "OrderPaid event received");
                         if let Err(e) = settlement_svc.finalize_payment(&order_id).await {
                             tracing::error!(%e, order_id, "Failed to finalize payment");
                         }
-                        if let Err(e) = order_svc.update_order_status(&order_id, "completed").await
+                        if let Err(e) = order_svc.update_order_status(&order_id, "paid").await
                         {
                             tracing::error!(%e, order_id, "Failed to update order status");
+                        }
+                        // Notify seller that payment was received
+                        if let Some(Ok((seller_id, listing_id))) =
+                            order_svc.get_order(&order_id).await.transpose()
+                        {
+                            let _ = notification_svc
+                                .create(
+                                    &seller_id,
+                                    "order_paid",
+                                    "款项已到账",
+                                    "买家已付款，请尽快发货",
+                                    Some(&order_id),
+                                    Some(&listing_id),
+                                )
+                                .await;
                         }
                     }
                     BusinessEvent::ChatMessage {
