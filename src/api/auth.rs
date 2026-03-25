@@ -23,6 +23,7 @@ pub struct AuthRequest {
 pub struct AuthResponse {
     pub token: String,
     pub user_id: String,
+    pub username: String,
     pub message: String,
 }
 
@@ -128,6 +129,7 @@ pub async fn register(
             Ok(Json(AuthResponse {
                 token,
                 user_id,
+                username: payload.username.clone(),
                 message: "注册成功".to_string(),
             }))
         }
@@ -163,7 +165,7 @@ pub async fn login(
     }
 
     // Fetch user from database
-    let user_row = match sqlx::query("SELECT id, password_hash FROM users WHERE username = $1")
+    let user_row = match sqlx::query("SELECT id, username, password_hash FROM users WHERE username = $1")
         .bind(&payload.username)
         .fetch_optional(&state.db)
         .await
@@ -181,6 +183,7 @@ pub async fn login(
     };
 
     let user_id: String = user_row.get("id");
+    let username: String = user_row.get("username");
     let stored_hash: String = user_row.get("password_hash");
 
     let password = payload.password.clone();
@@ -204,6 +207,7 @@ pub async fn login(
             Ok(Json(AuthResponse {
                 token,
                 user_id,
+                username: username.clone(),
                 message: "登录成功".to_string(),
             }))
         }
@@ -388,11 +392,13 @@ mod tests {
         let resp = AuthResponse {
             token: "jwt.token.here".to_string(),
             user_id: "user-abc".to_string(),
+            username: "alice".to_string(),
             message: "登录成功".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("jwt.token.here"));
         assert!(json.contains("user-abc"));
+        assert!(json.contains("alice"));
         assert!(json.contains("登录成功"));
     }
 

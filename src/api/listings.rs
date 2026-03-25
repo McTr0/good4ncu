@@ -30,9 +30,16 @@ pub const MARKETPLACE_CATEGORIES: &[&str] = &[
 pub struct ListingQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Single category filter.
     pub category: Option<String>,
+    /// Multiple categories filter, comma-separated (e.g. "electronics,books").
+    pub categories: Option<String>,
     pub search: Option<String>,
     pub sort: Option<String>, // "newest" (default), "price_asc", "price_desc", "condition_desc"
+    /// Minimum price in CNY (inclusive).
+    pub min_price_cny: Option<f64>,
+    /// Maximum price in CNY (inclusive).
+    pub max_price_cny: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -117,16 +124,14 @@ fn parse_defects(defects_text: &str) -> Vec<String> {
 // Handlers
 // ---------------------------------------------------------------------------
 
-/// GET /api/listings — public browse with optional category filter + full-text search
+/// GET /api/listings — public browse with optional category/categories filter,
+/// full-text search, price range, and sort.
 pub async fn get_listings(
     State(state): State<AppState>,
     Query(params): Query<ListingQuery>,
 ) -> Result<Json<ListingsResponse>, ApiError> {
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
-
-    let category = params.category.as_ref();
-    let search = params.search.as_ref();
 
     // Determine sort order
     let order_by = match params.sort.as_deref() {
@@ -136,91 +141,106 @@ pub async fn get_listings(
         _ => "created_at DESC", // default: newest
     };
 
-    let (count_row, rows) = match (category, search) {
-        (Some(cat), Some(srch)) => {
-            let pattern = format!("%{}%", srch);
-            let count_row = sqlx::query(
-                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2)"
-            )
-            .bind(cat)
-            .bind(&pattern)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            let rows = sqlx::query(&format!(
-                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 AND (title ILIKE $2 OR brand ILIKE $2 OR description ILIKE $2) ORDER BY {} LIMIT $3 OFFSET $4",
-                order_by
-            ))
-            .bind(cat)
-            .bind(&pattern)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            (count_row, rows)
-        }
-        (Some(cat), None) => {
-            let count_row = sqlx::query(
-                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND category = $1",
-            )
-            .bind(cat)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            let rows = sqlx::query(&format!(
-                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND category = $1 ORDER BY {} LIMIT $2 OFFSET $3",
-                order_by
-            ))
-            .bind(cat)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            (count_row, rows)
-        }
-        (None, Some(srch)) => {
-            let pattern = format!("%{}%", srch);
-            let count_row = sqlx::query(
-                "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1)"
-            )
-            .bind(&pattern)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            let rows = sqlx::query(&format!(
-                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' AND (title ILIKE $1 OR brand ILIKE $1 OR description ILIKE $1) ORDER BY {} LIMIT $2 OFFSET $3",
-                order_by
-            ))
-            .bind(&pattern)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            (count_row, rows)
-        }
-        (None, None) => {
-            let count_row =
-                sqlx::query("SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'")
-                    .fetch_one(&state.db)
-                    .await
-                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            let rows = sqlx::query(&format!(
-                "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects FROM inventory WHERE status = 'active' ORDER BY {} LIMIT $1 OFFSET $2",
-                order_by
-            ))
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-            (count_row, rows)
-        }
-    };
+    // Build WHERE conditions and collect bound parameter values in the same order.
+    let mut conds = vec!["status = 'active'".to_string()];
+    let mut binds: Vec<String> = Vec::new(); // tracks type info only, not used for binding
 
-    let total: i64 = count_row.try_get("cnt").unwrap_or(0);
+    // Single category (preferred when both are provided)
+    let use_single_cat = params.category.is_some() && params.categories.is_none();
+    if let Some(ref cat) = params.category {
+        if params.categories.is_none() {
+            conds.push(format!("category = ${}", binds.len() + 1));
+            binds.push(cat.clone());
+        }
+    }
+
+    // Multi-category: comma-separated, e.g. "electronics,books" → category IN ('electronics','books')
+    if let Some(ref cats) = params.categories {
+        if !cats.is_empty() && params.category.is_none() {
+            let parts: Vec<String> = cats
+                .split(',')
+                .map(|s| format!("'{}'", s.trim().replace('\'', "''")))
+                .collect();
+            conds.push(format!("category IN ({})", parts.join(",")));
+        }
+    }
+
+    // Full-text search
+    if let Some(ref srch) = params.search {
+        if !srch.is_empty() {
+            conds.push(format!(
+                "(title ILIKE ${} OR brand ILIKE ${} OR description ILIKE ${})",
+                binds.len() + 1, binds.len() + 1, binds.len() + 1
+            ));
+            binds.push(srch.clone());
+        }
+    }
+
+    // Price range (prices stored as cents, params are in yuan)
+    let min_cents = params.min_price_cny.filter(|&p| p > 0.0).map(|p| (p * 100.0) as i32);
+    let max_cents = params.max_price_cny.filter(|&p| p > 0.0).map(|p| (p * 100.0) as i32);
+    if min_cents.is_some() {
+        conds.push(format!("suggested_price_cny >= ${}", binds.len() + 1));
+        binds.push("min_price".to_string());
+    }
+    if max_cents.is_some() {
+        conds.push(format!("suggested_price_cny <= ${}", binds.len() + 1));
+        binds.push("max_price".to_string());
+    }
+
+    let where_clause = conds.join(" AND ");
+
+    // Count query
+    let count_sql = format!("SELECT COUNT(*) as cnt FROM inventory WHERE {}", where_clause);
+    let mut count_q = sqlx::query(&count_sql);
+    if use_single_cat {
+        count_q = count_q.bind(params.category.as_deref().unwrap());
+    }
+    if let Some(ref srch) = params.search {
+        if !srch.is_empty() {
+            count_q = count_q.bind(format!("%{}%", srch));
+        }
+    }
+    if let Some(mc) = min_cents {
+        count_q = count_q.bind(mc);
+    }
+    if let Some(mc) = max_cents {
+        count_q = count_q.bind(mc);
+    }
+
+    let count_row = count_q
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let total: i64 = count_row.get("cnt");
+
+    // Select query
+    let select_sql = format!(
+        "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects \
+         FROM inventory WHERE {} ORDER BY {} LIMIT ${} OFFSET ${}",
+        where_clause, order_by, binds.len() + 1, binds.len() + 2
+    );
+    let mut select_q = sqlx::query(&select_sql);
+    if use_single_cat {
+        select_q = select_q.bind(params.category.as_deref().unwrap());
+    }
+    if let Some(ref srch) = params.search {
+        if !srch.is_empty() {
+            select_q = select_q.bind(format!("%{}%", srch));
+        }
+    }
+    if let Some(mc) = min_cents {
+        select_q = select_q.bind(mc);
+    }
+    if let Some(mc) = max_cents {
+        select_q = select_q.bind(mc);
+    }
+    select_q = select_q.bind(limit).bind(offset);
+
+    let rows = select_q
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let items: Vec<ListingSummary> = rows
         .iter()
