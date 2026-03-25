@@ -6,7 +6,7 @@ use axum::{
     extract::State,
     middleware,
     response::Response,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
     Json, Router,
 };
 use sqlx::Row;
@@ -14,6 +14,7 @@ pub mod auth;
 pub mod conversations;
 pub mod error;
 pub mod listings;
+pub mod negotiate;
 pub mod notifications;
 pub mod orders;
 pub mod stats;
@@ -190,6 +191,11 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route(
             "/api/notifications/read-all",
             post(notifications::mark_all_notifications_read),
+        )
+        .route("/api/negotiations", get(negotiate::list_negotiations))
+        .route(
+            "/api/negotiations/{id}/respond",
+            patch(negotiate::respond_negotiation),
         )
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))

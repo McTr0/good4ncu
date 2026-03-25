@@ -217,6 +217,40 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
         .await
         .ok();
 
+    // HITL requests: stores pending seller approval requests for negotiation.
+    // The seller responds via PATCH /api/negotiations/{id} with approve/reject/counter.
+    // The marketplace agent waits on this record being resolved before proceeding.
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS hitl_requests (
+            id TEXT PRIMARY KEY,
+            listing_id TEXT NOT NULL,
+            buyer_id TEXT NOT NULL,
+            seller_id TEXT NOT NULL,
+            proposed_price INTEGER NOT NULL,
+            reason TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            -- pending: awaiting seller response
+            -- approved: deal accepted
+            -- rejected: seller declined
+            -- countered: seller counter-offered with different price
+            counter_price INTEGER,
+            created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+            resolved_at TIMESTAMPTZ,
+            FOREIGN KEY(listing_id) REFERENCES inventory(id) ON DELETE CASCADE,
+            FOREIGN KEY(buyer_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY(seller_id) REFERENCES users(id) ON DELETE CASCADE
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Index for seller's pending approval requests
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_hitl_seller_status ON hitl_requests(seller_id, status)",
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 

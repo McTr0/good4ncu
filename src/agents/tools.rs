@@ -33,6 +33,8 @@ pub struct ToolContext {
     pub embed_and_insert: EmbedFn,
     pub event_tx: mpsc::Sender<BusinessEvent>,
     pub current_user_id: Option<String>,
+    /// Notification service for sending in-app alerts (e.g., negotiation requests).
+    pub notification: crate::services::notification::NotificationService,
 }
 
 /// Unified error type for all marketplace tools.
@@ -607,6 +609,149 @@ impl Tool for PurchaseItemIntentTool {
         Ok(format!(
             "Purchase initiated! Order is being created for listing '{}'. Buyer: {}, Seller: {}, Price: {} CNY",
             args.listing_id, buyer_id, listing.owner_id, args.offered_price
+        ))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 6b. NegotiateItemTool —发起还价请求，卖家 HITL 确认
+// ---------------------------------------------------------------------------
+
+/// Args for the negotiate_item tool.
+/// The seller will receive a notification and must approve/reject/counter via
+/// PATCH /api/negotiations/{id}/respond. The deal only proceeds if the seller approves.
+#[derive(Deserialize)]
+pub struct NegotiateItemArgs {
+    /// The listing the buyer wants to negotiate on
+    pub listing_id: String,
+    /// The buyer's proposed price (in CNY cents)
+    pub offered_price: i64,
+    /// Short reason for the offer (e.g., "lightly used", "market price dropped")
+    pub reason: String,
+}
+
+#[derive(Clone)]
+pub struct NegotiateItemTool {
+    pub ctx: ToolContext,
+}
+
+impl Tool for NegotiateItemTool {
+    const NAME: &'static str = "negotiate_item";
+    type Error = ToolError;
+    type Args = NegotiateItemArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: Self::NAME.to_string(),
+            description: "发起还价请求。买家对某件商品提出还价时使用，系统会通知卖家审批。只有卖家批准后才会创建订单。注意：不要对已经active的同一商品重复发起还价。".to_string(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "listing_id": { "type": "string", "description": "The listing ID to negotiate on" },
+                    "offered_price": { "type": "number", "description": "The offered price in CNY cents" },
+                    "reason": { "type": "string", "description": "Short reason for the offer" }
+                },
+                "required": ["listing_id", "offered_price", "reason"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let buyer_id = self.ctx.current_user_id.clone()
+            .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
+
+        // Fetch the listing to get the seller and check it's active
+        let listing_row = sqlx::query_as::<_, ListingCheckRow>(
+            "SELECT id, owner_id, suggested_price_cny, status FROM inventory WHERE id = $1",
+        )
+        .bind(&args.listing_id)
+        .fetch_optional(&self.ctx.db_pool)
+        .await
+        .map_err(|e| ToolError(format!("DB error: {}", e)))?;
+
+        let listing = match listing_row {
+            Some(l) => l,
+            None => return Ok(format!("No listing found with ID: {}", args.listing_id)),
+        };
+
+        if listing.status != "active" {
+            return Ok(format!(
+                "商品 {} 已下架或售出，无法还价",
+                args.listing_id
+            ));
+        }
+
+        if buyer_id == listing.owner_id {
+            return Err(ToolError("不能对自己的商品发起还价".to_string()));
+        }
+
+        // Validate offered price is within a reasonable range (±50% of asking price)
+        const PRICE_TOLERANCE: f64 = 0.50;
+        let min_price = (listing.suggested_price_cny as f64 * (1.0 - PRICE_TOLERANCE)) as i64;
+        let max_price = (listing.suggested_price_cny as f64 * (1.0 + PRICE_TOLERANCE)) as i64;
+        if args.offered_price < min_price || args.offered_price > max_price {
+            return Err(ToolError(format!(
+                "还价 ¥{:.2} 不在合理范围 ¥{:.2} - ¥{:.2} 内",
+                cents_to_yuan(args.offered_price),
+                cents_to_yuan(min_price),
+                cents_to_yuan(max_price),
+            )));
+        }
+
+        // Check if there's already a pending negotiation for this buyer+listing
+        let existing = sqlx::query(
+            "SELECT id FROM hitl_requests WHERE listing_id = $1 AND buyer_id = $2 AND status = 'pending'",
+        )
+        .bind(&args.listing_id)
+        .bind(&buyer_id)
+        .fetch_optional(&self.ctx.db_pool)
+        .await
+        .map_err(|e| ToolError(format!("DB error: {}", e)))?;
+        if existing.is_some() {
+            return Ok("您已对该商品发起过还价，请等待卖家响应后再发起新还价".to_string());
+        }
+
+        // Create the HITL request in the database
+        let hitl_id = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            r#"INSERT INTO hitl_requests
+               (id, listing_id, buyer_id, seller_id, proposed_price, reason, status)
+               VALUES ($1, $2, $3, $4, $5, $6, 'pending')"#,
+        )
+        .bind(&hitl_id)
+        .bind(&args.listing_id)
+        .bind(&buyer_id)
+        .bind(&listing.owner_id)
+        .bind(args.offered_price)
+        .bind(&args.reason)
+        .execute(&self.ctx.db_pool)
+        .await
+        .map_err(|e| ToolError(format!("DB error: {}", e)))?;
+
+        // Notify the seller immediately
+        let _ = self
+            .ctx
+            .notification
+            .create(
+                &listing.owner_id,
+                "negotiation_request",
+                "有新的还价请求",
+                &format!(
+                    "买家出价 ¥{:.2}，理由：{}",
+                    cents_to_yuan(args.offered_price),
+                    args.reason
+                ),
+                Some(&hitl_id),
+                Some(&args.listing_id),
+            )
+            .await;
+
+        Ok(format!(
+            "您的还价 ¥{:.2} 已发送给卖家，等待确认中。\
+             卖家同意后订单将自动创建。\
+             请留意通知。",
+            cents_to_yuan(args.offered_price)
         ))
     }
 }

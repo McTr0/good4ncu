@@ -126,6 +126,7 @@ impl super::LlmProvider for GeminiProvider {
             embed_and_insert: embed_fn,
             event_tx,
             current_user_id,
+            notification: crate::services::notification::NotificationService::new(db_pool.clone()),
         };
 
         let agent = self
@@ -139,6 +140,7 @@ impl super::LlmProvider for GeminiProvider {
             .tool(crate::agents::tools::UpdateListingTool { ctx: ctx.clone() })
             .tool(crate::agents::tools::DeleteListingTool { ctx: ctx.clone() })
             .tool(crate::agents::tools::PurchaseItemIntentTool { ctx: ctx.clone() })
+            .tool(crate::agents::tools::NegotiateItemTool { ctx: ctx.clone() })
             .tool(crate::agents::tools::GetMyListingsTool { ctx: ctx.clone() })
             .build();
 
