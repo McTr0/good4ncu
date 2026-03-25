@@ -38,6 +38,8 @@ pub struct ListingItem {
 pub struct PaginationParams {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// Optional filter: "active", "sold", "deleted", or "all" (default: "active")
+    pub status: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -80,7 +82,7 @@ pub async fn get_profile(
     }))
 }
 
-/// GET /api/user/listings?limit=20&offset=0
+/// GET /api/user/listings?limit=20&offset=0&status=active
 pub async fn get_user_listings(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -91,35 +93,78 @@ pub async fn get_user_listings(
 
     let limit = params.limit.unwrap_or(20).min(100);
     let offset = params.offset.unwrap_or(0).max(0);
+    let status_filter = params.status.as_deref().unwrap_or("active");
 
-    // Get total count
-    let count_row = sqlx::query(
-        "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'active'",
-    )
-    .bind(&user_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let (count_sql, items_sql) = match status_filter {
+        "all" => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1",
+            r#"
+                SELECT id, title, category, brand, condition_score,
+                       suggested_price_cny, description, status
+                FROM inventory
+                WHERE owner_id = $1
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+            "#,
+        ),
+        "sold" | "deleted" => {
+            let f = status_filter;
+            if f == "sold" {
+                (
+                    "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'sold'",
+                    r#"
+                        SELECT id, title, category, brand, condition_score,
+                               suggested_price_cny, description, status
+                        FROM inventory
+                        WHERE owner_id = $1 AND status = 'sold'
+                        ORDER BY created_at DESC
+                        LIMIT $2 OFFSET $3
+                    "#,
+                )
+            } else {
+                (
+                    "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'deleted'",
+                    r#"
+                        SELECT id, title, category, brand, condition_score,
+                               suggested_price_cny, description, status
+                        FROM inventory
+                        WHERE owner_id = $1 AND status = 'deleted'
+                        ORDER BY created_at DESC
+                        LIMIT $2 OFFSET $3
+                    "#,
+                )
+            }
+        }
+        _ => {
+            // "active" (default)
+            (
+                "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'active'",
+                r#"
+                    SELECT id, title, category, brand, condition_score,
+                           suggested_price_cny, description, status
+                    FROM inventory
+                    WHERE owner_id = $1 AND status = 'active'
+                    ORDER BY created_at DESC
+                    LIMIT $2 OFFSET $3
+                "#,
+            )
+        }
+    };
 
+    let count_row = sqlx::query(count_sql)
+        .bind(&user_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     let total: i64 = count_row.try_get("cnt").unwrap_or(0);
 
-    // Get paginated items
-    let rows = sqlx::query(
-        r#"
-        SELECT id, title, category, brand, condition_score,
-               suggested_price_cny, description, status
-        FROM inventory
-        WHERE owner_id = $1 AND status = 'active'
-        ORDER BY created_at DESC
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(&user_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let rows = sqlx::query(items_sql)
+        .bind(&user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let items: Vec<ListingItem> = rows
         .iter()
