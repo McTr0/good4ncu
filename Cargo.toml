@@ -32,4 +32,3 @@ moka = { version = "0.12", features = ["sync", "future"] }
 async-trait = "0.1"
 regex = "1.10"
 base64 = "0.22.1"
-atty = "0.2"

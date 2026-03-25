@@ -2,7 +2,6 @@ mod agents;
 mod services;
 
 mod api;
-mod cli;
 mod config;
 mod db;
 mod llm;
@@ -79,25 +78,12 @@ async fn main() -> Result<(), anyhow::Error> {
         }
     });
 
-    // Only spawn interactive CLI when connected to a TTY (skip for headless/production).
-    // In non-TTY environments, the CLI would fail immediately anyway.
-    let cli_handle = if atty::is(atty::Stream::Stdin) {
-        tracing::info!("Interactive CLI enabled (TTY detected)");
-        Some(tokio::spawn(cli::run_cli(db_pool, llm_provider, event_tx)))
-    } else {
-        tracing::info!("Non-TTY environment: skipping interactive CLI");
-        None
-    };
-
     // Wait for Ctrl+C to shut down gracefully
     tokio::signal::ctrl_c().await?;
     tracing::info!("Ctrl+C received, shutting down.");
 
     server_handle.abort();
     event_loop_handle.abort();
-    if let Some(handle) = cli_handle {
-        handle.abort();
-    }
 
     Ok(())
 }
