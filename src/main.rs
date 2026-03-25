@@ -59,6 +59,17 @@ async fn main() -> Result<(), anyhow::Error> {
         services.run_event_loop(event_rx).await;
     });
 
+    // WebSocket global state — shared across all connections.
+    let ws_state = api::ws::new_ws_state();
+
+    // Build the notification service with WebSocket broadcast wired in.
+    // broadcast_to_user uses the global WS_CONNECTIONS registry so it doesn't
+    // need a direct reference to ws_state here.
+    let notification = crate::services::notification::NotificationService::new(db_pool.clone())
+        .with_broadcast(Arc::new(|user_id: String, payload: String| {
+            api::ws::broadcast_to_user(&user_id, &payload);
+        }));
+
     let app_state = api::AppState {
         db: db_pool.clone(),
         llm_provider: Arc::clone(&llm_provider),
@@ -66,7 +77,8 @@ async fn main() -> Result<(), anyhow::Error> {
         rate_limit: middleware::rate_limit::make_rate_limit_state(),
         jwt_secret: config.jwt_secret.clone(),
         gemini_api_key: config.gemini_api_key.clone(),
-        notification: crate::services::notification::NotificationService::new(db_pool.clone()),
+        notification,
+        ws_connections: ws_state,
     };
 
     let app = api::create_router(app_state, &config.cors_origins);

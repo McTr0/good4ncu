@@ -21,7 +21,7 @@ rig-postgres = "0.2.2"
 sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "json"] }
 pgvector = "0.4"
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
-axum = { version = "0.8", features = ["json"] }
+axum = { version = "0.8", features = ["json", "ws"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["fs", "cors", "limit"] }
 argon2 = "0.5.3"
@@ -32,3 +32,5 @@ moka = { version = "0.12", features = ["sync", "future"] }
 async-trait = "0.1"
 regex = "1.10"
 base64 = "0.22.1"
+tokio-tungstenite = "0.28"
+futures-util = "0.3"

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde::Serialize;
 use sqlx::{PgPool, Row};
+use std::sync::Arc;
 use uuid::Uuid;
 
 /// In-app notification for users (e.g., "a buyer purchased your item").
@@ -17,14 +18,26 @@ pub struct Notification {
     pub created_at: String,
 }
 
+/// Callback for real-time push after a notification is persisted.
+/// Receives (user_id, json_payload). Set at construction time in AppState.
+pub type NotificationBroadcast = Arc<dyn Fn(String, String) + Send + Sync>;
+
 #[derive(Clone)]
 pub struct NotificationService {
     db: PgPool,
+    /// Optional WebSocket broadcast callback. Set by AppState wiring in main.rs.
+    broadcast: NotificationBroadcast,
 }
 
 impl NotificationService {
     pub fn new(db: PgPool) -> Self {
-        Self { db }
+        Self { db, broadcast: Arc::new(|_, _| {}) }
+    }
+
+    /// Set the WebSocket broadcast callback. Called after each successful insert.
+    pub fn with_broadcast(mut self, broadcast: NotificationBroadcast) -> Self {
+        self.broadcast = broadcast;
+        self
     }
 
     /// Create a notification for a user.
@@ -51,6 +64,17 @@ impl NotificationService {
         .bind(related_listing_id)
         .execute(&self.db)
         .await?;
+
+        // WebSocket push: fire-and-forget, non-blocking.
+        let payload = serde_json::json!({
+            "id": id,
+            "event_type": event_type,
+            "title": title,
+            "body": body,
+        })
+        .to_string();
+        (self.broadcast)(user_id.to_string(), payload);
+
         Ok(id)
     }
 

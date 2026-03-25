@@ -315,6 +315,19 @@ pub async fn change_password(
     })))
 }
 
+/// Extract and validate the user_id from a raw JWT token string.
+/// Returns `Ok(user_id)` if the token is valid, or `Err(message)` if invalid.
+pub fn extract_user_id_from_token_str(token: &str, jwt_secret: &str) -> Result<String, String> {
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(jwt_secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|e| format!("Invalid token: {}", e))?;
+
+    Ok(token_data.claims.sub)
+}
+
 /// Extract and validate the user_id from the Authorization header using the provided secret.
 /// Returns `Ok(user_id)` if the token is valid, or `Err(message)` if invalid/missing.
 pub fn extract_user_id_from_token(headers: &HeaderMap, jwt_secret: &str) -> Result<String, String> {

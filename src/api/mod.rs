@@ -20,6 +20,7 @@ pub mod orders;
 pub mod stats;
 pub mod user;
 pub mod watchlist;
+pub mod ws;
 use error::ApiError;
 use rig::completion::Message;
 use rig::message::{AssistantContent, Text, UserContent};
@@ -116,6 +117,8 @@ pub struct AppState {
     pub jwt_secret: String,
     pub gemini_api_key: String,
     pub notification: NotificationService,
+    #[allow(dead_code)]
+    pub ws_connections: Arc<ws::WsConnections>,
 }
 
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
@@ -197,6 +200,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/negotiations/{id}/respond",
             patch(negotiate::respond_negotiation),
         )
+        .route("/ws", get(ws::ws_handler))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(middleware::from_fn(security_headers_middleware))
