@@ -499,6 +499,19 @@ pub async fn create_order(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
+    // Notify seller that their item was purchased (same notification as AI tool path)
+    let _ = state
+        .notification
+        .create(
+            &owner_id,
+            "deal_reached",
+            "订单已创建",
+            &format!("买家已购买商品，成交价 ¥{:.2}", payload.offered_price_cny),
+            Some(&order_id),
+            Some(&payload.listing_id),
+        )
+        .await;
+
     tracing::info!(
         order_id = %order_id,
         listing_id = %payload.listing_id,
