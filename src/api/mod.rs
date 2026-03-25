@@ -23,6 +23,7 @@ pub mod recommendations;
 pub mod stats;
 pub mod upload;
 pub mod user;
+pub mod user_chat;
 pub mod watchlist;
 pub mod ws;
 use error::ApiError;
@@ -218,10 +219,22 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/negotiations/{id}/accept",
             patch(negotiate::accept_counter_negotiation),
         )
-        .route(
-            "/api/negotiations/{id}/reject",
+        .route("/api/negotiations/{id}/reject",
             patch(negotiate::reject_counter_negotiation),
         )
+        .route("/api/chat/connect/request", post(user_chat::connect_request))
+        .route("/api/chat/connect/accept", post(user_chat::connect_accept))
+        .route("/api/chat/connect/reject", post(user_chat::connect_reject))
+        .route("/api/chat/connections", get(user_chat::list_connections))
+        .route(
+            "/api/chat/conversations/{id}/messages",
+            get(user_chat::get_connection_messages),
+        )
+        .route(
+            "/api/chat/conversations/{id}/messages",
+            post(user_chat::send_connection_message),
+        )
+        .route("/api/chat/messages/{id}/read", post(user_chat::mark_message_read))
         .route("/api/upload/token", get(upload::get_upload_token))
         .route("/ws", get(ws::ws_handler))
         .layer(cors)

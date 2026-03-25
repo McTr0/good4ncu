@@ -8,6 +8,8 @@ import '../pages/create_listing_page.dart';
 import '../pages/my_listings_page.dart';
 import '../pages/profile_page.dart';
 import '../pages/chat_page.dart';
+import '../pages/conversation_list_page.dart';
+import '../pages/user_chat_page.dart';
 import '../pages/login_page.dart';
 import '../pages/order_detail_page.dart';
 import '../pages/trust_page.dart';
@@ -91,6 +93,28 @@ final GoRouter appRouter = GoRouter(
           pageBuilder: (context, state) => const NoTransitionPage(
             child: ChatPage(),
           ),
+        ),
+        GoRoute(
+          path: '/conversations',
+          pageBuilder: (context, state) => const NoTransitionPage(
+            child: ConversationListPage(),
+          ),
+        ),
+        GoRoute(
+          path: '/chat/:conversationId',
+          pageBuilder: (context, state) {
+            final id = state.pathParameters['conversationId']!;
+            final extra = state.extra as Map<String, dynamic>?;
+            final otherUserId = extra?['otherUserId'] as String? ?? '';
+            final otherUsername = extra?['otherUsername'] as String? ?? '';
+            return NoTransitionPage(
+              child: UserChatPage(
+                conversationId: id,
+                otherUserId: otherUserId,
+                otherUsername: otherUsername,
+              ),
+            );
+          },
         ),
       ],
     ),

@@ -286,5 +286,8 @@ pub async fn init_db(database_url: &str) -> Result<PgPool> {
     // Initialize tables
     setup_schema(&db_pool).await?;
 
+    // Initialize user_chat schema (chat_connections + read_at/read_by columns)
+    crate::api::user_chat::init_chat_schema(&db_pool).await?;
+
     Ok(db_pool)
 }

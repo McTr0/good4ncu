@@ -13,6 +13,10 @@ class WsNotification {
   final String? relatedOrderId;
   final String? relatedListingId;
   final String? negotiationId;
+  /// 用于 connection_request 等事件
+  final String? connectionId;
+  /// 用于 new_message 和 message_read 事件
+  final String? messageId;
 
   WsNotification({
     this.id,
@@ -22,6 +26,8 @@ class WsNotification {
     this.relatedOrderId,
     this.relatedListingId,
     this.negotiationId,
+    this.connectionId,
+    this.messageId,
   });
 
   factory WsNotification.fromJson(Map<String, dynamic> json) {
@@ -33,6 +39,8 @@ class WsNotification {
       relatedOrderId: json['related_order_id']?.toString(),
       relatedListingId: json['related_listing_id']?.toString(),
       negotiationId: json['negotiation_id']?.toString(),
+      connectionId: json['connection_id']?.toString(),
+      messageId: json['message_id']?.toString(),
     );
   }
 }

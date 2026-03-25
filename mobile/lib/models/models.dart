@@ -134,7 +134,102 @@ class ChatMessage {
       };
 }
 
-/// HITL negotiation request — received via WS push or GET /api/negotiations.
+/// 连接状态类型
+enum ConnectionStatusType {
+  online,   // connected + established
+  offline,  // connected but not established
+  pending,  // pending
+}
+
+/// 会话信息
+class Conversation {
+  final String id;
+  final String otherUserId;
+  final String otherUsername;
+  final String status; // 'connected' | 'pending' | 'established'
+  final String? lastMessage;
+  final DateTime? lastMessageAt;
+
+  Conversation({
+    required this.id,
+    required this.otherUserId,
+    required this.otherUsername,
+    required this.status,
+    this.lastMessage,
+    this.lastMessageAt,
+  });
+
+  factory Conversation.fromJson(Map<String, dynamic> json) {
+    return Conversation(
+      id: json['id']?.toString() ?? '',
+      otherUserId: json['other_user_id']?.toString() ?? '',
+      otherUsername: json['other_username'] ?? '',
+      status: json['status'] ?? 'pending',
+      lastMessage: json['last_message'],
+      lastMessageAt: json['last_message_at'] != null
+          ? DateTime.tryParse(json['last_message_at'].toString())
+          : null,
+    );
+  }
+
+  ConnectionStatusType get connectionStatus {
+    if (status == 'pending') return ConnectionStatusType.pending;
+    if (status == 'connected' || status == 'established') {
+      if (status == 'established') return ConnectionStatusType.online;
+      return ConnectionStatusType.offline;
+    }
+    return ConnectionStatusType.offline;
+  }
+}
+
+/// 私聊消息
+class ConversationMessage {
+  final String id;
+  final String conversationId;
+  final String senderId;
+  final String content;
+  final String? imageBase64;
+  final String? audioBase64;
+  final DateTime sentAt;
+  final DateTime? readAt;
+
+  ConversationMessage({
+    required this.id,
+    required this.conversationId,
+    required this.senderId,
+    required this.content,
+    this.imageBase64,
+    this.audioBase64,
+    required this.sentAt,
+    this.readAt,
+  });
+
+  factory ConversationMessage.fromJson(Map<String, dynamic> json) {
+    return ConversationMessage(
+      id: json['id']?.toString() ?? '',
+      conversationId: json['conversation_id']?.toString() ?? '',
+      senderId: json['sender']?.toString() ?? '',
+      content: json['content'] ?? '',
+      imageBase64: json['image_base64'],
+      audioBase64: json['audio_base64'],
+      sentAt: json['sent_at'] != null
+          ? DateTime.parse(json['sent_at'].toString())
+          : json['timestamp'] != null
+              ? DateTime.parse(json['timestamp'].toString())
+              : DateTime.now(),
+      readAt: json['read_at'] != null
+          ? DateTime.tryParse(json['read_at'].toString())
+          : null,
+    );
+  }
+
+  /// 消息是否已读（有连接且已读）
+  bool get isRead => readAt != null;
+
+  /// 消息是否由指定用户发送
+  bool isFrom(String userId) => senderId == userId;
+}
+
 class HitlRequest {
   final String id;
   final String listingId;

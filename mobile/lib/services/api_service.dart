@@ -442,6 +442,112 @@ class ApiService {
     );
     return _handleResponse(response, (d) => d as Map<String, dynamic>);
   }
+
+  // ---------------------------------------------------------------------------
+  // Chat connections (three-way handshake)
+  // ---------------------------------------------------------------------------
+
+  /// 获取会话列表
+  Future<List<Conversation>> getConnections() async {
+    final headers = await _authHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/chat/connections'),
+      headers: headers,
+    );
+    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
+    final items = data['items'] as List<dynamic>? ?? [];
+    return items
+        .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 请求建立连接
+  Future<void> requestConnection(String receiverId, {String? listingId}) async {
+    final headers = await _authHeaders();
+    final body = <String, dynamic>{'receiver_id': receiverId};
+    if (listingId != null) body['listing_id'] = listingId;
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/chat/connect/request'),
+      headers: headers,
+      body: jsonEncode(body),
+    );
+    _handleResponse(response, (_) {});
+  }
+
+  /// 接受连接
+  Future<void> acceptConnection(String connectionId) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/chat/connect/accept'),
+      headers: headers,
+      body: jsonEncode({'connection_id': connectionId}),
+    );
+    _handleResponse(response, (_) {});
+  }
+
+  /// 拒绝连接
+  Future<void> rejectConnection(String connectionId) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/chat/connect/reject'),
+      headers: headers,
+      body: jsonEncode({'connection_id': connectionId}),
+    );
+    _handleResponse(response, (_) {});
+  }
+
+  /// 发送私聊消息
+  Future<ConversationMessage> sendMessage(
+    String conversationId, {
+    required String content,
+    String? imageBase64,
+    String? audioBase64,
+  }) async {
+    final headers = await _authHeaders();
+    final body = <String, dynamic>{'content': content};
+    if (imageBase64 != null) body['image_base64'] = imageBase64;
+    if (audioBase64 != null) body['audio_base64'] = audioBase64;
+
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/chat/conversations/$conversationId/messages'),
+      headers: headers,
+      body: jsonEncode(body),
+    );
+    final data = _handleResponse(
+      response,
+      (d) => ConversationMessage.fromJson(d as Map<String, dynamic>),
+    );
+    return data;
+  }
+
+  /// 获取私聊消息列表
+  Future<List<ConversationMessage>> getChatConversationMessages(
+    String conversationId, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final headers = await _authHeaders();
+    final uri = Uri.parse(
+      '$baseUrl/api/chat/conversations/$conversationId/messages?limit=$limit&offset=$offset',
+    );
+    final response = await http.get(uri, headers: headers);
+    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
+    final messages = data['messages'] as List<dynamic>? ?? [];
+    return messages
+        .map((e) => ConversationMessage.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  /// 标记消息已读
+  Future<void> markMessageRead(String messageId) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/chat/messages/$messageId/read'),
+      headers: headers,
+      body: '{}',
+    );
+    _handleResponse(response, (_) {});
+  }
 }
 
 class RecognizedItem {

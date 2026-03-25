@@ -1,0 +1,841 @@
+//! User-to-user direct chat with connection handshake.
+//!
+//! Implements a three-way handshake for establishing chat connections:
+//! 1. Requester sends POST /api/chat/connect/request → status=pending
+//! 2. Receiver accepts via POST /api/chat/connect/accept → status=connected
+//!    (or rejects via POST /api/chat/connect/reject → status=rejected)
+//! 3. Once connected, messages can be exchanged via POST /api/chat/conversations/{id}/messages
+//!
+//! WebSocket events pushed to participants:
+//! - `connection_request` — new connection request received
+//! - `connection_established` — connection accepted and established
+//! - `new_message` — new direct message
+//! - `message_read` — a message was marked as read
+
+use axum::{
+    extract::{Path, Query, State},
+    http::HeaderMap,
+    Json,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::Row;
+
+use crate::api::auth::extract_user_id_from_token;
+use crate::api::error::ApiError;
+use crate::api::ws;
+use crate::api::AppState;
+
+// ---------------------------------------------------------------------------
+// Schema initialization
+// ---------------------------------------------------------------------------
+
+/// Initialize the user_chat schema: creates chat_connections table and
+/// adds read tracking columns to chat_messages. Safe to call multiple times.
+pub async fn init_chat_schema(pool: &sqlx::PgPool) -> anyhow::Result<()> {
+    // chat_connections table for tracking peer-to-peer chat relationships
+    sqlx::query(
+        r#"CREATE TABLE IF NOT EXISTS chat_connections (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            requester_id TEXT NOT NULL REFERENCES users(id),
+            receiver_id TEXT NOT NULL REFERENCES users(id),
+            status TEXT NOT NULL DEFAULT 'pending',
+            established_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            UNIQUE(requester_id, receiver_id)
+        )"#,
+    )
+    .execute(pool)
+    .await?;
+
+    // Index for fast lookup of connections by user
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_chat_connections_requester ON chat_connections(requester_id)",
+    )
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS idx_chat_connections_receiver ON chat_connections(receiver_id)",
+    )
+    .execute(pool)
+    .await?;
+
+    // Add read tracking columns to chat_messages if not present
+    sqlx::query("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ")
+        .execute(pool)
+        .await
+        .ok();
+    sqlx::query("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS read_by TEXT")
+        .execute(pool)
+        .await
+        .ok();
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Request / Response types
+// ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct ConnectRequestBody {
+    pub receiver_id: String,
+    pub listing_id: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct ConnectRequestResponse {
+    pub connection_id: String,
+    pub status: String,
+}
+
+#[derive(Deserialize)]
+pub struct ConnectAcceptBody {
+    pub connection_id: String,
+}
+
+#[derive(Serialize)]
+pub struct ConnectAcceptResponse {
+    pub status: String,
+    pub established_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct ConnectRejectBody {
+    pub connection_id: String,
+}
+
+#[derive(Serialize)]
+pub struct ConnectRejectResponse {
+    pub status: String,
+}
+
+#[derive(Serialize)]
+pub struct ConnectionEntry {
+    pub id: String,
+    pub other_user_id: String,
+    pub other_username: Option<String>,
+    pub status: String,
+    pub established_at: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Serialize)]
+pub struct ConnectionListResponse {
+    pub items: Vec<ConnectionEntry>,
+}
+
+#[derive(Deserialize)]
+pub struct SendMessageBody {
+    pub content: String,
+    pub image_base64: Option<String>,
+    pub audio_base64: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct SendMessageResponse {
+    pub message_id: i64,
+    pub sent_at: String,
+    pub read_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MessageListQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct MessageEntry {
+    pub id: i64,
+    pub sender: String,
+    pub sender_username: Option<String>,
+    pub content: String,
+    pub is_agent: bool,
+    pub timestamp: String,
+    pub read_at: Option<String>,
+    pub read_by: Option<String>,
+    pub image_data: Option<String>,
+    pub audio_data: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct MessageListResponse {
+    pub conversation_id: String,
+    pub messages: Vec<MessageEntry>,
+    pub total: i64,
+}
+
+#[derive(Serialize)]
+pub struct MarkReadResponse {
+    pub message_id: i64,
+    pub read_at: String,
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket event helpers
+// ---------------------------------------------------------------------------
+
+/// WS event payloads sent to clients.
+#[derive(Serialize)]
+struct WsConnectionRequestEvent {
+    event: String,
+    connection_id: String,
+    requester_id: String,
+    requester_username: Option<String>,
+    listing_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WsConnectionEstablishedEvent {
+    event: String,
+    connection_id: String,
+    established_at: String,
+}
+
+#[derive(Serialize)]
+struct WsNewMessageEvent {
+    event: String,
+    message_id: i64,
+    conversation_id: String,
+    sender: String,
+    sender_username: Option<String>,
+    content: String,
+    timestamp: String,
+    read_at: Option<String>,
+    image_data: Option<String>,
+    audio_data: Option<String>,
+}
+
+#[derive(Serialize)]
+struct WsMessageReadEvent {
+    event: String,
+    message_id: i64,
+    read_at: String,
+    read_by: String,
+}
+
+// ---------------------------------------------------------------------------
+// Handlers
+// ---------------------------------------------------------------------------
+
+/// POST /api/chat/connect/request — initiate a connection request (step 1 of 3-way handshake).
+///
+/// Creates a pending connection record and pushes a `connection_request` WS event to the receiver.
+pub async fn connect_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ConnectRequestBody>,
+) -> Result<Json<ConnectRequestResponse>, ApiError> {
+    let requester_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    if requester_id == body.receiver_id {
+        return Err(ApiError::BadRequest("不能向自己发起连接".to_string()));
+    }
+
+    let receiver_exists = sqlx::query("SELECT 1 FROM users WHERE id = $1")
+        .bind(&body.receiver_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .is_some();
+    if !receiver_exists {
+        return Err(ApiError::NotFound);
+    }
+
+    let connection_id: String = sqlx::query(
+        r#"INSERT INTO chat_connections (requester_id, receiver_id, status)
+           VALUES ($1, $2, 'pending')
+           ON CONFLICT (requester_id, receiver_id)
+           DO UPDATE SET status = 'pending', established_at = NULL
+           RETURNING id"#,
+    )
+    .bind(&requester_id)
+    .bind(&body.receiver_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .get("id");
+
+    let requester_username: Option<String> =
+        sqlx::query("SELECT username FROM users WHERE id = $1")
+            .bind(&requester_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .map(|row| row.get("username"));
+
+    let ws_event = WsConnectionRequestEvent {
+        event: "connection_request".to_string(),
+        connection_id: connection_id.clone(),
+        requester_id: requester_id.clone(),
+        requester_username,
+        listing_id: body.listing_id,
+    };
+    let payload = serde_json::to_string(&ws_event).unwrap_or_default();
+    ws::broadcast_to_user(&body.receiver_id, &payload);
+
+    Ok(Json(ConnectRequestResponse {
+        connection_id,
+        status: "pending".to_string(),
+    }))
+}
+
+/// POST /api/chat/connect/accept — accept a connection request (step 2 of handshake).
+///
+/// Updates status to 'connected' and pushes `connection_established` to both parties.
+pub async fn connect_accept(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ConnectAcceptBody>,
+) -> Result<Json<ConnectAcceptResponse>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let row = sqlx::query(
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+    )
+    .bind(&body.connection_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let requester_id: String = row.get("requester_id");
+    let receiver_id: String = row.get("receiver_id");
+    let current_status: String = row.get("status");
+
+    if receiver_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+    if current_status != "pending" {
+        return Err(ApiError::BadRequest(format!(
+            "连接状态不是 pending，当前状态: {}",
+            current_status
+        )));
+    }
+
+    let established_at = chrono::Utc::now();
+    let established_at_str = established_at.to_rfc3339();
+
+    sqlx::query(
+        "UPDATE chat_connections SET status = 'connected', established_at = $1 WHERE id = $2",
+    )
+    .bind(established_at)
+    .bind(&body.connection_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let ws_event = WsConnectionEstablishedEvent {
+        event: "connection_established".to_string(),
+        connection_id: body.connection_id.clone(),
+        established_at: established_at_str.clone(),
+    };
+    let payload = serde_json::to_string(&ws_event).unwrap_or_default();
+    ws::broadcast_to_user(&requester_id, &payload);
+    ws::broadcast_to_user(&receiver_id, &payload);
+
+    Ok(Json(ConnectAcceptResponse {
+        status: "connected".to_string(),
+        established_at: established_at_str,
+    }))
+}
+
+/// POST /api/chat/connect/reject — reject a connection request.
+pub async fn connect_reject(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ConnectRejectBody>,
+) -> Result<Json<ConnectRejectResponse>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let row = sqlx::query(
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+    )
+    .bind(&body.connection_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let receiver_id: String = row.get("receiver_id");
+    let current_status: String = row.get("status");
+
+    if receiver_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+    if current_status != "pending" {
+        return Err(ApiError::BadRequest(format!(
+            "连接状态不是 pending，当前状态: {}",
+            current_status
+        )));
+    }
+
+    sqlx::query("UPDATE chat_connections SET status = 'rejected' WHERE id = $1")
+        .bind(&body.connection_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    Ok(Json(ConnectRejectResponse {
+        status: "rejected".to_string(),
+    }))
+}
+
+/// GET /api/chat/connections — list all connections for the current user.
+pub async fn list_connections(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<ConnectionListResponse>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let rows = sqlx::query(
+        r#"SELECT
+               cc.id,
+               cc.status,
+               cc.established_at,
+               cc.created_at,
+               cc.requester_id,
+               cc.receiver_id,
+               CASE WHEN cc.requester_id = $1 THEN cc.receiver_id ELSE cc.requester_id END as other_user_id
+           FROM chat_connections cc
+           WHERE cc.requester_id = $1 OR cc.receiver_id = $1
+           ORDER BY cc.created_at DESC"#,
+    )
+    .bind(&user_id)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let other_ids: Vec<String> = rows
+        .iter()
+        .map(|row| row.get::<String, _>("other_user_id"))
+        .collect();
+    let usernames: std::collections::HashMap<String, String> = if other_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
+            .bind(&other_ids)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+            .into_iter()
+            .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("username")))
+            .collect()
+    };
+
+    let items: Vec<ConnectionEntry> = rows
+        .into_iter()
+        .map(|row| {
+            let other_user_id: String = row.get("other_user_id");
+            let established_at: Option<chrono::DateTime<chrono::Utc>> =
+                row.try_get("established_at").ok().flatten();
+            let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+            ConnectionEntry {
+                id: row.get("id"),
+                other_user_id: other_user_id.clone(),
+                other_username: usernames.get(&other_user_id).cloned(),
+                status: row.get("status"),
+                established_at: established_at.map(|dt| dt.to_rfc3339()),
+                created_at: created_at.to_rfc3339(),
+            }
+        })
+        .collect();
+
+    Ok(Json(ConnectionListResponse { items }))
+}
+
+/// GET /api/chat/conversations/{connection_id}/messages — fetch messages in a connection.
+pub async fn get_connection_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+    Query(params): Query<MessageListQuery>,
+) -> Result<Json<MessageListResponse>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let limit = params.limit.unwrap_or(50).clamp(1, 200);
+    let offset = params.offset.unwrap_or(0).max(0);
+
+    let connection = sqlx::query(
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+    )
+    .bind(&connection_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let requester_id: String = connection.get("requester_id");
+    let receiver_id: String = connection.get("receiver_id");
+
+    if requester_id != user_id && receiver_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let rows = sqlx::query(
+        r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data
+           FROM chat_messages
+           WHERE (sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1)
+           ORDER BY id DESC
+           LIMIT $3 OFFSET $4"#,
+    )
+    .bind(&requester_id)
+    .bind(&receiver_id)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let total: i64 = sqlx::query(
+        r#"SELECT COUNT(*) as cnt FROM chat_messages
+            WHERE (sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1)"#,
+    )
+    .bind(&requester_id)
+    .bind(&receiver_id)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .try_get("cnt")
+    .unwrap_or(0);
+
+    let sender_ids: Vec<String> = rows
+        .iter()
+        .filter_map(|row| {
+            let sender: String = row.get("sender");
+            if sender == "assistant" {
+                None
+            } else {
+                Some(sender)
+            }
+        })
+        .collect();
+    let sender_usernames: std::collections::HashMap<String, String> = if sender_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
+            .bind(&sender_ids)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+            .into_iter()
+            .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("username")))
+            .collect()
+    };
+
+    let messages: Vec<MessageEntry> = rows
+        .into_iter()
+        .map(|row| {
+            let sender: String = row.get("sender");
+            let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
+            let read_at: Option<chrono::DateTime<chrono::Utc>> =
+                row.try_get("read_at").ok().flatten();
+            let sender_username = if sender == "assistant" {
+                None
+            } else {
+                sender_usernames.get(&sender).cloned()
+            };
+            MessageEntry {
+                id: row.get("id"),
+                sender,
+                sender_username,
+                content: row.get("content"),
+                is_agent: row.get("is_agent"),
+                timestamp: timestamp.to_rfc3339(),
+                read_at: read_at.map(|dt| dt.to_rfc3339()),
+                read_by: row.try_get("read_by").ok().flatten(),
+                image_data: row.try_get("image_data").ok().flatten(),
+                audio_data: row.try_get("audio_data").ok().flatten(),
+            }
+        })
+        .collect();
+
+    Ok(Json(MessageListResponse {
+        conversation_id: connection_id,
+        messages,
+        total,
+    }))
+}
+
+/// POST /api/chat/conversations/{connection_id}/messages — send a message in a connection.
+pub async fn send_connection_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+    Json(body): Json<SendMessageBody>,
+) -> Result<Json<SendMessageResponse>, ApiError> {
+    let sender_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    if body.content.is_empty() {
+        return Err(ApiError::BadRequest("消息内容不能为空".to_string()));
+    }
+    if body.content.len() > 2000 {
+        return Err(ApiError::BadRequest("消息内容不能超过2000字符".to_string()));
+    }
+
+    let connection = sqlx::query(
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+    )
+    .bind(&connection_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let requester_id: String = connection.get("requester_id");
+    let receiver_id: String = connection.get("receiver_id");
+    let status: String = connection.get("status");
+
+    if status != "connected" {
+        return Err(ApiError::BadRequest(format!(
+            "连接状态不是 connected，当前状态: {}",
+            status
+        )));
+    }
+    if sender_id != requester_id && sender_id != receiver_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let receiver = if sender_id == requester_id {
+        Some(receiver_id.clone())
+    } else {
+        Some(requester_id.clone())
+    };
+
+    let read_at = Some(chrono::Utc::now());
+    let read_at_str = read_at.map(|dt| dt.to_rfc3339());
+
+    let row = sqlx::query(
+        r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, read_at, read_by)
+           VALUES ($1, 'direct', $2, $3, false, $4, $5, $6, $7, $2)
+           RETURNING id, timestamp"#,
+    )
+    .bind(&connection_id)
+    .bind(&sender_id)
+    .bind(&receiver)
+    .bind(&body.content)
+    .bind(&body.image_base64)
+    .bind(&body.audio_base64)
+    .bind(&read_at)
+    .fetch_one(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let message_id: i64 = row.get("id");
+    let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
+
+    let sender_username: Option<String> =
+        sqlx::query("SELECT username FROM users WHERE id = $1")
+            .bind(&sender_id)
+            .fetch_optional(&state.db)
+            .await
+            .ok()
+            .flatten()
+            .map(|row| row.get("username"));
+
+    let ws_event = WsNewMessageEvent {
+        event: "new_message".to_string(),
+        message_id,
+        conversation_id: connection_id.clone(),
+        sender: sender_id.clone(),
+        sender_username,
+        content: body.content,
+        timestamp: timestamp.to_rfc3339(),
+        read_at: read_at_str.clone(),
+        image_data: body.image_base64,
+        audio_data: body.audio_base64,
+    };
+    let payload = serde_json::to_string(&ws_event).unwrap_or_default();
+    if let Some(ref recv) = receiver {
+        ws::broadcast_to_user(recv, &payload);
+    }
+
+    Ok(Json(SendMessageResponse {
+        message_id,
+        sent_at: timestamp.to_rfc3339(),
+        read_at: read_at_str,
+    }))
+}
+
+/// POST /api/chat/messages/{id}/read — mark a message as read.
+pub async fn mark_message_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(message_id): Path<i64>,
+) -> Result<Json<MarkReadResponse>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let row = sqlx::query(
+        r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cc.status
+           FROM chat_messages cm
+           JOIN chat_connections cc ON (
+               (cc.requester_id = cm.sender AND cc.receiver_id = cm.receiver) OR
+               (cc.receiver_id = cm.sender AND cc.requester_id = cm.receiver)
+           )
+           WHERE cm.id = $1"#,
+    )
+    .bind(message_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let sender: String = row.get("sender");
+    let receiver: Option<String> = row.try_get("receiver").ok().flatten();
+    let current_read_at: Option<chrono::DateTime<chrono::Utc>> =
+        row.try_get("read_at").ok().flatten();
+    let status: String = row.get("status");
+
+    if status != "connected" {
+        return Err(ApiError::BadRequest(format!(
+            "连接状态不是 connected，无法标记已读: {}",
+            status
+        )));
+    }
+
+    let Some(recv) = receiver else {
+        return Err(ApiError::Forbidden);
+    };
+    if recv != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    if current_read_at.is_some() {
+        let read_at_str = current_read_at.unwrap().to_rfc3339();
+        return Ok(Json(MarkReadResponse {
+            message_id,
+            read_at: read_at_str,
+        }));
+    }
+
+    let read_at = chrono::Utc::now();
+    let read_at_str = read_at.to_rfc3339();
+
+    sqlx::query("UPDATE chat_messages SET read_at = $1, read_by = $2 WHERE id = $3")
+        .bind(read_at)
+        .bind(&user_id)
+        .bind(message_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let ws_event = WsMessageReadEvent {
+        event: "message_read".to_string(),
+        message_id,
+        read_at: read_at_str.clone(),
+        read_by: user_id.clone(),
+    };
+    let payload = serde_json::to_string(&ws_event).unwrap_or_default();
+    ws::broadcast_to_user(&sender, &payload);
+
+    Ok(Json(MarkReadResponse {
+        message_id,
+        read_at: read_at_str,
+    }))
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_connection_entry_serialization() {
+        let entry = ConnectionEntry {
+            id: "conn-1".to_string(),
+            other_user_id: "user-2".to_string(),
+            other_username: Some("alice".to_string()),
+            status: "connected".to_string(),
+            established_at: Some("2024-01-01T00:00:00Z".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("conn-1"));
+        assert!(json.contains("connected"));
+        assert!(json.contains("alice"));
+    }
+
+    #[test]
+    fn test_message_entry_serialization() {
+        let entry = MessageEntry {
+            id: 1,
+            sender: "user-1".to_string(),
+            sender_username: Some("alice".to_string()),
+            content: "Hello!".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("Hello!"));
+        assert!(json.contains("user-1"));
+        assert!(json.contains("\"is_agent\":false"));
+    }
+
+    #[test]
+    fn test_connect_request_response() {
+        let resp = ConnectRequestResponse {
+            connection_id: "conn-123".to_string(),
+            status: "pending".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("conn-123"));
+        assert!(json.contains("pending"));
+    }
+
+    #[test]
+    fn test_send_message_response() {
+        let resp = SendMessageResponse {
+            message_id: 42,
+            sent_at: "2024-01-01T00:00:00Z".to_string(),
+            read_at: Some("2024-01-01T00:00:01Z".to_string()),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("42"));
+        assert!(json.contains("2024-01-01T00:00:00Z"));
+    }
+
+    #[test]
+    fn test_mark_read_response() {
+        let resp = MarkReadResponse {
+            message_id: 10,
+            read_at: "2024-01-01T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("10"));
+        assert!(json.contains("2024-01-01T12:00:00Z"));
+    }
+
+    #[test]
+    fn test_connection_list_response() {
+        let resp = ConnectionListResponse { items: vec![] };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"items\":[]"));
+    }
+
+    #[test]
+    fn test_message_list_response() {
+        let resp = MessageListResponse {
+            conversation_id: "conn-1".to_string(),
+            messages: vec![],
+            total: 0,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("conn-1"));
+        assert!(json.contains("\"messages\":[]"));
+    }
+}
