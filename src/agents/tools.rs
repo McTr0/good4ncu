@@ -69,9 +69,7 @@ impl Tool for CreateListingTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "create_listing".to_string(),
-            description:
-                "Creates a new secondhand item listing. Use when a user wants to sell something."
-                    .to_string(),
+            description: "发布新的二手商品。当用户想要出售商品时使用。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -91,7 +89,7 @@ impl Tool for CreateListingTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let owner =
             self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("Authentication required. Please login first.".to_string())
+                ToolError("请先登录再进行操作".to_string())
             })?;
         let listing_id = uuid::Uuid::new_v4().to_string();
         let defects_json =
@@ -159,7 +157,7 @@ impl Tool for SearchInventoryTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "search_inventory".to_string(),
-            description: "Searches the marketplace inventory with optional filters. Use when a user wants to find items with specific criteria like price range, category, or condition.".to_string(),
+            description: "搜索商品列表，支持关键词、分类、价格区间筛选。当用户想找特定商品时使用。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -179,7 +177,7 @@ impl Tool for SearchInventoryTool {
         if let Some(ref kw) = args.keyword {
             if kw.len() > MAX_KEYWORD_LEN {
                 return Err(ToolError(format!(
-                    "keyword exceeds maximum length of {} characters",
+                    "搜索关键词不能超过{}个字符",
                     MAX_KEYWORD_LEN
                 )));
             }
@@ -282,7 +280,7 @@ impl Tool for GetListingDetailsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_listing_details".to_string(),
-            description: "Gets the full details of a specific listing by its ID.".to_string(),
+            description: "获取指定商品的完整详情。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -372,7 +370,7 @@ impl Tool for UpdateListingTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "update_listing".to_string(),
-            description: "Updates a listing's price, title, or description. Use when a seller wants to modify their listing.".to_string(),
+            description: "修改商品的价格、标题或描述。当卖家想更新自己的商品信息时使用。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -389,7 +387,7 @@ impl Tool for UpdateListingTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let owner_id =
             self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("Authentication required. Please login first.".to_string())
+                ToolError("请先登录再进行操作".to_string())
             })?;
 
         if args.new_price.is_none() && args.new_title.is_none() && args.new_description.is_none() {
@@ -458,7 +456,7 @@ impl Tool for DeleteListingTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "delete_listing".to_string(),
-            description: "Removes (soft-deletes) a listing from the marketplace. Use when a seller wants to take down their item.".to_string(),
+            description: "删除（软删除）一个商品。当卖家想下架自己的商品时使用。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -472,7 +470,7 @@ impl Tool for DeleteListingTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let owner_id =
             self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("Authentication required. Please login first.".to_string())
+                ToolError("请先登录再进行操作".to_string())
             })?;
 
         let result = sqlx::query(
@@ -527,7 +525,7 @@ impl Tool for PurchaseItemIntentTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "purchase_item".to_string(),
-            description: "Initiates a purchase intent for an item. This triggers the order creation process. Use when a user confirms they want to buy a specific item.".to_string(),
+            description: "发起购买意向，创建订单。当用户确认购买某个商品时使用。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -564,13 +562,13 @@ impl Tool for PurchaseItemIntentTool {
         // Require authentication
         let buyer_id =
             self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("Authentication required. Please login first.".to_string())
+                ToolError("请先登录再进行操作".to_string())
             })?;
 
         // Cannot buy your own listing
         if buyer_id == listing.owner_id {
             return Err(ToolError(
-                "You cannot purchase your own listing.".to_string(),
+                "不能购买自己发布的商品".to_string(),
             ));
         }
 
@@ -581,8 +579,7 @@ impl Tool for PurchaseItemIntentTool {
         let max_price = (listing.suggested_price_cny as f64 * (1.0 + PRICE_TOLERANCE)) as i64;
         if args.offered_price < min_price || args.offered_price > max_price {
             return Err(ToolError(format!(
-                "Offered price {} CNY is outside the acceptable range ({:.2} - {:.2} CNY). \
-                 The seller listed this item at {:.2} CNY.",
+                "出价 ¥{:.2} 不在合理范围内（¥{:.2} - ¥{:.2}）。商品标价 ¥{:.2}。",
                 cents_to_yuan(args.offered_price),
                 cents_to_yuan(min_price),
                 cents_to_yuan(max_price),
@@ -642,7 +639,7 @@ impl Tool for GetMyListingsTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "get_my_listings".to_string(),
-            description: "Retrieves all listings owned by the currently authenticated user. Use when the user wants to see or manage their own items.".to_string(),
+            description: "获取当前用户发布的所有商品列表。当用户想查看或管理自己的商品时使用。".to_string(),
             parameters: json!({
                 "type": "object",
                 "properties": {},
@@ -654,7 +651,7 @@ impl Tool for GetMyListingsTool {
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         let owner_id =
             self.ctx.current_user_id.clone().ok_or_else(|| {
-                ToolError("Authentication required. Please login first.".to_string())
+                ToolError("请先登录再进行操作".to_string())
             })?;
 
         let rows = sqlx::query_as::<_, MyListingRow>(

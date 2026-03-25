@@ -118,7 +118,8 @@ impl ChatService {
                    i.title as listing_title,
                    cm.content as last_message,
                    cm.is_agent as last_message_is_agent,
-                   cm.timestamp as last_timestamp
+                   cm.timestamp as last_timestamp,
+                   CASE WHEN cm.sender = $1 THEN cm.receiver ELSE cm.sender END as other_user_id
             FROM chat_messages cm
             LEFT JOIN inventory i ON cm.listing_id = i.id
             WHERE cm.sender = $1 OR cm.receiver = $1
@@ -132,20 +133,48 @@ impl ChatService {
         .fetch_all(&self.db)
         .await?;
 
+        // Batch-fetch usernames for other participants
+        let other_ids: Vec<String> = rows
+            .iter()
+            .filter_map(|row| row.try_get::<Option<String>, _>("other_user_id").ok().flatten())
+            .collect();
+        let other_usernames: std::collections::HashMap<String, String> = if other_ids.is_empty() {
+            std::collections::HashMap::new()
+        } else {
+            sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
+                .bind(&other_ids)
+                .fetch_all(&self.db)
+                .await
+                .map(|rows| {
+                    rows.into_iter()
+                        .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("username")))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
         let items = rows
             .into_iter()
-            .map(|row| ConversationSummary {
-                conversation_id: row.get("conversation_id"),
-                listing_id: row.get("listing_id"),
-                listing_title: row.try_get("listing_title").ok(),
-                last_message: row.get("last_message"),
-                last_message_is_agent: row.get("last_message_is_agent"),
-                last_timestamp: row
-                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(
-                        "last_timestamp",
-                    )
-                    .map(|dt| dt.to_rfc3339())
-                    .unwrap_or_default(),
+            .map(|row| {
+                let other_user_id: Option<String> = row.try_get("other_user_id").ok().flatten();
+                let other_username = other_user_id
+                    .as_ref()
+                    .and_then(|id| other_usernames.get(id).cloned());
+                ConversationSummary {
+                    conversation_id: row.get("conversation_id"),
+                    listing_id: row.get("listing_id"),
+                    listing_title: row.try_get("listing_title").ok(),
+                    last_message: row.get("last_message"),
+                    last_message_is_agent: row.get("last_message_is_agent"),
+                    last_timestamp: row
+                        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(
+                            "last_timestamp",
+                        )
+                        .map(|dt| dt.to_rfc3339())
+                        .unwrap_or_default(),
+                    other_user_id,
+                    other_username,
+                }
             })
             .collect();
 
@@ -162,6 +191,10 @@ pub struct ConversationSummary {
     pub last_message: String,
     pub last_message_is_agent: bool,
     pub last_timestamp: String,
+    /// User ID of the other participant in this conversation.
+    pub other_user_id: Option<String>,
+    /// Username of the other participant.
+    pub other_username: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -209,6 +242,8 @@ mod unit_tests {
             last_message: "Is this still available?".to_string(),
             last_message_is_agent: false,
             last_timestamp: "2024-01-01T12:00:00Z".to_string(),
+            other_user_id: None,
+            other_username: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("conv-123"));
@@ -226,6 +261,8 @@ mod unit_tests {
             last_message: "Hello!".to_string(),
             last_message_is_agent: true,
             last_timestamp: "2024-01-01T12:00:00Z".to_string(),
+            other_user_id: Some("user-other".to_string()),
+            other_username: Some("other_user".to_string()),
         };
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("conv-789"));
@@ -242,6 +279,8 @@ mod unit_tests {
             last_message: "".to_string(),
             last_message_is_agent: false,
             last_timestamp: "".to_string(),
+            other_user_id: None,
+            other_username: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("conv-empty"));

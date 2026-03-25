@@ -33,6 +33,7 @@ pub struct NotificationItem {
 pub struct NotificationResponse {
     pub items: Vec<NotificationItem>,
     pub total: i64,
+    pub unread_count: i64,
     pub limit: i64,
     pub offset: i64,
 }
@@ -50,6 +51,12 @@ pub async fn get_notifications(
     let limit = query.limit.unwrap_or(20).min(100);
     let offset = query.offset.unwrap_or(0);
     let include_read = query.include_read.unwrap_or(false);
+
+    let unread_count = state
+        .notification
+        .count_unread(&user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let (notifications, total) = if include_read {
         state
@@ -82,6 +89,7 @@ pub async fn get_notifications(
     Ok(Json(NotificationResponse {
         items,
         total,
+        unread_count,
         limit,
         offset,
     }))

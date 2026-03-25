@@ -172,6 +172,17 @@ impl NotificationService {
         .await?;
         Ok(result.rows_affected())
     }
+
+    /// Count unread notifications for a user.
+    pub async fn count_unread(&self, user_id: &str) -> Result<i64> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = $1 AND is_read = FALSE",
+        )
+        .bind(user_id)
+        .fetch_one(&self.db)
+        .await?;
+        Ok(row.try_get("cnt").unwrap_or(0))
+    }
 }
 
 #[cfg(test)]
