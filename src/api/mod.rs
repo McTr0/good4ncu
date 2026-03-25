@@ -8,6 +8,7 @@ use axum::{
     routing::{delete, get, post, put},
     Json, Router,
 };
+use sqlx::Row;
 pub mod auth;
 pub mod conversations;
 pub mod error;
@@ -173,6 +174,10 @@ struct ChatRequest {
     image: Option<String>,
     audio: Option<String>,
     conversation_id: Option<String>,
+    /// Optional listing context — when provided, the buyer is inquiring about
+    /// a specific listing. The conversation is anchored to the listing owner
+    /// as receiver so they immediately see it in their conversation list.
+    listing_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -217,24 +222,61 @@ async fn handle_chat(
     let current_user_id = auth::extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
+    // Resolve listing context: if listing_id is provided, look up the owner to use as
+    // the message receiver. This anchors buyer→seller conversations to a specific listing
+    // so the seller immediately sees the conversation in their list (receiver = seller).
+    let listing_id: String;
+    let receiver: Option<String>;
+    match payload.listing_id {
+        Some(ref lid) if !lid.is_empty() => {
+            let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
+                .bind(lid)
+                .fetch_optional(&state.db)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+            match row {
+                Some(r) => {
+                    let owner_id: String = r.get("owner_id");
+                    let status: String = r.get("status");
+                    if status == "active" && owner_id != current_user_id {
+                        // Pass listing_id for context; owner is stored as receiver so seller
+                        // immediately sees this conversation in their list_conversations.
+                        listing_id = lid.clone();
+                        receiver = Some(owner_id);
+                    } else {
+                        // Inactive listing or buyer is the owner — fall back to global context
+                        listing_id = "global".to_string();
+                        receiver = None;
+                    }
+                }
+                None => {
+                    listing_id = "global".to_string();
+                    receiver = None;
+                }
+            }
+        }
+        _ => {
+            listing_id = "global".to_string();
+            receiver = None;
+        }
+    };
+
     let conversation_id = payload
         .conversation_id
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let listing_id = "global";
-
     let chat_svc = ChatService::new(state.db.clone());
 
     // Log user message BEFORE LLM call — prevents data loss if LLM times out or request is aborted.
-    // receiver is None here because handle_chat has no listing context (listing_id = "global").
-    // The IDOR fix in get_conversation_messages checks sender OR receiver, so messages
-    // without a receiver are only accessible to the sender — which is correct.
+    // When listing_id is provided, receiver is set to the listing owner so the seller
+    // immediately sees the buyer's inquiry in their conversation list.
     let log_user = chat_svc.log_message(
         &conversation_id,
-        listing_id,
+        &listing_id,
         &current_user_id,
-        None,
+        receiver.as_deref(),
         false,
         &payload.message,
         payload.image.as_deref(),
@@ -293,7 +335,7 @@ async fn handle_chat(
     // Agent messages have no receiver (they're broadcast-style from the AI assistant).
     let log_agent = chat_svc.log_message(
         &conversation_id,
-        listing_id,
+        &listing_id,
         "assistant",
         None,
         true,
@@ -339,6 +381,7 @@ mod tests {
         assert_eq!(req.conversation_id, Some("conv-1".to_string()));
         assert_eq!(req.image, None);
         assert_eq!(req.audio, None);
+        assert_eq!(req.listing_id, None);
     }
 
     #[test]
@@ -348,6 +391,15 @@ mod tests {
         assert_eq!(req.message, "Check this");
         assert_eq!(req.image, Some("base64data".to_string()));
         assert_eq!(req.audio, Some("base64audio".to_string()));
+        assert_eq!(req.listing_id, None);
+    }
+
+    #[test]
+    fn test_chat_request_with_listing_context() {
+        let json = r#"{"message": "Is this available?", "listing_id": "listing-123"}"#;
+        let req: ChatRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.message, "Is this available?");
+        assert_eq!(req.listing_id, Some("listing-123".to_string()));
     }
 
     #[test]

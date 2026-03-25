@@ -145,6 +145,30 @@ pub async fn setup_schema(pool: &PgPool) -> Result<()> {
         .await
         .ok();
 
+    // Documents table for pgvector RAG embeddings.
+    // Stores listing content as vectors for semantic search.
+    // The id column is TEXT (matches listing UUID strings from the app).
+    // VECTOR_DIM defaults to 768 to match the default embedding model.
+    sqlx::query(
+        "CREATE TABLE IF NOT EXISTS documents (\
+         id TEXT NOT NULL,\
+         document JSONB NOT NULL,\
+         embedded_text TEXT NOT NULL,\
+         embedding vector(768)\
+         )",
+    )
+    .execute(pool)
+    .await?;
+
+    // HNSW index on embeddings for fast cosine similarity queries.
+    sqlx::query(
+        "CREATE INDEX IF NOT EXISTS document_embeddings_idx \
+         ON documents USING hnsw(embedding vector_cosine_ops)",
+    )
+    .execute(pool)
+    .await
+    .ok();
+
     Ok(())
 }
 
