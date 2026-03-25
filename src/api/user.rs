@@ -94,6 +94,11 @@ pub async fn get_user_listings(
     let limit = params.limit.unwrap_or(20).min(100);
     let offset = params.offset.unwrap_or(0).max(0);
     let status_filter = params.status.as_deref().unwrap_or("active");
+    if !["active", "sold", "deleted", "all"].contains(&status_filter) {
+        return Err(ApiError::BadRequest(
+            "无效的 status 参数，可选值：active, sold, deleted, all".to_string(),
+        ));
+    }
 
     let (count_sql, items_sql) = match status_filter {
         "all" => (
@@ -107,48 +112,40 @@ pub async fn get_user_listings(
                 LIMIT $2 OFFSET $3
             "#,
         ),
-        "sold" | "deleted" => {
-            let f = status_filter;
-            if f == "sold" {
-                (
-                    "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'sold'",
-                    r#"
-                        SELECT id, title, category, brand, condition_score,
-                               suggested_price_cny, description, status
-                        FROM inventory
-                        WHERE owner_id = $1 AND status = 'sold'
-                        ORDER BY created_at DESC
-                        LIMIT $2 OFFSET $3
-                    "#,
-                )
-            } else {
-                (
-                    "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'deleted'",
-                    r#"
-                        SELECT id, title, category, brand, condition_score,
-                               suggested_price_cny, description, status
-                        FROM inventory
-                        WHERE owner_id = $1 AND status = 'deleted'
-                        ORDER BY created_at DESC
-                        LIMIT $2 OFFSET $3
-                    "#,
-                )
-            }
-        }
-        _ => {
-            // "active" (default)
-            (
-                "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'active'",
-                r#"
-                    SELECT id, title, category, brand, condition_score,
-                           suggested_price_cny, description, status
-                    FROM inventory
-                    WHERE owner_id = $1 AND status = 'active'
-                    ORDER BY created_at DESC
-                    LIMIT $2 OFFSET $3
-                "#,
-            )
-        }
+        "active" => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'active'",
+            r#"
+                SELECT id, title, category, brand, condition_score,
+                       suggested_price_cny, description, status
+                FROM inventory
+                WHERE owner_id = $1 AND status = 'active'
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+            "#,
+        ),
+        "sold" => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'sold'",
+            r#"
+                SELECT id, title, category, brand, condition_score,
+                       suggested_price_cny, description, status
+                FROM inventory
+                WHERE owner_id = $1 AND status = 'sold'
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+            "#,
+        ),
+        "deleted" => (
+            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'deleted'",
+            r#"
+                SELECT id, title, category, brand, condition_score,
+                       suggested_price_cny, description, status
+                FROM inventory
+                WHERE owner_id = $1 AND status = 'deleted'
+                ORDER BY created_at DESC
+                LIMIT $2 OFFSET $3
+            "#,
+        ),
+        _ => unreachable!(),
     };
 
     let count_row = sqlx::query(count_sql)
@@ -215,6 +212,15 @@ pub async fn search_users(
 ) -> Result<Json<UserSearchResponse>, ApiError> {
     let limit = params.limit.unwrap_or(20).min(50);
     let offset = params.offset.unwrap_or(0).max(0);
+
+    // Reject oversized search patterns before they can trigger slow ILIKE scans on large tables.
+    if let Some(ref q) = params.q {
+        if q.len() > 50 {
+            return Err(ApiError::BadRequest(
+                "搜索关键词不能超过50个字符".to_string(),
+            ));
+        }
+    }
 
     let (count_row, rows) = if let Some(ref q) = params.q {
         let pattern = format!("%{}%", q);

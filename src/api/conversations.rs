@@ -41,6 +41,7 @@ pub struct ConversationMessagesResponse {
 #[derive(Serialize)]
 pub struct MessageEntry {
     pub sender: String,
+    pub sender_username: Option<String>,
     pub content: String,
     pub is_agent: bool,
     pub timestamp: String,
@@ -131,15 +132,43 @@ pub async fn get_conversation_messages(
             .try_get("cnt")
             .unwrap_or(0);
 
-    let messages: Vec<MessageEntry> = rows
+    // Collect unique sender IDs for batch username lookup (skip "assistant" sentinel)
+    let sender_ids: Vec<String> = rows
         .iter()
+        .filter_map(|row| {
+            let sender: String = row.get("sender");
+            if sender == "assistant" { None } else { Some(sender) }
+        })
+        .collect();
+    let sender_usernames: std::collections::HashMap<String, String> = if sender_ids.is_empty() {
+        std::collections::HashMap::new()
+    } else {
+        sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
+            .bind(&sender_ids)
+            .fetch_all(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+            .into_iter()
+            .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("username")))
+            .collect()
+    };
+
+    let messages: Vec<MessageEntry> = rows
+        .into_iter()
         .map(|row| {
+            let sender: String = row.get("sender");
             let timestamp: String = row
                 .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("timestamp")
                 .map(|dt| dt.to_rfc3339())
                 .unwrap_or_default();
+            let sender_username = if sender == "assistant" {
+                None
+            } else {
+                sender_usernames.get(&sender).cloned()
+            };
             MessageEntry {
-                sender: row.get("sender"),
+                sender,
+                sender_username,
                 content: row.get("content"),
                 is_agent: row.get("is_agent"),
                 timestamp,
@@ -194,6 +223,7 @@ mod tests {
     fn test_message_entry_serialization() {
         let entry = MessageEntry {
             sender: "user-123".to_string(),
+            sender_username: Some("alice".to_string()),
             content: "Hello!".to_string(),
             is_agent: false,
             timestamp: "2024-01-01T00:00:00Z".to_string(),
@@ -205,6 +235,7 @@ mod tests {
         assert!(json.contains("Hello!"));
         assert!(json.contains("\"is_agent\":false"));
         assert!(json.contains("base64img"));
+        assert!(json.contains("alice"));
     }
 
     #[test]

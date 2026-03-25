@@ -167,6 +167,11 @@ pub async fn get_listings(
 
     // Full-text search
     if let Some(ref srch) = params.search {
+        if srch.len() > 200 {
+            return Err(ApiError::BadRequest(
+                "搜索关键词不能超过200个字符".to_string(),
+            ));
+        }
         if !srch.is_empty() {
             conds.push(format!(
                 "(title ILIKE ${} OR brand ILIKE ${} OR description ILIKE ${})",
