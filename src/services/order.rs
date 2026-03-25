@@ -22,6 +22,28 @@ impl OrderService {
         let order_id = Uuid::new_v4().to_string();
         tracing::info!(order_id, listing_id, buyer_id, seller_id, "Creating order");
 
+        // Atomically reserve this listing: only one buyer can win.
+        // The UPDATE returns the row only if status was 'active' — if another
+        // concurrent purchase already set it to 'sold', rows_affected = 0
+        // and we return an error instead of creating a duplicate order.
+        let result = sqlx::query(
+            r#"UPDATE inventory
+               SET status = 'sold'
+               WHERE id = $1 AND status = 'active'
+               RETURNING id"#,
+        )
+        .bind(listing_id)
+        .fetch_optional(&self.db)
+        .await?;
+
+        if result.is_none() {
+            // Either the listing doesn't exist or another buyer got there first
+            return Err(anyhow::anyhow!(
+                "商品已售出或不存在（listing_id: {}）",
+                listing_id
+            ));
+        }
+
         sqlx::query(
             "INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status) VALUES ($1, $2, $3, $4, $5, $6)",
         )

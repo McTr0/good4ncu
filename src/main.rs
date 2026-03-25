@@ -86,5 +86,10 @@ async fn main() -> Result<(), anyhow::Error> {
     server_handle.abort();
     event_loop_handle.abort();
 
+    // Gracefully close the DB pool so Postgres can cleanly收回所有连接
+    // and flush any pending transaction results in the buffer.
+    db_pool.close().await;
+
+    tracing::info!("Shutdown complete.");
     Ok(())
 }

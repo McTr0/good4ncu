@@ -88,6 +88,9 @@ impl ServiceManager {
                                 return;
                             }
                         };
+                        // Note: create_order already does UPDATE inventory SET status='sold'
+                        // atomically (within its transaction), so mark_as_sold below is
+                        // idempotent and will be a no-op for the winning buyer.
                         if let Err(e) = product_svc.mark_as_sold(&listing_id).await {
                             tracing::error!(%e, listing_id, "Failed to mark listing as sold");
                         }

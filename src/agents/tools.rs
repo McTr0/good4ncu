@@ -538,9 +538,11 @@ impl Tool for PurchaseItemIntentTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Verify the listing exists and is active
+        // Verify the listing exists and is active — use FOR UPDATE to lock this row
+        // and prevent a TOCTOU race where two concurrent purchases both see
+        // status='active' and both emit DealReached events.
         let listing = sqlx::query_as::<_, ListingCheckRow>(
-            "SELECT id, owner_id, suggested_price_cny, status FROM inventory WHERE id = $1",
+            "SELECT id, owner_id, suggested_price_cny, status FROM inventory WHERE id = $1 FOR UPDATE",
         )
         .bind(&args.listing_id)
         .fetch_optional(&self.ctx.db_pool)

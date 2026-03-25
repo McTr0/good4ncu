@@ -28,7 +28,6 @@ use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::sync::mpsc;
-use tokio::time::{timeout, Duration};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
@@ -397,14 +396,16 @@ async fn handle_chat(
         image_data: payload.image,
         audio_data: payload.audio,
     };
-    if timeout(
-        Duration::from_secs(5),
-        state.event_tx.send(chat_event),
-    )
-    .await
-    .is_err()
-    {
-        tracing::error!("Event bus unresponsive for 5s, dropping ChatMessage event");
+    // Send event with backpressure: block until the event is received or the channel
+    // is closed. This is preferred over try_send/timeout because ChatMessage must
+    // be persisted — dropping it silently would cause the user to see their message
+    // disappear with no reply and no error feedback.
+    if let Err(e) = state.event_tx.send(chat_event).await {
+        tracing::error!(%e, "Event bus closed, ChatMessage not delivered");
+        return Err(ApiError::Internal(anyhow::anyhow!(
+            "服务暂时不可用，请稍后重试: {}",
+            e
+        )));
     }
 
     Ok(Json(ChatResponse {
