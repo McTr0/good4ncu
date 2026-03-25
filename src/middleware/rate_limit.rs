@@ -54,8 +54,15 @@ impl RateLimitState {
     fn hash_ip(&self, ip: &str) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
+        use std::net::SocketAddr;
+        // Parse as SocketAddr to reliably extract IP portion regardless of format.
+        // This prevents bypass via source-port rotation on the same IP address.
+        let ip_only = ip
+            .parse::<SocketAddr>()
+            .map(|addr| addr.ip().to_string())
+            .unwrap_or_else(|_| ip.to_string());
         let mut hasher = DefaultHasher::new();
-        ip.hash(&mut hasher);
+        ip_only.hash(&mut hasher);
         hasher.finish()
     }
 }
