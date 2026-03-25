@@ -122,3 +122,95 @@ impl ServiceManager {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_business_event_deal_reached_serialization() {
+        let event = BusinessEvent::DealReached {
+            listing_id: "listing-123".to_string(),
+            buyer_id: "buyer-456".to_string(),
+            seller_id: "seller-789".to_string(),
+            final_price: 4999,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("DealReached"));
+        assert!(json.contains("listing-123"));
+        assert!(json.contains("buyer-456"));
+        assert!(json.contains("seller-789"));
+        assert!(json.contains("4999"));
+    }
+
+    #[test]
+    fn test_business_event_order_paid_serialization() {
+        let event = BusinessEvent::OrderPaid {
+            order_id: "order-abc".to_string(),
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("OrderPaid"));
+        assert!(json.contains("order-abc"));
+    }
+
+    #[test]
+    fn test_business_event_chat_message_serialization() {
+        let event = BusinessEvent::ChatMessage {
+            conversation_id: "conv-1".to_string(),
+            listing_id: "listing-1".to_string(),
+            sender: "user-1".to_string(),
+            content: "Hello!".to_string(),
+            image_data: Some("base64image".to_string()),
+            audio_data: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("ChatMessage"));
+        assert!(json.contains("conv-1"));
+        assert!(json.contains("Hello!"));
+        assert!(json.contains("base64image"));
+    }
+
+    #[test]
+    fn test_business_event_chat_message_without_optional() {
+        let event = BusinessEvent::ChatMessage {
+            conversation_id: "conv-2".to_string(),
+            listing_id: "listing-2".to_string(),
+            sender: "user-2".to_string(),
+            content: "Hi".to_string(),
+            image_data: None,
+            audio_data: None,
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("ChatMessage"));
+        assert!(json.contains("conv-2"));
+    }
+
+    #[test]
+    fn test_business_event_deserialization() {
+        let json = r#"{
+            "DealReached": {
+                "listing_id": "listing-x",
+                "buyer_id": "buyer-y",
+                "seller_id": "seller-z",
+                "final_price": 2999
+            }
+        }"#;
+        let event: BusinessEvent = serde_json::from_str(json).unwrap();
+        match event {
+            BusinessEvent::DealReached { listing_id, buyer_id, seller_id, final_price } => {
+                assert_eq!(listing_id, "listing-x");
+                assert_eq!(buyer_id, "buyer-y");
+                assert_eq!(seller_id, "seller-z");
+                assert_eq!(final_price, 2999);
+            }
+            _ => panic!("Expected DealReached variant"),
+        }
+    }
+
+    #[test]
+    fn test_event_bus_capacity_constant() {
+        // Verify the constant is a reasonable size for backpressure
+        assert!(EVENT_BUS_CAPACITY >= 100);
+        assert!(EVENT_BUS_CAPACITY <= 100_000);
+    }
+}

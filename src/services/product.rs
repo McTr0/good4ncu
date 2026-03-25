@@ -30,6 +30,22 @@ impl ProductService {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Unit tests (no DB required)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn test_product_service_clone() {
+        // ProductService is Clone, verify it compiles
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<ProductService>();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

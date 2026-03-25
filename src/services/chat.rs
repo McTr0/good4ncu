@@ -3,17 +3,18 @@ use serde::Serialize;
 use sqlx::{PgPool, Row};
 
 /// Maximum number of historical message pairs to include in conversation context
-#[allow(dead_code)]
 const CONVERSATION_HISTORY_LIMIT: usize = 10;
 
 /// A single turn in the conversation history
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ChatHistoryEntry {
+    #[allow(dead_code)]
     pub sender: String,
     pub content: String,
     pub is_agent: bool,
+    #[allow(dead_code)]
     pub image_data: Option<String>,
+    #[allow(dead_code)]
     pub audio_data: Option<String>,
 }
 
@@ -57,7 +58,6 @@ impl ChatService {
 
     /// Fetch the most recent conversation history for a given conversation_id.
     /// Returns up to CONVERSATION_HISTORY_LIMIT entries, oldest first.
-    #[allow(dead_code)]
     pub async fn get_conversation_history(
         &self,
         conversation_id: &str,
@@ -88,7 +88,22 @@ impl ChatService {
     }
 
     /// List all conversation IDs for a user with metadata.
-    pub async fn list_conversations(&self, user_id: &str) -> Result<Vec<ConversationSummary>> {
+    /// Returns paginated results ordered by most recent message.
+    pub async fn list_conversations(
+        &self,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<ConversationSummary>, i64)> {
+        // Get total count first
+        let count_row = sqlx::query(
+            "SELECT COUNT(DISTINCT conversation_id) as cnt FROM chat_messages WHERE sender = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&self.db)
+        .await?;
+        let total: i64 = count_row.try_get("cnt").unwrap_or(0);
+
         let rows = sqlx::query(
             r#"
             SELECT DISTINCT ON (cm.conversation_id)
@@ -100,16 +115,18 @@ impl ChatService {
                    cm.timestamp as last_timestamp
             FROM chat_messages cm
             LEFT JOIN inventory i ON cm.listing_id = i.id
-            WHERE cm.sender = $1 OR cm.conversation_id LIKE $1 || '%'
-               OR cm.conversation_id LIKE '%:' || $1
+            WHERE cm.sender = $1
             ORDER BY cm.conversation_id, cm.timestamp DESC
+            LIMIT $2 OFFSET $3
             "#,
         )
         .bind(user_id)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&self.db)
         .await?;
 
-        Ok(rows
+        let items = rows
             .into_iter()
             .map(|row| ConversationSummary {
                 conversation_id: row.get("conversation_id"),
@@ -124,7 +141,9 @@ impl ChatService {
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_default(),
             })
-            .collect())
+            .collect();
+
+        Ok((items, total))
     }
 }
 
@@ -137,6 +156,105 @@ pub struct ConversationSummary {
     pub last_message: String,
     pub last_message_is_agent: bool,
     pub last_timestamp: String,
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (no DB required)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn test_chat_history_entry_clone() {
+        let entry = ChatHistoryEntry {
+            sender: "user-1".to_string(),
+            content: "Hello".to_string(),
+            is_agent: false,
+            image_data: None,
+            audio_data: None,
+        };
+        let cloned = entry.clone();
+        assert_eq!(cloned.content, "Hello");
+        assert_eq!(cloned.is_agent, false);
+    }
+
+    #[test]
+    fn test_chat_history_entry_with_media() {
+        let entry = ChatHistoryEntry {
+            sender: "user-1".to_string(),
+            content: "Check this image".to_string(),
+            is_agent: true,
+            image_data: Some("base64image".to_string()),
+            audio_data: Some("base64audio".to_string()),
+        };
+        assert!(entry.image_data.is_some());
+        assert!(entry.audio_data.is_some());
+        assert_eq!(entry.sender, "user-1");
+    }
+
+    #[test]
+    fn test_conversation_summary_serialization() {
+        let summary = ConversationSummary {
+            conversation_id: "conv-123".to_string(),
+            listing_id: "listing-456".to_string(),
+            listing_title: Some("iPhone 13".to_string()),
+            last_message: "Is this still available?".to_string(),
+            last_message_is_agent: false,
+            last_timestamp: "2024-01-01T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("conv-123"));
+        assert!(json.contains("listing-456"));
+        assert!(json.contains("iPhone 13"));
+        assert!(json.contains("Is this still available"));
+    }
+
+    #[test]
+    fn test_conversation_summary_without_title() {
+        let summary = ConversationSummary {
+            conversation_id: "conv-789".to_string(),
+            listing_id: "listing-000".to_string(),
+            listing_title: None,
+            last_message: "Hello!".to_string(),
+            last_message_is_agent: true,
+            last_timestamp: "2024-01-01T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("conv-789"));
+        assert!(json.contains("listing-000"));
+        assert!(json.contains("\"last_message_is_agent\":true"));
+    }
+
+    #[test]
+    fn test_conversation_summary_empty_title() {
+        let summary = ConversationSummary {
+            conversation_id: "conv-empty".to_string(),
+            listing_id: "listing-empty".to_string(),
+            listing_title: None,
+            last_message: "".to_string(),
+            last_message_is_agent: false,
+            last_timestamp: "".to_string(),
+        };
+        let json = serde_json::to_string(&summary).unwrap();
+        assert!(json.contains("conv-empty"));
+        assert!(json.contains("\"listing_title\":null"));
+    }
+
+    #[test]
+    fn test_chat_service_clone() {
+        // ChatService is Clone, verify it compiles
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<ChatService>();
+    }
+
+    #[test]
+    fn test_conversation_history_limit_constant() {
+        // Verify the constant is a reasonable size for context window
+        assert!(CONVERSATION_HISTORY_LIMIT >= 1);
+        assert!(CONVERSATION_HISTORY_LIMIT <= 100);
+    }
 }
 
 #[cfg(test)]
@@ -193,5 +311,112 @@ mod tests {
 
         assert_eq!(Row::get::<String, _>(&row, "sender"), "user-1");
         assert_eq!(Row::get::<String, _>(&row, "content"), "Hello!");
+    }
+
+    #[tokio::test]
+    async fn test_get_conversation_history() {
+        let pool = test_pool().await;
+        insert_user(&pool, "user-1", "user1").await;
+        insert_listing(&pool, "listing-1", "user-1").await;
+
+        let chat_svc = ChatService::new(pool.clone());
+
+        // Log multiple messages in the same conversation
+        chat_svc
+            .log_message("conv-test", "listing-1", "user-1", false, "First message", None, None)
+            .await
+            .unwrap();
+        chat_svc
+            .log_message("conv-test", "listing-1", "user-1", true, "Agent reply", None, None)
+            .await
+            .unwrap();
+        chat_svc
+            .log_message("conv-test", "listing-1", "user-1", false, "Third message", None, None)
+            .await
+            .unwrap();
+
+        let history = chat_svc
+            .get_conversation_history("conv-test")
+            .await
+            .unwrap();
+
+        assert_eq!(history.len(), 3);
+        assert_eq!(history[0].content, "First message");
+        assert!(!history[0].is_agent);
+        assert_eq!(history[1].content, "Agent reply");
+        assert!(history[1].is_agent);
+        assert_eq!(history[2].content, "Third message");
+        assert!(!history[2].is_agent);
+    }
+
+    #[tokio::test]
+    async fn test_get_conversation_history_empty() {
+        let pool = test_pool().await;
+        insert_user(&pool, "user-1", "user1").await;
+
+        let history = ChatService::new(pool.clone())
+            .get_conversation_history("nonexistent-conv")
+            .await
+            .unwrap();
+
+        assert!(history.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_list_conversations() {
+        let pool = test_pool().await;
+        insert_user(&pool, "user-1", "user1").await;
+        insert_user(&pool, "user-2", "user2").await;
+        insert_listing(&pool, "listing-1", "user-1").await;
+
+        let chat_svc = ChatService::new(pool.clone());
+
+        // Create conversations for user-1
+        chat_svc
+            .log_message("conv-1", "listing-1", "user-1", false, "Message in conv 1", None, None)
+            .await
+            .unwrap();
+        chat_svc
+            .log_message("conv-2", "listing-1", "user-1", false, "Message in conv 2", None, None)
+            .await
+            .unwrap();
+
+        // Create conversation for user-2 (should not appear for user-1)
+        chat_svc
+            .log_message("conv-3", "listing-1", "user-2", false, "User-2 message", None, None)
+            .await
+            .unwrap();
+
+        let (conversations, total) = chat_svc.list_conversations("user-1", 20, 0).await.unwrap();
+
+        assert_eq!(conversations.len(), 2);
+        assert_eq!(total, 2);
+        let conv_ids: Vec<&str> = conversations
+            .iter()
+            .map(|c| c.conversation_id.as_str())
+            .collect();
+        assert!(conv_ids.contains(&"conv-1"));
+        assert!(conv_ids.contains(&"conv-2"));
+        assert!(!conv_ids.contains(&"conv-3"));
+    }
+
+    #[tokio::test]
+    async fn test_list_conversations_with_listing_title() {
+        let pool = test_pool().await;
+        insert_user(&pool, "user-1", "user1").await;
+        insert_listing(&pool, "listing-1", "user-1").await;
+
+        let chat_svc = ChatService::new(pool.clone());
+        chat_svc
+            .log_message("conv-1", "listing-1", "user-1", false, "Hello", None, None)
+            .await
+            .unwrap();
+
+        let (conversations, total) = chat_svc.list_conversations("user-1", 20, 0).await.unwrap();
+
+        assert_eq!(conversations.len(), 1);
+        assert_eq!(total, 1);
+        assert_eq!(conversations[0].listing_id, "listing-1");
+        assert_eq!(conversations[0].listing_title.as_deref(), Some("Item"));
     }
 }

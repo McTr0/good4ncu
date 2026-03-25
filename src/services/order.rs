@@ -46,6 +46,52 @@ impl OrderService {
             .await?;
         Ok(())
     }
+
+    /// Atomically transition order status from expected_current to new_status.
+    /// Returns Ok(true) if transition happened, Ok(false) if order was not in expected state.
+    #[allow(dead_code)]
+    pub async fn transition_order_status(
+        &self,
+        order_id: &str,
+        expected_current: &str,
+        new_status: &str,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "UPDATE orders SET status = $1 WHERE id = $2 AND status = $3 RETURNING id"
+        )
+        .bind(new_status)
+        .bind(order_id)
+        .bind(expected_current)
+        .fetch_optional(&self.db)
+        .await?;
+
+        match result {
+            Some(_) => {
+                tracing::info!(order_id, expected_current, new_status, "Order status transitioned");
+                Ok(true)
+            }
+            None => {
+                tracing::warn!(order_id, expected_current, new_status, "Order status transition failed - not in expected state");
+                Ok(false)
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests (no DB required)
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod unit_tests {
+    use super::*;
+
+    #[test]
+    fn test_order_service_clone() {
+        // OrderService is Clone, verify it compiles
+        fn assert_clone<T: Clone>() {}
+        assert_clone::<OrderService>();
+    }
 }
 
 #[cfg(test)]
