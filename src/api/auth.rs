@@ -61,27 +61,27 @@ pub async fn register(
     // Reject oversized inputs before they can trigger CPU-intensive hashing or bloat storage.
     if payload.username.is_empty() {
         return Err(ApiError::BadRequest(
-            "Username cannot be empty.".to_string(),
+            "用户名不能为空".to_string(),
         ));
     }
     if payload.username.len() > 50 {
         return Err(ApiError::BadRequest(
-            "Username must be 50 characters or fewer.".to_string(),
+            "用户名不能超过50个字符".to_string(),
         ));
     }
     if payload.password.is_empty() {
         return Err(ApiError::BadRequest(
-            "Password cannot be empty.".to_string(),
+            "密码不能为空".to_string(),
         ));
     }
     if payload.password.len() > 128 {
         return Err(ApiError::BadRequest(
-            "Password must be 128 characters or fewer.".to_string(),
+            "密码不能超过128个字符".to_string(),
         ));
     }
     if payload.password.len() < 8 {
         return Err(ApiError::BadRequest(
-            "Password must be at least 8 characters.".to_string(),
+            "密码至少需要8个字符".to_string(),
         ));
     }
 
@@ -128,7 +128,7 @@ pub async fn register(
             Ok(Json(AuthResponse {
                 token,
                 user_id,
-                message: "Registration successful".to_string(),
+                message: "注册成功".to_string(),
             }))
         }
         Err(e) => {
@@ -137,7 +137,7 @@ pub async fn register(
             if let sqlx::Error::Database(db_err) = &e {
                 if db_err.code().as_deref() == Some("23505") {
                     return Err(ApiError::Conflict(
-                        "Username already exists. Please choose a different one.".to_string(),
+                        "用户名已被使用，请换一个".to_string(),
                     ));
                 }
             }
@@ -204,7 +204,7 @@ pub async fn login(
             Ok(Json(AuthResponse {
                 token,
                 user_id,
-                message: "Login successful".to_string(),
+                message: "登录成功".to_string(),
             }))
         }
         Ok(false) => {
@@ -236,22 +236,22 @@ pub async fn change_password(
 
     if payload.current_password.is_empty() {
         return Err(ApiError::BadRequest(
-            "Current password cannot be empty.".to_string(),
+            "当前密码不能为空".to_string(),
         ));
     }
     if payload.new_password.is_empty() {
         return Err(ApiError::BadRequest(
-            "New password cannot be empty.".to_string(),
+            "新密码不能为空".to_string(),
         ));
     }
     if payload.new_password.len() < 8 {
         return Err(ApiError::BadRequest(
-            "New password must be at least 8 characters".to_string(),
+            "新密码至少需要8个字符".to_string(),
         ));
     }
     if payload.new_password.len() > 128 {
         return Err(ApiError::BadRequest(
-            "New password must be 128 characters or fewer".to_string(),
+            "新密码不能超过128个字符".to_string(),
         ));
     }
 
@@ -279,7 +279,7 @@ pub async fn change_password(
         Ok(true) => {}
         Ok(false) => {
             return Err(ApiError::BadRequest(
-                "Current password is incorrect".to_string(),
+                "当前密码错误".to_string(),
             ));
         }
         Err(e) => {
@@ -308,7 +308,7 @@ pub async fn change_password(
     tracing::info!(user_id = %user_id, "Password changed successfully");
 
     Ok(Json(serde_json::json!({
-        "message": "Password changed successfully"
+        "message": "密码修改成功"
     })))
 }
 
@@ -388,12 +388,12 @@ mod tests {
         let resp = AuthResponse {
             token: "jwt.token.here".to_string(),
             user_id: "user-abc".to_string(),
-            message: "Login successful".to_string(),
+            message: "登录成功".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("jwt.token.here"));
         assert!(json.contains("user-abc"));
-        assert!(json.contains("Login successful"));
+        assert!(json.contains("登录成功"));
     }
 
     #[test]

@@ -378,7 +378,7 @@ pub async fn create_listing(
 
     Ok(Json(CreateListingResponse {
         id: listing_id,
-        message: "Listing created successfully".to_string(),
+        message: "商品发布成功".to_string(),
     }))
 }
 
@@ -409,7 +409,7 @@ pub async fn update_listing(
 
     if status == "sold" {
         return Err(ApiError::BadRequest(
-            "Cannot update a sold listing".to_string(),
+            "无法修改已售出的商品".to_string(),
         ));
     }
 
@@ -494,7 +494,7 @@ pub async fn update_listing(
     }
 
     if set_clauses.is_empty() {
-        return Err(ApiError::BadRequest("No fields to update".to_string()));
+        return Err(ApiError::BadRequest("没有要更新的字段".to_string()));
     }
 
     let sql = format!(
@@ -517,7 +517,7 @@ pub async fn update_listing(
     tracing::info!(listing_id = %id, updated_by = %user_id, "Listing updated");
 
     Ok(Json(serde_json::json!({
-        "message": "Listing updated successfully",
+        "message": "商品更新成功",
         "id": id
     })))
 }
@@ -548,7 +548,7 @@ pub async fn delete_listing(
 
     if status == "sold" {
         return Err(ApiError::BadRequest(
-            "Cannot delete a sold listing".to_string(),
+            "无法删除已售出的商品".to_string(),
         ));
     }
 
@@ -562,7 +562,7 @@ pub async fn delete_listing(
     tracing::info!(listing_id = %id, deleted_by = %user_id, "Listing deleted");
 
     Ok(Json(serde_json::json!({
-        "message": "Listing deleted successfully",
+        "message": "商品已删除",
         "id": id
     })))
 }
@@ -593,13 +593,13 @@ pub async fn relist_listing(
 
     if status == "active" {
         return Err(ApiError::BadRequest(
-            "Listing is already active.".to_string(),
+            "商品已经是上架状态，无需重复操作".to_string(),
         ));
     }
 
     if status != "sold" && status != "deleted" {
         return Err(ApiError::BadRequest(format!(
-            "Cannot relist a listing with status '{}'. Only sold or deleted listings can be relisted.",
+            "无法重新上架，当前状态为'{}'，只能重新上架已售出或已删除的商品",
             status
         )));
     }
@@ -614,7 +614,7 @@ pub async fn relist_listing(
     tracing::info!(listing_id = %id, relisted_by = %user_id, previous_status = %status, "Listing relisted");
 
     Ok(Json(serde_json::json!({
-        "message": "Listing relisted successfully",
+        "message": "商品已重新上架",
         "id": id,
         "status": "active"
     })))
@@ -848,11 +848,11 @@ mod tests {
     fn test_create_listing_response_serialization() {
         let resp = CreateListingResponse {
             id: "listing-123".to_string(),
-            message: "Listing created successfully".to_string(),
+            message: "商品发布成功".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("listing-123"));
-        assert!(json.contains("created successfully"));
+        assert!(json.contains("商品发布成功"));
     }
 
     #[test]

@@ -140,7 +140,7 @@ pub async fn add_to_watchlist(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     Ok(Json(serde_json::json!({
-        "message": "Added to watchlist",
+        "message": "已添加到关注列表",
         "listing_id": listing_id
     })))
 }
@@ -162,7 +162,7 @@ pub async fn remove_from_watchlist(
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     Ok(Json(serde_json::json!({
-        "message": "Removed from watchlist",
+        "message": "已从关注列表移除",
         "listing_id": listing_id
     })))
 }

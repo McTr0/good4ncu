@@ -275,7 +275,7 @@ pub async fn cancel_order(
 
     if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
-            "Cannot cancel order with status '{}'",
+            "无法取消订单，当前状态为'{}'",
             status
         )));
     }
@@ -295,7 +295,7 @@ pub async fn cancel_order(
     );
 
     Ok(Json(serde_json::json!({
-        "message": "Order cancelled successfully",
+        "message": "订单已取消",
         "order_id": order_id
     })))
 }
@@ -338,7 +338,7 @@ pub async fn confirm_order(
 
     if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
-            "Cannot confirm order with status '{}'. Order must be shipped by seller first.",
+            "无法确认收货，当前状态为'{}'，请等待卖家发货",
             status
         )));
     }
@@ -346,7 +346,7 @@ pub async fn confirm_order(
     tracing::info!(order_id = %order_id, confirmed_by = %user_id, "Order confirmed");
 
     Ok(Json(serde_json::json!({
-        "message": "Order confirmed successfully",
+        "message": "已确认收货",
         "order_id": order_id
     })))
 }
@@ -386,7 +386,7 @@ pub async fn pay_order(
 
     if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
-            "Cannot pay order with status '{}'. Order must be pending.",
+            "无法支付订单，当前状态为'{}'，订单必须处于待支付状态",
             status
         )));
     }
@@ -394,7 +394,7 @@ pub async fn pay_order(
     tracing::info!(order_id = %order_id, paid_by = %user_id, "Order paid");
 
     Ok(Json(serde_json::json!({
-        "message": "Payment initiated successfully",
+        "message": "支付成功",
         "order_id": order_id
     })))
 }
@@ -435,7 +435,7 @@ pub async fn ship_order(
 
     if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
-            "Cannot ship order with status '{}'. Order must be paid first.",
+            "无法标记发货，当前状态为'{}'，必须先等待买家支付",
             status
         )));
     }
@@ -450,7 +450,7 @@ pub async fn ship_order(
     tracing::info!(order_id = %order_id, shipped_by = %user_id, "Order shipped");
 
     Ok(Json(serde_json::json!({
-        "message": "Order marked as shipped",
+        "message": "已标记发货",
         "order_id": order_id
     })))
 }
@@ -492,7 +492,7 @@ pub async fn create_order(
 
     if owner_id == buyer_id {
         return Err(ApiError::BadRequest(
-            "You cannot purchase your own listing.".to_string(),
+            "不能购买自己发布的商品".to_string(),
         ));
     }
 
@@ -557,7 +557,7 @@ pub async fn create_order(
     );
 
     Ok(Json(serde_json::json!({
-        "message": "Order created successfully",
+        "message": "订单创建成功",
         "order_id": order_id,
         "listing_id": payload.listing_id,
         "price_cny": payload.offered_price_cny,
