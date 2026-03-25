@@ -49,7 +49,8 @@ pub struct ListingSummary {
     pub condition_score: i32,
     pub suggested_price_cny: f64,
     pub status: String,
-    pub thumbnail_hint: Option<String>,
+    /// First defect description, useful as a quick condition hint for buyers.
+    pub defect_hint: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -226,7 +227,7 @@ pub async fn get_listings(
         .map(|row| {
             let defects_text: String = row.get("defects");
             let defects = parse_defects(&defects_text);
-            let thumbnail_hint = defects.first().cloned();
+            let defect_hint = defects.first().cloned();
             ListingSummary {
                 id: row.get("id"),
                 title: row.get("title"),
@@ -236,7 +237,7 @@ pub async fn get_listings(
                 // stored as integer cents, display as yuan
                 suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
                 status: row.get("status"),
-                thumbnail_hint,
+                defect_hint,
             }
         })
         .collect();
@@ -864,17 +865,19 @@ mod tests {
             condition_score: 9,
             suggested_price_cny: 12999.0,
             status: "active".to_string(),
-            thumbnail_hint: Some("https://example.com/img.jpg".to_string()),
+            defect_hint: Some("屏幕有轻微划痕".to_string()),
         };
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("MacBook Pro"));
         assert!(json.contains("Apple"));
         assert!(json.contains("\"status\":\"active\""));
         assert!(json.contains("12999"));
+        assert!(json.contains("defect_hint"));
+        assert!(json.contains("屏幕有轻微划痕"));
     }
 
     #[test]
-    fn test_listing_summary_without_thumbnail() {
+    fn test_listing_summary_without_defect_hint() {
         let summary = ListingSummary {
             id: "listing-789".to_string(),
             title: "Book".to_string(),
@@ -883,11 +886,11 @@ mod tests {
             condition_score: 5,
             suggested_price_cny: 99.0,
             status: "active".to_string(),
-            thumbnail_hint: None,
+            defect_hint: None,
         };
         let json = serde_json::to_string(&summary).unwrap();
         assert!(json.contains("Book"));
-        assert!(json.contains("\"thumbnail_hint\":null"));
+        assert!(json.contains("\"defect_hint\":null"));
     }
 
     #[test]

@@ -6,52 +6,52 @@ use serde_json::json;
 #[derive(Debug, thiserror::Error)]
 #[allow(dead_code)]
 pub enum ApiError {
-    #[error("not found")]
+    #[error("资源不存在")]
     NotFound,
 
-    #[error("bad request: {0}")]
+    #[error("请求错误: {0}")]
     BadRequest(String),
 
-    #[error("unauthorized")]
+    #[error("未授权")]
     Unauthorized,
 
-    #[error("forbidden")]
+    #[error("无权限访问")]
     Forbidden,
 
-    #[error("conflict: {0}")]
+    #[error("冲突: {0}")]
     Conflict(String),
 
-    #[error("rate limit exceeded")]
+    #[error("请求过于频繁，请稍后再试")]
     RateLimitExceeded,
 
-    #[error("internal error")]
+    #[error("服务器内部错误")]
     Internal(#[from] anyhow::Error),
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {
-            ApiError::NotFound => (StatusCode::NOT_FOUND, self.to_string()),
-            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, m.clone()),
+            ApiError::NotFound => (StatusCode::NOT_FOUND, "资源不存在".to_string()),
+            ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, format!("请求错误: {}", m)),
             ApiError::Unauthorized => (
                 StatusCode::UNAUTHORIZED,
-                "Authentication required. Please login first.".to_string(),
+                "请先登录后再操作".to_string(),
             ),
             ApiError::Forbidden => (
                 StatusCode::FORBIDDEN,
-                "You do not have permission to perform this action.".to_string(),
+                "您没有权限执行此操作".to_string(),
             ),
-            ApiError::Conflict(m) => (StatusCode::CONFLICT, m.clone()),
+            ApiError::Conflict(m) => (StatusCode::CONFLICT, format!("冲突: {}", m)),
             ApiError::RateLimitExceeded => (
                 StatusCode::TOO_MANY_REQUESTS,
-                "Rate limit exceeded. Please try again later.".to_string(),
+                "请求过于频繁，请稍后再试".to_string(),
             ),
             ApiError::Internal(ref e) => {
                 // Log the full error for server-side traceability before hiding it from the client.
                 tracing::error!(err = %e, "Internal server error");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal error".to_string(),
+                    "服务器内部错误，请稍后再试".to_string(),
                 )
             }
         };
@@ -67,37 +67,37 @@ mod tests {
     #[test]
     fn test_api_error_not_found_status() {
         let error = ApiError::NotFound;
-        assert_eq!(error.to_string(), "not found");
+        assert_eq!(error.to_string(), "资源不存在");
     }
 
     #[test]
     fn test_api_error_bad_request_status() {
-        let error = ApiError::BadRequest("Invalid input".to_string());
-        assert_eq!(error.to_string(), "bad request: Invalid input");
+        let error = ApiError::BadRequest("输入无效".to_string());
+        assert_eq!(error.to_string(), "请求错误: 输入无效");
     }
 
     #[test]
     fn test_api_error_unauthorized_status() {
         let error = ApiError::Unauthorized;
-        assert_eq!(error.to_string(), "unauthorized");
+        assert_eq!(error.to_string(), "未授权");
     }
 
     #[test]
     fn test_api_error_forbidden_status() {
         let error = ApiError::Forbidden;
-        assert_eq!(error.to_string(), "forbidden");
+        assert_eq!(error.to_string(), "无权限访问");
     }
 
     #[test]
     fn test_api_error_conflict_status() {
-        let error = ApiError::Conflict("Username taken".to_string());
-        assert_eq!(error.to_string(), "conflict: Username taken");
+        let error = ApiError::Conflict("用户名已被使用".to_string());
+        assert_eq!(error.to_string(), "冲突: 用户名已被使用");
     }
 
     #[test]
     fn test_api_error_rate_limit_status() {
         let error = ApiError::RateLimitExceeded;
-        assert_eq!(error.to_string(), "rate limit exceeded");
+        assert_eq!(error.to_string(), "请求过于频繁，请稍后再试");
     }
 
     #[test]

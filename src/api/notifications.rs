@@ -13,6 +13,8 @@ use crate::api::AppState;
 pub struct NotificationQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
+    /// If true, returns all notifications (read + unread). Defaults to false (unread only).
+    pub include_read: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -35,7 +37,8 @@ pub struct NotificationResponse {
     pub offset: i64,
 }
 
-/// GET /api/notifications — list unread notifications for the authenticated user.
+/// GET /api/notifications — list notifications for the authenticated user.
+/// By default returns only unread. Use ?include_read=true to get all history.
 pub async fn get_notifications(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -46,12 +49,21 @@ pub async fn get_notifications(
 
     let limit = query.limit.unwrap_or(20).min(100);
     let offset = query.offset.unwrap_or(0);
+    let include_read = query.include_read.unwrap_or(false);
 
-    let (notifications, total) = state
-        .notification
-        .list_unread(&user_id, limit, offset)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let (notifications, total) = if include_read {
+        state
+            .notification
+            .list_all(&user_id, limit, offset)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    } else {
+        state
+            .notification
+            .list_unread(&user_id, limit, offset)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    };
 
     let items: Vec<NotificationItem> = notifications
         .into_iter()

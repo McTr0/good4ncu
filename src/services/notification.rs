@@ -54,6 +54,54 @@ impl NotificationService {
         Ok(id)
     }
 
+    /// List all notifications for a user (read + unread, most recent first).
+    pub async fn list_all(&self, user_id: &str, limit: i64, offset: i64) -> Result<(Vec<Notification>, i64)> {
+        let count_row = sqlx::query(
+            "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = $1",
+        )
+        .bind(user_id)
+        .fetch_one(&self.db)
+        .await?;
+        let total: i64 = count_row.try_get("cnt").unwrap_or(0);
+
+        let rows = sqlx::query(
+            r#"SELECT id, user_id, event_type, title, body, related_order_id,
+                      related_listing_id, is_read, created_at
+               FROM notifications
+               WHERE user_id = $1
+               ORDER BY created_at DESC
+               LIMIT $2 OFFSET $3"#,
+        )
+        .bind(user_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.db)
+        .await?;
+
+        let notifications = rows
+            .into_iter()
+            .map(|row| {
+                let created_at: String = row
+                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
+                    .map(|dt| dt.to_rfc3339())
+                    .unwrap_or_default();
+                Notification {
+                    id: row.get("id"),
+                    user_id: row.get("user_id"),
+                    event_type: row.get("event_type"),
+                    title: row.get("title"),
+                    body: row.get("body"),
+                    related_order_id: row.try_get("related_order_id").ok(),
+                    related_listing_id: row.try_get("related_listing_id").ok(),
+                    is_read: row.get("is_read"),
+                    created_at,
+                }
+            })
+            .collect();
+
+        Ok((notifications, total))
+    }
+
     /// List unread notifications for a user (most recent first).
     pub async fn list_unread(&self, user_id: &str, limit: i64, offset: i64) -> Result<(Vec<Notification>, i64)> {
         let count_row = sqlx::query(
