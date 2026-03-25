@@ -137,7 +137,11 @@ pub async fn get_conversation_messages(
         .iter()
         .filter_map(|row| {
             let sender: String = row.get("sender");
-            if sender == "assistant" { None } else { Some(sender) }
+            if sender == "assistant" {
+                None
+            } else {
+                Some(sender)
+            }
         })
         .collect();
     let sender_usernames: std::collections::HashMap<String, String> = if sender_ids.is_empty() {

@@ -136,7 +136,11 @@ impl ChatService {
         // Batch-fetch usernames for other participants
         let other_ids: Vec<String> = rows
             .iter()
-            .filter_map(|row| row.try_get::<Option<String>, _>("other_user_id").ok().flatten())
+            .filter_map(|row| {
+                row.try_get::<Option<String>, _>("other_user_id")
+                    .ok()
+                    .flatten()
+            })
             .collect();
         let other_usernames: std::collections::HashMap<String, String> = if other_ids.is_empty() {
             std::collections::HashMap::new()

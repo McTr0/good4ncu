@@ -33,14 +33,8 @@ impl IntoResponse for ApiError {
         let (status, msg) = match &self {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "资源不存在".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, format!("请求错误: {}", m)),
-            ApiError::Unauthorized => (
-                StatusCode::UNAUTHORIZED,
-                "请先登录后再操作".to_string(),
-            ),
-            ApiError::Forbidden => (
-                StatusCode::FORBIDDEN,
-                "您没有权限执行此操作".to_string(),
-            ),
+            ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "请先登录后再操作".to_string()),
+            ApiError::Forbidden => (StatusCode::FORBIDDEN, "您没有权限执行此操作".to_string()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, format!("冲突: {}", m)),
             ApiError::RateLimitExceeded => (
                 StatusCode::TOO_MANY_REQUESTS,

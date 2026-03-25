@@ -61,29 +61,19 @@ pub async fn register(
 ) -> Result<Json<AuthResponse>, ApiError> {
     // Reject oversized inputs before they can trigger CPU-intensive hashing or bloat storage.
     if payload.username.is_empty() {
-        return Err(ApiError::BadRequest(
-            "用户名不能为空".to_string(),
-        ));
+        return Err(ApiError::BadRequest("用户名不能为空".to_string()));
     }
     if payload.username.len() > 50 {
-        return Err(ApiError::BadRequest(
-            "用户名不能超过50个字符".to_string(),
-        ));
+        return Err(ApiError::BadRequest("用户名不能超过50个字符".to_string()));
     }
     if payload.password.is_empty() {
-        return Err(ApiError::BadRequest(
-            "密码不能为空".to_string(),
-        ));
+        return Err(ApiError::BadRequest("密码不能为空".to_string()));
     }
     if payload.password.len() > 128 {
-        return Err(ApiError::BadRequest(
-            "密码不能超过128个字符".to_string(),
-        ));
+        return Err(ApiError::BadRequest("密码不能超过128个字符".to_string()));
     }
     if payload.password.len() < 8 {
-        return Err(ApiError::BadRequest(
-            "密码至少需要8个字符".to_string(),
-        ));
+        return Err(ApiError::BadRequest("密码至少需要8个字符".to_string()));
     }
 
     let password = payload.password.clone();
@@ -138,9 +128,7 @@ pub async fn register(
             // PostgreSQL unique violation code = "23505"
             if let sqlx::Error::Database(db_err) = &e {
                 if db_err.code().as_deref() == Some("23505") {
-                    return Err(ApiError::Conflict(
-                        "用户名已被使用，请换一个".to_string(),
-                    ));
+                    return Err(ApiError::Conflict("用户名已被使用，请换一个".to_string()));
                 }
             }
             Err(ApiError::Internal(anyhow::anyhow!(
@@ -165,22 +153,23 @@ pub async fn login(
     }
 
     // Fetch user from database
-    let user_row = match sqlx::query("SELECT id, username, password_hash FROM users WHERE username = $1")
-        .bind(&payload.username)
-        .fetch_optional(&state.db)
-        .await
-    {
-        Ok(Some(row)) => row,
-        Ok(None) => {
-            // Return 401 to prevent username enumeration
-            tracing::warn!(username = %payload.username, "Login failed — user not found");
-            return Err(ApiError::Unauthorized);
-        }
-        Err(e) => {
-            tracing::error!(err = %e, "Database error during login");
-            return Err(ApiError::Internal(anyhow::anyhow!("Database error: {}", e)));
-        }
-    };
+    let user_row =
+        match sqlx::query("SELECT id, username, password_hash FROM users WHERE username = $1")
+            .bind(&payload.username)
+            .fetch_optional(&state.db)
+            .await
+        {
+            Ok(Some(row)) => row,
+            Ok(None) => {
+                // Return 401 to prevent username enumeration
+                tracing::warn!(username = %payload.username, "Login failed — user not found");
+                return Err(ApiError::Unauthorized);
+            }
+            Err(e) => {
+                tracing::error!(err = %e, "Database error during login");
+                return Err(ApiError::Internal(anyhow::anyhow!("Database error: {}", e)));
+            }
+        };
 
     let user_id: String = user_row.get("id");
     let username: String = user_row.get("username");
@@ -239,24 +228,16 @@ pub async fn change_password(
         .map_err(|_| ApiError::Unauthorized)?;
 
     if payload.current_password.is_empty() {
-        return Err(ApiError::BadRequest(
-            "当前密码不能为空".to_string(),
-        ));
+        return Err(ApiError::BadRequest("当前密码不能为空".to_string()));
     }
     if payload.new_password.is_empty() {
-        return Err(ApiError::BadRequest(
-            "新密码不能为空".to_string(),
-        ));
+        return Err(ApiError::BadRequest("新密码不能为空".to_string()));
     }
     if payload.new_password.len() < 8 {
-        return Err(ApiError::BadRequest(
-            "新密码至少需要8个字符".to_string(),
-        ));
+        return Err(ApiError::BadRequest("新密码至少需要8个字符".to_string()));
     }
     if payload.new_password.len() > 128 {
-        return Err(ApiError::BadRequest(
-            "新密码不能超过128个字符".to_string(),
-        ));
+        return Err(ApiError::BadRequest("新密码不能超过128个字符".to_string()));
     }
 
     let user_row = sqlx::query("SELECT password_hash FROM users WHERE id = $1")

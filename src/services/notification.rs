@@ -31,7 +31,10 @@ pub struct NotificationService {
 
 impl NotificationService {
     pub fn new(db: PgPool) -> Self {
-        Self { db, broadcast: Arc::new(|_, _| {}) }
+        Self {
+            db,
+            broadcast: Arc::new(|_, _| {}),
+        }
     }
 
     /// Set the WebSocket broadcast callback. Called after each successful insert.
@@ -79,13 +82,16 @@ impl NotificationService {
     }
 
     /// List all notifications for a user (read + unread, most recent first).
-    pub async fn list_all(&self, user_id: &str, limit: i64, offset: i64) -> Result<(Vec<Notification>, i64)> {
-        let count_row = sqlx::query(
-            "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = $1",
-        )
-        .bind(user_id)
-        .fetch_one(&self.db)
-        .await?;
+    pub async fn list_all(
+        &self,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<Notification>, i64)> {
+        let count_row = sqlx::query("SELECT COUNT(*) as cnt FROM notifications WHERE user_id = $1")
+            .bind(user_id)
+            .fetch_one(&self.db)
+            .await?;
         let total: i64 = count_row.try_get("cnt").unwrap_or(0);
 
         let rows = sqlx::query(
@@ -106,7 +112,9 @@ impl NotificationService {
             .into_iter()
             .map(|row| {
                 let created_at: String = row
-                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
+                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(
+                        "created_at",
+                    )
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_default();
                 Notification {
@@ -127,7 +135,12 @@ impl NotificationService {
     }
 
     /// List unread notifications for a user (most recent first).
-    pub async fn list_unread(&self, user_id: &str, limit: i64, offset: i64) -> Result<(Vec<Notification>, i64)> {
+    pub async fn list_unread(
+        &self,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<Notification>, i64)> {
         let count_row = sqlx::query(
             "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = $1 AND is_read = FALSE",
         )
@@ -154,7 +167,9 @@ impl NotificationService {
             .into_iter()
             .map(|row| {
                 let created_at: String = row
-                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
+                    .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>(
+                        "created_at",
+                    )
                     .map(|dt| dt.to_rfc3339())
                     .unwrap_or_default();
                 Notification {

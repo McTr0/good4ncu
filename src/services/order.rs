@@ -71,16 +71,11 @@ impl OrderService {
 
     /// Returns (seller_id, listing_id) for the given order, or None if not found.
     #[allow(dead_code)]
-    pub async fn get_order(
-        &self,
-        order_id: &str,
-    ) -> Result<Option<(String, String)>> {
-        let row = sqlx::query(
-            "SELECT seller_id, listing_id FROM orders WHERE id = $1",
-        )
-        .bind(order_id)
-        .fetch_optional(&self.db)
-        .await?;
+    pub async fn get_order(&self, order_id: &str) -> Result<Option<(String, String)>> {
+        let row = sqlx::query("SELECT seller_id, listing_id FROM orders WHERE id = $1")
+            .bind(order_id)
+            .fetch_optional(&self.db)
+            .await?;
         Ok(row.map(|r| (r.get("seller_id"), r.get("listing_id"))))
     }
 

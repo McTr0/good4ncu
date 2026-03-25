@@ -175,15 +175,23 @@ pub async fn get_listings(
         if !srch.is_empty() {
             conds.push(format!(
                 "(title ILIKE ${} OR brand ILIKE ${} OR description ILIKE ${})",
-                binds.len() + 1, binds.len() + 1, binds.len() + 1
+                binds.len() + 1,
+                binds.len() + 1,
+                binds.len() + 1
             ));
             binds.push(srch.clone());
         }
     }
 
     // Price range (prices stored as cents, params are in yuan)
-    let min_cents = params.min_price_cny.filter(|&p| p > 0.0).map(|p| (p * 100.0) as i32);
-    let max_cents = params.max_price_cny.filter(|&p| p > 0.0).map(|p| (p * 100.0) as i32);
+    let min_cents = params
+        .min_price_cny
+        .filter(|&p| p > 0.0)
+        .map(|p| (p * 100.0) as i32);
+    let max_cents = params
+        .max_price_cny
+        .filter(|&p| p > 0.0)
+        .map(|p| (p * 100.0) as i32);
     if min_cents.is_some() {
         conds.push(format!("suggested_price_cny >= ${}", binds.len() + 1));
         binds.push("min_price".to_string());
@@ -196,7 +204,10 @@ pub async fn get_listings(
     let where_clause = conds.join(" AND ");
 
     // Count query
-    let count_sql = format!("SELECT COUNT(*) as cnt FROM inventory WHERE {}", where_clause);
+    let count_sql = format!(
+        "SELECT COUNT(*) as cnt FROM inventory WHERE {}",
+        where_clause
+    );
     let mut count_q = sqlx::query(&count_sql);
     if use_single_cat {
         count_q = count_q.bind(params.category.as_deref().unwrap());
@@ -220,7 +231,8 @@ pub async fn get_listings(
     let total: i64 = count_row.get("cnt");
 
     // Select query
-    let select_sql = format!(
+    let select_sql =
+        format!(
         "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects \
          FROM inventory WHERE {} ORDER BY {} LIMIT ${} OFFSET ${}",
         where_clause, order_by, binds.len() + 1, binds.len() + 2
@@ -433,9 +445,7 @@ pub async fn update_listing(
     }
 
     if status == "sold" {
-        return Err(ApiError::BadRequest(
-            "无法修改已售出的商品".to_string(),
-        ));
+        return Err(ApiError::BadRequest("无法修改已售出的商品".to_string()));
     }
 
     // Build dynamic update query
@@ -572,9 +582,7 @@ pub async fn delete_listing(
     }
 
     if status == "sold" {
-        return Err(ApiError::BadRequest(
-            "无法删除已售出的商品".to_string(),
-        ));
+        return Err(ApiError::BadRequest("无法删除已售出的商品".to_string()));
     }
 
     // Delete the listing (cascade deletes related records)

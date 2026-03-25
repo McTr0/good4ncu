@@ -3,7 +3,9 @@ pub mod minimax;
 
 use crate::services::BusinessEvent;
 use async_trait::async_trait;
+use futures::Stream;
 use rig::completion::Message;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -41,6 +43,14 @@ pub trait MarketplaceAgent: Send + Sync {
         msg: String,
         history: Vec<Message>,
     ) -> anyhow::Result<String>;
+
+    /// Stream chat response tokens as they arrive.
+    /// Returns a stream of text chunks and a final conversation_id.
+    fn stream_chat(
+        &self,
+        msg: String,
+        history: Vec<Message>,
+    ) -> Pin<Box<dyn Stream<Item = Result<String, anyhow::Error>> + Send>>;
 }
 
 /// Marker trait for negotiation agents.

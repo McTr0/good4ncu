@@ -472,12 +472,13 @@ pub async fn create_order(
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Look up the listing
-    let listing = sqlx::query("SELECT owner_id, suggested_price_cny, status FROM inventory WHERE id = $1")
-        .bind(&payload.listing_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
+    let listing =
+        sqlx::query("SELECT owner_id, suggested_price_cny, status FROM inventory WHERE id = $1")
+            .bind(&payload.listing_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+            .ok_or(ApiError::NotFound)?;
 
     let owner_id: String = listing.get("owner_id");
     let suggested_price: i64 = listing.get("suggested_price_cny");
@@ -491,9 +492,7 @@ pub async fn create_order(
     }
 
     if owner_id == buyer_id {
-        return Err(ApiError::BadRequest(
-            "不能购买自己发布的商品".to_string(),
-        ));
+        return Err(ApiError::BadRequest("不能购买自己发布的商品".to_string()));
     }
 
     // Validate offered price is within ±50% of suggested price (same rule as AI agent).

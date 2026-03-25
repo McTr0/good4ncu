@@ -131,5 +131,7 @@ pub async fn mark_all_notifications_read(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
-    Ok(Json(serde_json::json!({ "ok": true, "marked_count": count })))
+    Ok(Json(
+        serde_json::json!({ "ok": true, "marked_count": count }),
+    ))
 }
