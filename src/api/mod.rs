@@ -89,6 +89,12 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     let cors = if cors_origins.is_empty() {
         // Default restrictive CORS — no origins allowed by default
         CorsLayer::new().allow_methods(Any).allow_headers(Any)
+    } else if cors_origins.iter().any(|s| s == "*") {
+        // Wildcard: allow all origins
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
     } else {
         let origins: Vec<axum::http::HeaderValue> = cors_origins
             .iter()
