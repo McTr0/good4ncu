@@ -574,6 +574,22 @@ impl Tool for PurchaseItemIntentTool {
             ));
         }
 
+        // Validate offered price is within reasonable range of suggested price (±50%).
+        // This prevents both unrealistic lowballs and accidentally overpaying.
+        const PRICE_TOLERANCE: f64 = 0.50;
+        let min_price = (listing.suggested_price_cny as f64 * (1.0 - PRICE_TOLERANCE)) as i64;
+        let max_price = (listing.suggested_price_cny as f64 * (1.0 + PRICE_TOLERANCE)) as i64;
+        if args.offered_price < min_price || args.offered_price > max_price {
+            return Err(ToolError(format!(
+                "Offered price {} CNY is outside the acceptable range ({:.2} - {:.2} CNY). \
+                 The seller listed this item at {:.2} CNY.",
+                cents_to_yuan(args.offered_price),
+                cents_to_yuan(min_price),
+                cents_to_yuan(max_price),
+                cents_to_yuan(listing.suggested_price_cny),
+            )));
+        }
+
         // Emit DealReached event to trigger order creation
         self.ctx
             .event_tx
@@ -601,8 +617,7 @@ struct ListingCheckRow {
     #[sqlx(rename = "id")]
     _id: String,
     owner_id: String,
-    #[sqlx(rename = "suggested_price_cny")]
-    _suggested_price_cny: i64,
+    suggested_price_cny: i64,
     status: String,
 }
 

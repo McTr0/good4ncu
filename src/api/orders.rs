@@ -293,9 +293,10 @@ pub async fn confirm_order(
         return Err(ApiError::Forbidden);
     }
 
-    // Can only confirm paid orders - atomic update prevents race condition
+    // Can only confirm received orders — atomic update enforces the shipped→completed transition.
+    // State machine: pending → paid → shipped → completed
     let updated = sqlx::query(
-        "UPDATE orders SET status = 'completed' WHERE id = $1 AND status = 'paid' RETURNING id",
+        "UPDATE orders SET status = 'completed' WHERE id = $1 AND status = 'shipped' RETURNING id",
     )
     .bind(&order_id)
     .fetch_optional(&state.db)
@@ -304,7 +305,7 @@ pub async fn confirm_order(
 
     if updated.is_none() {
         return Err(ApiError::BadRequest(format!(
-            "Cannot confirm order with status '{}'. Order must be paid first.",
+            "Cannot confirm order with status '{}'. Order must be shipped by seller first.",
             status
         )));
     }

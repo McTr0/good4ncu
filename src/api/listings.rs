@@ -71,7 +71,8 @@ pub struct ListingDetail {
     pub suggested_price_cny: f64,
     pub defects: Vec<String>,
     pub description: Option<String>,
-    pub owner_id: String,
+    /// Only visible to the listing owner; None for other viewers.
+    pub owner_id: Option<String>,
     pub owner_username: Option<String>,
     pub status: String,
     pub created_at: String,
@@ -248,15 +249,15 @@ pub async fn get_listings(
     }))
 }
 
-/// GET /api/listings/:id — requires auth; returns full listing detail
+/// GET /api/listings/:id — public; listing info is not sensitive
 pub async fn get_listing(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<ListingDetail>, ApiError> {
-    // Auth required to prevent leaking owner contact info to anonymous users
-    let _ = extract_user_id_from_token(&headers, &state.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    // Auth optional — guests can browse listing details. The only owner info
+    // exposed is username (no email/phone), which is appropriate for a marketplace.
+    let viewer_id = extract_user_id_from_token(&headers, &state.jwt_secret).ok();
 
     let row = sqlx::query(
         r#"
@@ -291,7 +292,8 @@ pub async fn get_listing(
         suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
         defects,
         description: row.try_get("description").ok(),
-        owner_id: row.get("owner_id"),
+        // Only reveal owner_id to the listing owner; everyone else sees None
+        owner_id: viewer_id.filter(|vid| vid == row.get::<String, _>("owner_id").as_str()),
         owner_username: row.try_get("owner_username").ok(),
         status: row.get("status"),
         created_at,
@@ -561,6 +563,59 @@ pub async fn delete_listing(
     Ok(Json(serde_json::json!({
         "message": "Listing deleted successfully",
         "id": id
+    })))
+}
+
+/// POST /api/listings/:id/relist — reactivate a sold or deleted listing (seller only)
+pub async fn relist_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Check listing exists and belongs to user
+    let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
+        .bind(&id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let owner_id: String = row.get("owner_id");
+    let status: String = row.get("status");
+
+    if owner_id != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    if status == "active" {
+        return Err(ApiError::BadRequest(
+            "Listing is already active.".to_string(),
+        ));
+    }
+
+    if status != "sold" && status != "deleted" {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot relist a listing with status '{}'. Only sold or deleted listings can be relisted.",
+            status
+        )));
+    }
+
+    // Reactivate the listing
+    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = $1")
+        .bind(&id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(listing_id = %id, relisted_by = %user_id, previous_status = %status, "Listing relisted");
+
+    Ok(Json(serde_json::json!({
+        "message": "Listing relisted successfully",
+        "id": id,
+        "status": "active"
     })))
 }
 
@@ -859,7 +914,7 @@ mod tests {
             suggested_price_cny: 7999.0,
             defects: vec!["None".to_string()],
             description: Some("Brand new".to_string()),
-            owner_id: "user-owner".to_string(),
+            owner_id: Some("user-owner".to_string()),
             owner_username: Some("seller1".to_string()),
             status: "active".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),

@@ -98,9 +98,12 @@ impl ChatService {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<ConversationSummary>, i64)> {
-        // Get total count first
+        // Count conversations where user is either sender or receiver.
+        // The receiver column was added later, so NULL receiver means sender-only visibility.
         let count_row = sqlx::query(
-            "SELECT COUNT(DISTINCT conversation_id) as cnt FROM chat_messages WHERE sender = $1",
+            "SELECT COUNT(DISTINCT conversation_id) as cnt \
+             FROM chat_messages \
+             WHERE sender = $1 OR receiver = $1",
         )
         .bind(user_id)
         .fetch_one(&self.db)
@@ -118,7 +121,7 @@ impl ChatService {
                    cm.timestamp as last_timestamp
             FROM chat_messages cm
             LEFT JOIN inventory i ON cm.listing_id = i.id
-            WHERE cm.sender = $1
+            WHERE cm.sender = $1 OR cm.receiver = $1
             ORDER BY cm.conversation_id, cm.timestamp DESC
             LIMIT $2 OFFSET $3
             "#,

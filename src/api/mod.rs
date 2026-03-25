@@ -120,6 +120,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/listings/{id}", put(listings::update_listing))
         .route("/api/listings", post(listings::create_listing))
         .route("/api/listings/{id}", delete(listings::delete_listing))
+        .route("/api/listings/{id}/relist", post(listings::relist_listing))
         .route("/api/user/profile", get(user::get_profile))
         .route("/api/user/listings", get(user::get_user_listings))
         .route("/api/users/search", get(user::search_users))
