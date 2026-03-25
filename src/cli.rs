@@ -38,8 +38,8 @@ pub async fn run_cli(
         let ans = match Select::new("What would you like to do?", options.clone()).prompt() {
             Ok(a) => a,
             Err(InquireError::OperationInterrupted) | Err(InquireError::OperationCanceled) => {
-                println!("\nUse 'exit' option to quit, or press Enter to continue.");
-                continue;
+                println!("\nCLI cancelled.");
+                break;
             }
             Err(e) => {
                 tracing::error!(%e, "CLI prompt error");
