@@ -9,6 +9,16 @@ use crate::agents::negotiate;
 use crate::llm::LlmProvider;
 use crate::services::BusinessEvent;
 
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_cli_module_compiles() {
+        // Verify the module structure is valid
+        // The CLI depends on inquire which may not be available in test,
+        // so we just verify compilation here
+    }
+}
+
 pub async fn run_cli(
     db_pool: PgPool,
     provider: Arc<dyn LlmProvider>,

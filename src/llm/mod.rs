@@ -79,3 +79,43 @@ pub const NEGOTIATION_PREAMBLE: &str = "\
 4. 逐步引导双方达成共识
 
 记住：始终以友好的方式沟通，帮助双方达成公平交易。";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_preamble_is_not_empty() {
+        assert!(!PREAMBLE.is_empty());
+        assert!(PREAMBLE.contains("校园二手交易平台"));
+    }
+
+    #[test]
+    fn test_negotiation_preamble_is_not_empty() {
+        assert!(!NEGOTIATION_PREAMBLE.is_empty());
+        assert!(NEGOTIATION_PREAMBLE.contains("AI谈判助手"));
+    }
+
+    #[test]
+    fn test_preamble_contains_core_behavior_guidelines() {
+        // Verify preamble contains key behavior instructions
+        assert!(PREAMBLE.contains("create_listing"));
+        assert!(PREAMBLE.contains("search_inventory"));
+        assert!(PREAMBLE.contains("purchase_item"));
+    }
+
+    #[test]
+    fn test_negotiation_preamble_contains_pricing_guidance() {
+        assert!(NEGOTIATION_PREAMBLE.contains("优化交易价格"));
+        assert!(NEGOTIATION_PREAMBLE.contains("中间价建议"));
+    }
+
+    #[test]
+    fn test_llm_provider_trait_objects_compile() {
+        // Verify trait bounds are satisfied (this is a compile-time check)
+        fn assert_send_sync<T: Send + Sync>() {}
+        // These are marker traits but we verify the bounds compile
+        assert_send_sync::<Box<dyn MarketplaceAgent>>();
+        assert_send_sync::<Box<dyn NegotiateAgent>>();
+    }
+}

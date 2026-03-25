@@ -78,3 +78,61 @@ impl RateLimitStateHandle {
 pub fn make_rate_limit_state() -> RateLimitStateHandle {
     RateLimitStateHandle::new(20, 60)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_rate_limit_allows_requests_under_limit() {
+        let limiter = RateLimitStateHandle::new(5, 60);
+        // First 5 requests should all succeed
+        for _ in 0..5 {
+            assert!(limiter.check_rate_limit("192.168.1.1"));
+        }
+    }
+
+    #[test]
+    fn test_rate_limit_blocks_requests_over_limit() {
+        let limiter = RateLimitStateHandle::new(3, 60);
+        // 3 requests succeed
+        assert!(limiter.check_rate_limit("10.0.0.1"));
+        assert!(limiter.check_rate_limit("10.0.0.1"));
+        assert!(limiter.check_rate_limit("10.0.0.1"));
+        // 4th should be blocked
+        assert!(!limiter.check_rate_limit("10.0.0.1"));
+    }
+
+    #[test]
+    fn test_rate_limit_per_ip_isolation() {
+        let limiter = RateLimitStateHandle::new(2, 60);
+        // IP A uses its quota
+        assert!(limiter.check_rate_limit("1.1.1.1"));
+        assert!(limiter.check_rate_limit("1.1.1.1"));
+        assert!(!limiter.check_rate_limit("1.1.1.1"));
+
+        // IP B has its own quota
+        assert!(limiter.check_rate_limit("2.2.2.2"));
+        assert!(limiter.check_rate_limit("2.2.2.2"));
+        assert!(!limiter.check_rate_limit("2.2.2.2"));
+    }
+
+    #[test]
+    fn test_rate_limit_ipv6() {
+        let limiter = RateLimitStateHandle::new(2, 60);
+        assert!(limiter.check_rate_limit("::1"));
+        assert!(limiter.check_rate_limit("::1"));
+        assert!(!limiter.check_rate_limit("::1"));
+    }
+
+    #[test]
+    fn test_make_rate_limit_state_default() {
+        let limiter = make_rate_limit_state();
+        // Should allow 20 requests
+        for _ in 0..20 {
+            assert!(limiter.check_rate_limit("8.8.8.8"));
+        }
+        // 21st should be blocked
+        assert!(!limiter.check_rate_limit("8.8.8.8"));
+    }
+}
