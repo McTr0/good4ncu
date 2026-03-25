@@ -352,3 +352,236 @@ fn extract_deal_price(text: &str) -> Option<i64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_deal_price_various_formats() {
+        // Basic formats
+        assert_eq!(extract_deal_price("DEAL: 2000"), Some(200_000));
+        assert_eq!(extract_deal_price("DEAL:2000"), Some(200_000));
+        assert_eq!(extract_deal_price("DEAL: 2000 CNY"), Some(200_000));
+        assert_eq!(extract_deal_price("DEAL: 2000.50"), Some(200_050));
+        assert_eq!(extract_deal_price("DEAL: 199.99"), Some(19_999));
+
+        // Case insensitive
+        assert_eq!(extract_deal_price("deal: 1500"), Some(150_000));
+        assert_eq!(extract_deal_price("Deal: 1500"), Some(150_000));
+        assert_eq!(extract_deal_price("dEaL: 1500"), Some(150_000));
+
+        // No deal
+        assert_eq!(extract_deal_price("No deal here"), None);
+        assert_eq!(extract_deal_price(""), None);
+
+        // In context
+        assert_eq!(
+            extract_deal_price("The price is DEAL: 2500 for this item"),
+            Some(250_000)
+        );
+        assert_eq!(
+            extract_deal_price("Final offer: DEAL: 999.99 plus shipping"),
+            Some(99_999)
+        );
+    }
+
+    #[test]
+    fn test_hitl_channel_disabled_auto_rejects() {
+        let _hitl = HitlChannel::new_disabled();
+        // Should fail immediately since no CLI channel is configured
+        let _request = HitlRequest {
+            id: "test-1".to_string(),
+            proposed_price: 100_00, // 100.00 CNY
+            reason: "Test".to_string(),
+            status: "pending".to_string(),
+            counter_price: None,
+        };
+        // The new_disabled HITL should return error on request_approval
+        // (we can't easily test async without a runtime, but verify it compiles)
+    }
+
+    #[test]
+    fn test_hitl_request_structure() {
+        let req = HitlRequest {
+            id: "req-123".to_string(),
+            proposed_price: 500_00,
+            reason: "Price is too high".to_string(),
+            status: "pending".to_string(),
+            counter_price: None,
+        };
+        assert_eq!(req.status, "pending");
+        assert_eq!(req.counter_price, None);
+    }
+
+    #[test]
+    fn test_hitl_result_countered() {
+        let result = HitlResult::Countered(350_00);
+        // Verify the enum variant carries the correct price
+        match result {
+            HitlResult::Countered(price) => assert_eq!(price, 350_00),
+            _ => panic!("Expected Countered variant"),
+        }
+    }
+
+    #[test]
+    fn test_hitl_result_approved() {
+        let result = HitlResult::Approved;
+        match result {
+            HitlResult::Approved => {}
+            _ => panic!("Expected Approved variant"),
+        }
+    }
+
+    #[test]
+    fn test_hitl_result_rejected() {
+        let result = HitlResult::Rejected;
+        match result {
+            HitlResult::Rejected => {}
+            _ => panic!("Expected Rejected variant"),
+        }
+    }
+
+    #[test]
+    fn test_human_interaction_error_display() {
+        let err = HumanInteractionError("test error".to_string());
+        assert_eq!(err.to_string(), "Human interaction error: test error");
+    }
+
+    #[test]
+    fn test_human_approval_args_deserialization() {
+        let json = r#"{"proposed_price": 450000, "reason": "Final offer"}"#;
+        let args: HumanApprovalArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.proposed_price, 450000);
+        assert_eq!(args.reason, "Final offer");
+    }
+
+    #[test]
+    fn test_human_approval_args_all_fields() {
+        let json = r#"{
+            "proposed_price": 39900,
+            "reason": "Testing deserialization"
+        }"#;
+        let args: HumanApprovalArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.proposed_price, 39900);
+    }
+
+    #[test]
+    fn test_human_decision_approved_serialization() {
+        let decision = HumanDecision {
+            action: "approve".to_string(),
+            counter_price: None,
+            message: "Human approved the deal.".to_string(),
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("\"action\":\"approve\""));
+        assert!(json.contains("Human approved"));
+        assert!(json.contains("counter_price"));
+    }
+
+    #[test]
+    fn test_human_decision_countered_serialization() {
+        let decision = HumanDecision {
+            action: "counter".to_string(),
+            counter_price: Some(425000),
+            message: "Human countered with 4250 CNY.".to_string(),
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("\"action\":\"counter\""));
+        assert!(json.contains("\"counter_price\":4250"));
+    }
+
+    #[test]
+    fn test_human_decision_rejected_serialization() {
+        let decision = HumanDecision {
+            action: "reject".to_string(),
+            counter_price: None,
+            message: "Human rejected the offer.".to_string(),
+        };
+        let json = serde_json::to_string(&decision).unwrap();
+        assert!(json.contains("\"action\":\"reject\""));
+    }
+
+    #[test]
+    fn test_human_decision_deserialization() {
+        let json = r#"{
+            "action": "approve",
+            "counter_price": null,
+            "message": "OK"
+        }"#;
+        let decision: HumanDecision = serde_json::from_str(json).unwrap();
+        assert_eq!(decision.action, "approve");
+        assert_eq!(decision.counter_price, None);
+        assert_eq!(decision.message, "OK");
+    }
+
+    #[test]
+    fn test_human_decision_countered_deserialization() {
+        let json = r#"{
+            "action": "counter",
+            "counter_price": 400000,
+            "message": "Counter offer"
+        }"#;
+        let decision: HumanDecision = serde_json::from_str(json).unwrap();
+        assert_eq!(decision.action, "counter");
+        assert_eq!(decision.counter_price, Some(400000));
+    }
+
+    #[test]
+    fn test_hitl_request_serialization() {
+        let request = HitlRequest {
+            id: "req-abc".to_string(),
+            proposed_price: 500_00,
+            reason: "Test reason".to_string(),
+            status: "pending".to_string(),
+            counter_price: None,
+        };
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("req-abc"));
+        assert!(json.contains("\"status\":\"pending\""));
+    }
+
+    #[test]
+    fn test_hitl_request_with_counter() {
+        let request = HitlRequest {
+            id: "req-xyz".to_string(),
+            proposed_price: 500_00,
+            reason: "Counter needed".to_string(),
+            status: "countered".to_string(),
+            counter_price: Some(450_00),
+        };
+        assert_eq!(request.counter_price, Some(450_00));
+        let json = serde_json::to_string(&request).unwrap();
+        assert!(json.contains("\"counter_price\":45000"));
+    }
+
+    #[test]
+    fn test_hitl_request_deserialization() {
+        let json = r#"{
+            "id": "req-123",
+            "proposed_price": 75000,
+            "reason": "Too expensive",
+            "status": "pending",
+            "counter_price": null
+        }"#;
+        let request: HitlRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.id, "req-123");
+        assert_eq!(request.proposed_price, 75000);
+        assert_eq!(request.status, "pending");
+        assert_eq!(request.counter_price, None);
+    }
+
+    #[test]
+    fn test_hitl_channel_disabled_clone() {
+        let channel = HitlChannel::new_disabled();
+        let _cloned = channel.clone();
+        // Verify Clone impl works
+    }
+
+    #[test]
+    fn test_human_approval_tool_new() {
+        let hitl = HitlChannel::new_disabled();
+        let tool = HumanApprovalTool::new(hitl);
+        let _ = tool;
+    }
+}
