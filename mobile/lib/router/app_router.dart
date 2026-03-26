@@ -26,13 +26,20 @@ final GoRouter appRouter = GoRouter(
   navigatorKey: _rootNavigatorKey,
   initialLocation: '/',
   redirect: (context, state) async {
-    final loggedIn = await _isLoggedIn();
-    final onAuthRoute = state.matchedLocation == '/login';
-    if (!loggedIn && !onAuthRoute) {
-      return '/login';
-    }
-    if (loggedIn && onAuthRoute) {
-      return '/';
+    try {
+      final loggedIn = await _isLoggedIn();
+      final onAuthRoute = state.matchedLocation == '/login';
+      if (!loggedIn && !onAuthRoute) {
+        return '/login';
+      }
+      if (loggedIn && onAuthRoute) {
+        return '/';
+      }
+    } catch (e) {
+      // If auth check fails, redirect to login
+      if (state.matchedLocation != '/login') {
+        return '/login';
+      }
     }
     return null;
   },
@@ -136,7 +143,8 @@ class _ShellScaffoldState extends State<_ShellScaffold> {
 
   @override
   Widget build(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
+    final l = AppLocalizations.of(context);
+    if (l == null) return const SizedBox.shrink(); // Guard against early context without localization
     final location = GoRouterState.of(context).matchedLocation;
     final idx = _routes.indexOf(location);
     if (idx >= 0) _currentIndex = idx;
