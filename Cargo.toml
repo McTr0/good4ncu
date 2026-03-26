@@ -18,7 +18,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing = "0.1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rig-postgres = "0.2.2"
-sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "json"] }
+sqlx = { version = "0.8.6", features = ["postgres", "runtime-tokio-rustls", "uuid", "chrono", "json", "migrate"] }
 pgvector = "0.4"
 uuid = { version = "1.22.0", features = ["v4", "serde"] }
 axum = { version = "0.8", features = ["json", "ws"] }
@@ -28,6 +28,7 @@ argon2 = "0.5.3"
 jsonwebtoken = { version = "10.3.0", default-features = false, features = ["rust_crypto"] }
 rand = "0.10.0"
 dashmap = "5.5"
+lazy_static = "1.4"
 moka = { version = "0.12", features = ["sync", "future"] }
 async-trait = "0.1"
 async-stream = "0.3"
