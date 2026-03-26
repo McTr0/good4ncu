@@ -19,6 +19,7 @@ use crate::utils::cents_to_yuan;
 pub struct UserProfile {
     pub user_id: String,
     pub username: String,
+    pub role: String,
     pub created_at: String,
 }
 
@@ -62,7 +63,7 @@ pub async fn get_profile(
     let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    let row = sqlx::query("SELECT username, created_at FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT username, role, created_at FROM users WHERE id = $1")
         .bind(&user_id)
         .fetch_optional(&state.db)
         .await
@@ -70,6 +71,7 @@ pub async fn get_profile(
         .ok_or(ApiError::NotFound)?;
 
     let username: String = row.get("username");
+    let role: String = row.get("role");
     let created_at: String = row
         .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
         .map(|dt| dt.to_rfc3339())
@@ -78,6 +80,7 @@ pub async fn get_profile(
     Ok(Json(UserProfile {
         user_id,
         username,
+        role,
         created_at,
     }))
 }

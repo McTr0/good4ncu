@@ -330,8 +330,8 @@ pub async fn get_listing(
         suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
         defects,
         description: row.try_get("description").ok(),
-        // Only reveal owner_id to the listing owner; everyone else sees None
-        owner_id: viewer_id.filter(|vid| vid == row.get::<String, _>("owner_id").as_str()),
+        // Reveal owner_id to all authenticated users so they can contact the seller via chat
+        owner_id: viewer_id.as_ref().map(|_| row.get::<String, _>("owner_id")),
         owner_username: row.try_get("owner_username").ok(),
         status: row.get("status"),
         created_at,

@@ -41,7 +41,13 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   Future<void> _handleContactSeller(BuildContext context) async {
     if (_isOperating) return;
     final listing = _listing;
-    if (listing == null || listing.ownerId == null) return;
+    if (listing == null || listing.ownerId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('无法联系卖家：缺少卖家信息'), backgroundColor: Colors.red),
+      );
+      setState(() => _isOperating = false);
+      return;
+    }
 
     setState(() => _isOperating = true);
 

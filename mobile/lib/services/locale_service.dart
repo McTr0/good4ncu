@@ -10,7 +10,10 @@ class LocaleService {
   }
 
   static Locale getStoredLocale() {
-    final code = _prefs?.getString(_localeKey) ?? 'zh';
+    final code = _prefs?.getString(_localeKey);
+    if (code == null || code.isEmpty || (code != 'zh' && code != 'en')) {
+      return const Locale('zh');
+    }
     return Locale(code);
   }
 
