@@ -280,8 +280,9 @@ pub async fn cancel_order(
         )));
     }
 
-    // Reactivate the listing
-    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = $1")
+    // Reactivate the listing — use conditional update to prevent overwriting
+    // a concurrent purchase that may have raced between the SELECT and here.
+    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = $1 AND status = 'sold'")
         .bind(&listing_id)
         .execute(&state.db)
         .await
@@ -511,8 +512,27 @@ pub async fn create_order(
         )));
     }
 
-    // Create the order
+    // Create the order and mark listing as sold atomically.
+    // Uses the same optimistic locking pattern as OrderService::create_order:
+    // UPDATE returns the row only if status was 'active', preventing double purchase.
     let order_id = uuid::Uuid::new_v4().to_string();
+    let result = sqlx::query(
+        r#"UPDATE inventory
+           SET status = 'sold'
+           WHERE id = $1 AND status = 'active'
+           RETURNING id"#,
+    )
+    .bind(&payload.listing_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if result.is_none() {
+        return Err(ApiError::BadRequest(
+            "商品已售出或不存在，无法创建订单".to_string(),
+        ));
+    }
+
     sqlx::query(
         "INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status) \
          VALUES ($1, $2, $3, $4, $5, 'pending')",
@@ -525,13 +545,6 @@ pub async fn create_order(
     .execute(&state.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    // Mark listing as sold immediately (no negotiation phase)
-    sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1")
-        .bind(&payload.listing_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     // Notify seller that their item was purchased (same notification as AI tool path)
     let _ = state
