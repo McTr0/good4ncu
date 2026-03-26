@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../theme/app_theme.dart';
 import 'login_page.dart';
 
 class UserCenterPage extends StatefulWidget {
@@ -76,13 +77,13 @@ class _UserCenterPageState extends State<UserCenterPage> {
           : RefreshIndicator(
               onRefresh: _loadData,
               child: ListView(
-                padding: const EdgeInsets.all(16),
+                padding: EdgeInsets.all(AppTheme.sp16),
                 children: [
                   // Profile Card
                   Card(
-                    elevation: 2,
+                    elevation: 0,
                     shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16),
+                      borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                     ),
                     child: Padding(
                       padding: const EdgeInsets.all(20),
@@ -90,7 +91,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
                         children: [
                           CircleAvatar(
                             radius: 32,
-                            backgroundColor: const Color(0xFF6366F1),
+                            backgroundColor: AppTheme.primary,
                             child: Text(
                               _username.isNotEmpty
                                   ? _username[0].toUpperCase()
@@ -118,7 +119,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
                                 'Joined: $_createdAt',
                                 style: TextStyle(
                                   fontSize: 13,
-                                  color: Colors.grey[600],
+                                  color: AppTheme.textSecondary,
                                 ),
                               ),
                             ],
@@ -127,12 +128,12 @@ class _UserCenterPageState extends State<UserCenterPage> {
                       ),
                     ),
                   ),
-                  const SizedBox(height: 24),
+                  const SizedBox(height: AppTheme.sp32),
 
                   // My Listings Header
                   Row(
                     children: [
-                      const Icon(Icons.inventory_2_outlined, size: 20),
+                      const Icon(Icons.inventory_2_outlined, size: AppTheme.sp20),
                       const SizedBox(width: 8),
                       Text(
                         'My Listings (${_listings.length})',
@@ -153,17 +154,17 @@ class _UserCenterPageState extends State<UserCenterPage> {
                         child: Column(
                           children: [
                             Icon(Icons.inbox_outlined,
-                                size: 48, color: Colors.grey[400]),
+                                size: 48, color: AppTheme.textSecondary),
                             const SizedBox(height: 8),
                             Text(
                               'No listings yet',
-                              style: TextStyle(color: Colors.grey[500]),
+                              style: TextStyle(color: AppTheme.textSecondary),
                             ),
                             const SizedBox(height: 4),
                             Text(
                               'Use the chat to post your first item!',
                               style: TextStyle(
-                                  color: Colors.grey[400], fontSize: 12),
+                                  color: AppTheme.textSecondary, fontSize: 12),
                             ),
                           ],
                         ),
@@ -174,7 +175,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
                           margin: const EdgeInsets.only(bottom: 8),
                           child: ListTile(
                             leading: const Icon(Icons.shopping_bag_outlined,
-                                color: Color(0xFF6366F1)),
+                                color: AppTheme.primary),
                             title: Text(item['title'] ?? 'Untitled'),
                             subtitle: Text(
                               '${item['category']} · ${item['brand']} · ¥${item['suggested_price_cny']}',
@@ -184,7 +185,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
                                 item['status'] ?? 'active',
                                 style: const TextStyle(fontSize: 11),
                               ),
-                              backgroundColor: Colors.green[50],
+                              backgroundColor: AppTheme.success.withOpacity(0.1),
                             ),
                           ),
                         )),

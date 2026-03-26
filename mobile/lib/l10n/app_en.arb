@@ -1,55 +1,71 @@
 {
   "@@locale": "en",
-  "appTitle": "Campus Marketplace",
-  "homeTab": "Home",
   "aiAssistantTab": "AI Assistant",
-  "messagesTab": "Messages",
-  "publishTab": "Publish",
-  "myListingsTab": "My Listings",
-  "profileTab": "Profile",
-  "searchHint": "Search products...",
+  "aiError": "Sorry, something went wrong. Please try again.",
+  "aiGreeting": "Hello! I'm your campus secondhand trading assistant. How can I help you today?",
+  "aiWillAutoRecognize": "AI will auto-recognize item info",
   "allCategories": "All",
-  "electronics": "Electronics",
-  "books": "Books",
-  "digitalAccessories": "Digital Accessories",
-  "dailyGoods": "Daily Goods",
-  "clothingShoes": "Clothing & Shoes",
-  "other": "Other",
-  "noProducts": "No products available",
-  "retry": "Retry",
-  "login": "Login",
-  "register": "Register",
-  "username": "Username",
-  "password": "Password",
-  "confirmPassword": "Confirm Password",
-  "loginSuccess": "Login successful",
-  "registerSuccess": "Registration successful",
-  "loginError": "Login error",
-  "registerError": "Registration error",
-  "sessionExpired": "Session expired. Please login again.",
-  "logout": "Logout",
-  "logoutSuccess": "Logout successful",
-  "createListing": "Create Listing",
-  "title": "Title",
-  "category": "Category",
+  "appTitle": "Campus Marketplace",
   "brand": "Brand",
-  "condition": "Condition",
-  "price": "Price",
-  "description": "Description",
-  "defects": "Defects",
-  "submit": "Submit",
+  "brandLabel": "Brand",
+  "books": "Books",
+  "buyNow": "Buy Now",
   "cancel": "Cancel",
-  "createSuccess": "Listing created successfully",
+  "category": "Category",
+  "categoryLabel": "Category",
+  "chat": "Chat",
+  "chatWithSelf": "Cannot chat with yourself",
+  "clothingShoes": "Clothing & Shoes",
+  "comingSoon": "Coming soon...",
+  "condition": "Condition",
+  "conditionLabel": "Condition",
+  "confirmPassword": "Confirm Password",
+  "connectionFailedRetry": "Connection failed, please try again later",
+  "connectionRequestSent": "Connection request sent, waiting for acceptance",
+  "contactSeller": "Contact Seller",
+  "counterOfferAmount": "Counter offer amount",
+  "counterOfferBySeller": "Seller counter-offered ¥{amount}",
+  "@counterOfferBySeller": {
+    "placeholders": {
+      "amount": {
+        "type": "String"
+      }
+    }
+  },
   "createError": "Failed to create listing",
-  "titleRequired": "Title is required",
-  "myListings": "My Listings",
-  "active": "Active",
-  "sold": "Sold",
-  "deleted": "Deleted",
-  "edit": "Edit",
+  "createListing": "Create Listing",
+  "createSuccess": "Listing created successfully",
+  "dailyGoods": "Daily Goods",
+  "defects": "Defects",
+  "defectsLabel": "Defects",
   "delete": "Delete",
   "deleteConfirm": "Are you sure you want to delete this listing?",
-  "profile": "Profile",
+  "description": "Description",
+  "descriptionLabel": "Description",
+  "digitalAccessories": "Digital Accessories",
+  "edit": "Edit",
+  "electronics": "Electronics",
+  "enterValidCounterAmount": "Please enter a valid counter offer amount",
+  "error": "Error",
+  "fromGallery": "From gallery",
+  "homeTab": "Home",
+  "language": "Language",
+  "listingDetail": "Listing Details",
+  "loadFailed": "Load failed: {error}",
+  "@loadFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "loading": "Loading...",
+  "login": "Login",
+  "loginError": "Login error",
+  "loginSuccess": "Login successful",
+  "logout": "Logout",
+  "logoutConfirm": "Are you sure you want to logout?",
+  "logoutSuccess": "Logout successful",
   "memberSince": "Member since {date}",
   "@memberSince": {
     "placeholders": {
@@ -58,34 +74,50 @@
       }
     }
   },
-  "totalListings": "{count} listings",
-  "@totalListings": {
+  "messagesTab": "Messages",
+  "myFavorites": "My Favorites",
+  "myFavoritesSubtitle": "Your favorite items",
+  "myListings": "My Listings",
+  "myListingsMenu": "View and manage your listings",
+  "myListingsTab": "My Listings",
+  "myOrders": "My Orders",
+  "myOrdersSubtitle": "View purchase history",
+  "negotiationDetails": "Negotiation details",
+  "negotiationExpired": "Negotiation expired and cancelled",
+  "negotiationRejected": "Negotiation rejected",
+  "noProducts": "No products available",
+  "notFound": "Not found",
+  "operationFailed": "Operation failed: {error}",
+  "@operationFailed": {
     "placeholders": {
-      "count": {
-        "type": "int"
+      "error": {
+        "type": "String"
       }
     }
   },
-  "chat": "Chat",
-  "typeMessage": "Type a message...",
-  "send": "Send",
-  "aiGreeting": "Hello! I'm your campus secondhand trading assistant. How can I help you today?",
-  "aiError": "Sorry, something went wrong. Please try again.",
-  "listingDetail": "Listing Details",
-  "contactSeller": "Contact Seller",
-  "buyNow": "Buy Now",
-  "priceLabel": "Price",
-  "conditionLabel": "Condition",
-  "categoryLabel": "Category",
-  "brandLabel": "Brand",
-  "defectsLabel": "Defects",
-  "descriptionLabel": "Description",
+  "other": "Other",
   "owner": "Owner",
-  "status": "Status",
-  "createdAt": "Created at",
-  "notFound": "Not found",
-  "error": "Error",
-  "loading": "Loading...",
+  "pendingNegotiation": "Pending negotiation",
+  "password": "Password",
+  "price": "Price",
+  "priceLabel": "Price",
+  "profile": "Profile",
+  "profileTab": "Profile",
+  "publishTab": "Publish",
+  "purchaseFailed": "Purchase failed, please try again",
+  "purchaseSuccess": "Purchase successful! Order created",
+  "recognitionFailed": "Recognition failed: {error}",
+  "@recognitionFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "recognitionSuccess": "Recognition successful, info auto-filled",
+  "register": "Register",
+  "registerError": "Registration error",
+  "registerSuccess": "Registration successful",
   "requestFailed": "Request failed: {code}",
   "@requestFailed": {
     "placeholders": {
@@ -94,14 +126,32 @@
       }
     }
   },
-  "language": "Language",
-  "logoutConfirm": "Are you sure you want to logout?",
-  "myListingsMenu": "View and manage your listings",
-  "myOrders": "My Orders",
-  "myOrdersSubtitle": "View purchase history",
-  "myFavorites": "My Favorites",
-  "myFavoritesSubtitle": "Your favorite items",
+  "retry": "Retry",
+  "searchHint": "Search products...",
+  "sellerAcceptedDealComplete": "Seller accepted, deal complete",
+  "sellerCounterOffered": "Seller counter-offered",
+  "send": "Send",
+  "sessionExpired": "Session expired. Please login again.",
   "settings": "Settings",
   "settingsSubtitle": "App settings",
-  "comingSoon": "Coming soon..."
+  "sold": "Sold",
+  "status": "Status",
+  "submit": "Submit",
+  "takePhoto": "Take photo",
+  "tapCameraIconHint": "Tap camera icon to take photo or select image",
+  "title": "Title",
+  "titleRequired": "Title is required",
+  "totalListings": "{count} listings",
+  "@totalListings": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "tradeProtection": "Trade protection",
+  "typeMessage": "Type a message...",
+  "uploadFromCamera": "Upload from camera",
+  "uploadFromGallery": "Upload from gallery",
+  "username": "Username"
 }

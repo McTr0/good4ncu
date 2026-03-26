@@ -408,6 +408,8 @@ class _ChatPageState extends State<ChatPage> {
   String? _selectedImageBase64;
   String? _selectedAudioBase64;
   bool _isRecording = false;
+  int _recordingSeconds = 0;
+  Timer? _recordingTimer;
   bool _isStreaming = false;
   String? _currentUserId;
 
@@ -492,6 +494,7 @@ class _ChatPageState extends State<ChatPage> {
     _controller.dispose();
     _sseService.dispose();
     _wsSubscription?.cancel();
+    _recordingTimer?.cancel();
     super.dispose();
   }
 
@@ -511,6 +514,7 @@ class _ChatPageState extends State<ChatPage> {
 
   Future<void> _toggleRecording() async {
     if (_isRecording) {
+      _recordingTimer?.cancel();
       final path = await _audioRecorder.stop();
       if (path != null) {
         final bytes = await File(path).readAsBytes();
@@ -519,13 +523,26 @@ class _ChatPageState extends State<ChatPage> {
           _selectedAudioBase64 = base64Encode(bytes);
         });
         _sendMessage();
+      } else {
+        setState(() => _isRecording = false);
       }
     } else {
       if (await _audioRecorder.hasPermission()) {
         final directory = await getTemporaryDirectory();
         final path = '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.ogg';
-        await _audioRecorder.start(const RecordConfig(), path: path);
-        setState(() => _isRecording = true);
+        await _audioRecorder.start(const RecordConfig(encoder: AudioEncoder.opus), path: path);
+        setState(() {
+          _isRecording = true;
+          _recordingSeconds = 0;
+        });
+        _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          if (mounted) {
+            setState(() => _recordingSeconds++);
+            if (_recordingSeconds >= 60) {
+              _toggleRecording(); // 自动停止
+            }
+          }
+        });
       }
     }
   }
@@ -712,7 +729,23 @@ class _ChatPageState extends State<ChatPage> {
               children: [
                 const Icon(Icons.circle, color: Colors.red, size: 12),
                 const SizedBox(width: 8),
-                Text('Recording...', style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold)),
+                Text(
+                  '录音中 ${_recordingSeconds}s / 60s',
+                  style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(width: 8),
+                // Simple waveform animation
+                Row(
+                  children: List.generate(5, (i) => Container(
+                    width: 3,
+                    height: 8 + (i % 2 == 0 ? 4 : 0),
+                    margin: const EdgeInsets.symmetric(horizontal: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.red.shade300,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  )),
+                ),
               ],
             ),
           ),
