@@ -11,10 +11,7 @@
 //! - Rate limit rejections
 //! - LLM call counts and errors
 
-use prometheus::{
-    Counter, CounterVec, HistogramOpts, HistogramVec, Opts, Registry,
-    TextEncoder,
-};
+use prometheus::{Counter, CounterVec, HistogramOpts, HistogramVec, Opts, Registry, TextEncoder};
 use std::time::Duration;
 
 /// Centralized metrics registry for the application.
@@ -45,7 +42,10 @@ impl MetricsService {
         let registry = Registry::new();
 
         let http_requests_total = CounterVec::new(
-            Opts::new("http_requests_total", "Total HTTP requests by method, path, status"),
+            Opts::new(
+                "http_requests_total",
+                "Total HTTP requests by method, path, status",
+            ),
             &["method", "path", "status"],
         )
         .expect("metric definition is valid");
@@ -54,20 +54,19 @@ impl MetricsService {
                 "http_request_duration_seconds",
                 "HTTP request latency distribution",
             )
-            .buckets(vec![0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5]),
+            .buckets(vec![
+                0.001, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5,
+            ]),
             &["method", "path"],
         )
         .expect("metric definition is valid");
 
-        let orders_created_total =
-            Counter::new("orders_created_total", "Total orders created")
-                .expect("metric definition is valid");
-        let orders_paid_total =
-            Counter::new("orders_paid_total", "Total orders marked as paid")
-                .expect("metric definition is valid");
-        let orders_shipped_total =
-            Counter::new("orders_shipped_total", "Total orders shipped")
-                .expect("metric definition is valid");
+        let orders_created_total = Counter::new("orders_created_total", "Total orders created")
+            .expect("metric definition is valid");
+        let orders_paid_total = Counter::new("orders_paid_total", "Total orders marked as paid")
+            .expect("metric definition is valid");
+        let orders_shipped_total = Counter::new("orders_shipped_total", "Total orders shipped")
+            .expect("metric definition is valid");
         let orders_completed_total =
             Counter::new("orders_completed_total", "Total orders completed")
                 .expect("metric definition is valid");
@@ -82,12 +81,10 @@ impl MetricsService {
             "Total requests rejected by rate limiter",
         )
         .expect("metric definition is valid");
-        let llm_calls_total =
-            Counter::new("llm_calls_total", "Total LLM API calls made")
-                .expect("metric definition is valid");
-        let llm_errors_total =
-            Counter::new("llm_errors_total", "Total LLM API errors")
-                .expect("metric definition is valid");
+        let llm_calls_total = Counter::new("llm_calls_total", "Total LLM API calls made")
+            .expect("metric definition is valid");
+        let llm_errors_total = Counter::new("llm_errors_total", "Total LLM API errors")
+            .expect("metric definition is valid");
 
         // Register all metrics
         registry

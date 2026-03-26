@@ -1,7 +1,7 @@
 //! Core trait for distributed rate limiters.
 
-use async_trait::async_trait;
 use crate::middleware::rate_limit::RateLimitResult;
+use async_trait::async_trait;
 
 /// A rate limiter that can be used across a distributed system.
 /// Implementations can be in-memory (single node) or Redis-backed (multi-node).

@@ -1,6 +1,6 @@
 use crate::agents::router::IntentRouter;
-use crate::llm::{LlmProvider, MarketplaceAgent};
 use crate::api::metrics::MetricsService;
+use crate::llm::{LlmProvider, MarketplaceAgent};
 use crate::services::chat::ChatService;
 use crate::services::notification::NotificationService;
 use crate::services::BusinessEvent;
@@ -82,7 +82,11 @@ pub async fn rate_limit_middleware(
         .copied()
         .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
 
-    if !state.rate_limit.check_rate_limit(&peer_addr.to_string()).await {
+    if !state
+        .rate_limit
+        .check_rate_limit(&peer_addr.to_string())
+        .await
+    {
         state.metrics.record_rate_limit_rejected();
         return ApiError::RateLimitExceeded.into_response();
     }

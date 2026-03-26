@@ -84,17 +84,14 @@ async fn store_refresh_token(
     ttl_secs: u64,
 ) -> anyhow::Result<()> {
     let token_hash = hash_token(token);
-    let expires_at = chrono::Utc::now()
-        + chrono::Duration::seconds(ttl_secs as i64);
+    let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
 
-    sqlx::query(
-        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
-    )
-    .bind(user_id)
-    .bind(&token_hash)
-    .bind(expires_at)
-    .execute(db)
-    .await?;
+    sqlx::query("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)")
+        .bind(user_id)
+        .bind(&token_hash)
+        .bind(expires_at)
+        .execute(db)
+        .await?;
 
     Ok(())
 }
@@ -158,20 +155,24 @@ async fn rotate_refresh_token(
 
 /// Revoke all refresh tokens for a user
 async fn revoke_all_refresh_tokens(db: &sqlx::PgPool, user_id: &str) -> anyhow::Result<()> {
-    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
-        .bind(user_id)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
 /// Revoke a specific refresh token
 async fn revoke_refresh_token(db: &sqlx::PgPool, token: &str) -> anyhow::Result<()> {
     let token_hash = hash_token(token);
-    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL")
-        .bind(&token_hash)
-        .execute(db)
-        .await?;
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL",
+    )
+    .bind(&token_hash)
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -255,11 +256,14 @@ pub async fn register(
 
     match result {
         Ok(_) => {
-            let token = generate_access_token(&user_id, "user", &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
+            let token =
+                generate_access_token(&user_id, "user", &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
             let refresh = generate_refresh_token();
             store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
                 .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e)))?;
+                .map_err(|e| {
+                    ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e))
+                })?;
             Ok(Json(AuthResponse {
                 token,
                 refresh_token: refresh,
@@ -339,11 +343,14 @@ pub async fn login(
 
     match verify_result {
         Ok(true) => {
-            let token = generate_access_token(&user_id, &role, &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
+            let token =
+                generate_access_token(&user_id, &role, &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
             let refresh = generate_refresh_token();
             store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
                 .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e)))?;
+                .map_err(|e| {
+                    ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e))
+                })?;
             Ok(Json(AuthResponse {
                 token,
                 refresh_token: refresh,
@@ -369,16 +376,13 @@ pub async fn refresh_token(
     State(state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<RefreshResponse>, ApiError> {
-    let (new_access, new_refresh) = rotate_refresh_token(
-        &state.db,
-        &payload.refresh_token,
-        &state.jwt_secret,
-    )
-    .await
-    .map_err(|e| {
-        tracing::warn!(err = %e, "Refresh token rotation failed");
-        ApiError::Unauthorized
-    })?;
+    let (new_access, new_refresh) =
+        rotate_refresh_token(&state.db, &payload.refresh_token, &state.jwt_secret)
+            .await
+            .map_err(|e| {
+                tracing::warn!(err = %e, "Refresh token rotation failed");
+                ApiError::Unauthorized
+            })?;
 
     Ok(Json(RefreshResponse {
         token: new_access,
@@ -576,7 +580,12 @@ mod tests {
 
     #[test]
     fn test_generate_token_produces_valid_jwt() {
-        let token = generate_access_token("user-123", "user", "secret123456789012345678901234567890", 3600);
+        let token = generate_access_token(
+            "user-123",
+            "user",
+            "secret123456789012345678901234567890",
+            3600,
+        );
         // A valid JWT has three parts separated by dots
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);

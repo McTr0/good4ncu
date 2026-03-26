@@ -13,7 +13,7 @@ pub mod redis_backend;
 pub mod traits;
 
 // Re-export for backward compatibility with code that imported from `middleware::rate_limit`
-pub use local::{RateLimitStateHandle, is_whitelisted};
+pub use local::{is_whitelisted, RateLimitStateHandle};
 
 /// Factory for creating [`RateLimiter`] instances based on configuration.
 #[allow(dead_code)]
@@ -41,7 +41,10 @@ impl RateLimiterFactory {
     /// Returns an error if the `redis` feature is not enabled or if
     /// the Redis URL is not set.
     #[cfg(feature = "redis")]
-    pub async fn build_redis(&self, redis_url: &str) -> Result<redis_backend::RedisRateLimiter, redis::RedisError> {
+    pub async fn build_redis(
+        &self,
+        redis_url: &str,
+    ) -> Result<redis_backend::RedisRateLimiter, redis::RedisError> {
         redis_backend::RedisRateLimiter::new(redis_url, self.max_requests, self.window_secs).await
     }
 
