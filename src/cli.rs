@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn test_cli_args_parsing() {
-        // Test admin promote parsing
+        // Test admin promote parsing (cargo run -- admin promote testuser)
         let args = vec![
             "cargo".to_string(),
             "run".to_string(),
@@ -69,8 +69,8 @@ mod tests {
             "promote".to_string(),
             "testuser".to_string(),
         ];
-        assert_eq!(args[1], "admin");
-        assert_eq!(args[2], "promote");
-        assert_eq!(args[3], "testuser");
+        assert_eq!(args[2], "admin");
+        assert_eq!(args[3], "promote");
+        assert_eq!(args[4], "testuser");
     }
 }
