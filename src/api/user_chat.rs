@@ -299,7 +299,7 @@ pub async fn connect_accept(
         .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
-        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&body.connection_id)
     .fetch_optional(&state.db)
@@ -325,7 +325,7 @@ pub async fn connect_accept(
     let established_at_str = established_at.to_rfc3339();
 
     sqlx::query(
-        "UPDATE chat_connections SET status = 'connected', established_at = $1 WHERE id = $2",
+        "UPDATE chat_connections SET status = 'connected', established_at = $1 WHERE id = $2::uuid",
     )
     .bind(established_at)
     .bind(&body.connection_id)
@@ -358,7 +358,7 @@ pub async fn connect_reject(
         .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
-        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&body.connection_id)
     .fetch_optional(&state.db)
@@ -379,7 +379,7 @@ pub async fn connect_reject(
         )));
     }
 
-    sqlx::query("UPDATE chat_connections SET status = 'rejected' WHERE id = $1")
+    sqlx::query("UPDATE chat_connections SET status = 'rejected' WHERE id = $1::uuid")
         .bind(&body.connection_id)
         .execute(&state.db)
         .await
@@ -441,7 +441,10 @@ pub async fn list_connections(
                 row.try_get("established_at").ok().flatten();
             let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
             ConnectionEntry {
-                id: row.try_get::<uuid::Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
+                id: row
+                    .try_get::<uuid::Uuid, _>("id")
+                    .map(|u| u.to_string())
+                    .unwrap_or_default(),
                 other_user_id: other_user_id.clone(),
                 other_username: usernames.get(&other_user_id).cloned(),
                 status: row.get("status"),
@@ -468,7 +471,7 @@ pub async fn get_connection_messages(
     let offset = params.offset.unwrap_or(0).max(0);
 
     let connection = sqlx::query(
-        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&connection_id)
     .fetch_optional(&state.db)
@@ -530,7 +533,11 @@ pub async fn get_connection_messages(
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
             .into_iter()
-            .map(|row| (row.get::<String, _>("id"), row.get::<String, _>("username")))
+            .map(|row| {
+                let id: String = row.get("id");
+                let username: String = row.get("username");
+                (id, username)
+            })
             .collect()
     };
 
@@ -586,7 +593,7 @@ pub async fn send_connection_message(
     }
 
     let connection = sqlx::query(
-        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&connection_id)
     .fetch_optional(&state.db)
@@ -619,7 +626,7 @@ pub async fn send_connection_message(
 
     let row = sqlx::query(
         r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, read_at, read_by)
-           VALUES ($1, 'direct', $2, $3, false, $4, $5, $6, $7, $2)
+           VALUES ($1::uuid, 'direct', $2, $3, false, $4, $5, $6, $7, $2)
            RETURNING id, timestamp"#,
     )
     .bind(&connection_id)
@@ -636,14 +643,13 @@ pub async fn send_connection_message(
     let message_id: i64 = row.get("id");
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
 
-    let sender_username: Option<String> =
-        sqlx::query("SELECT username FROM users WHERE id = $1")
-            .bind(&sender_id)
-            .fetch_optional(&state.db)
-            .await
-            .ok()
-            .flatten()
-            .map(|row| row.get("username"));
+    let sender_username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
+        .bind(&sender_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|row| row.get("username"));
 
     let ws_event = WsNewMessageEvent {
         event: "new_message".to_string(),

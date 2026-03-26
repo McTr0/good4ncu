@@ -50,19 +50,19 @@ pub async fn get_similar_listings(
 ) -> Result<Json<RecommendationResponse>, ApiError> {
     let limit = params.limit.unwrap_or(10).clamp(1, 20);
 
-    let source_embedding: Option<Vec<f32>> = sqlx::query_scalar(
-        "SELECT embedding FROM documents WHERE listing_id = $1",
-    )
-    .bind(&params.listing_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let source_embedding: Option<Vec<f32>> =
+        sqlx::query_scalar("SELECT embedding FROM documents WHERE listing_id = $1")
+            .bind(&params.listing_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let source_vec = match source_embedding {
         Some(v) => v,
         None => {
             // No embedding for this listing — return newest active as fallback
-            return get_recommendation_feed(State(state), Query(FeedQuery { limit: Some(limit) })).await;
+            return get_recommendation_feed(State(state), Query(FeedQuery { limit: Some(limit) }))
+                .await;
         }
     };
 
@@ -89,8 +89,7 @@ pub async fn get_similar_listings(
         .iter()
         .map(|row| {
             let defects_text: String = row.get("defects");
-            let defects: Vec<String> =
-                serde_json::from_str(&defects_text).unwrap_or_default();
+            let defects: Vec<String> = serde_json::from_str(&defects_text).unwrap_or_default();
             let defect_hint = defects.first().cloned();
             RecommendationItem {
                 id: row.get("id"),
@@ -137,8 +136,7 @@ pub async fn get_recommendation_feed(
         .iter()
         .map(|row| {
             let defects_text: String = row.get("defects");
-            let defects: Vec<String> =
-                serde_json::from_str(&defects_text).unwrap_or_default();
+            let defects: Vec<String> = serde_json::from_str(&defects_text).unwrap_or_default();
             let defect_hint = defects.first().cloned();
             RecommendationItem {
                 id: row.get("id"),

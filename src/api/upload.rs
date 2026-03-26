@@ -8,11 +8,7 @@
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
+use axum::{extract::State, http::HeaderMap, Json};
 use base64::Engine;
 use hmac::{Hmac, Mac};
 use reqwest::Client;
@@ -38,10 +34,9 @@ pub async fn get_upload_token(
         .oss_access_key_id
         .as_ref()
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_ID not configured")))?;
-    let access_key_secret = state
-        .oss_access_key_secret
-        .as_ref()
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_SECRET not configured")))?;
+    let access_key_secret = state.oss_access_key_secret.as_ref().ok_or_else(|| {
+        ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_SECRET not configured"))
+    })?;
 
     let sts_credentials = assume_role_sts(
         access_key_id,
@@ -105,9 +100,8 @@ async fn assume_role_sts(
     let string_to_sign = format!("GET&%2F&{}", percent_encode(&query_string));
 
     // HMAC-SHA1 signature.
-    let mut mac =
-        HmacSha1::new_from_slice(format!("{}&", access_key_secret).as_bytes())
-            .map_err(|_| anyhow::anyhow!("HMAC init error"))?;
+    let mut mac = HmacSha1::new_from_slice(format!("{}&", access_key_secret).as_bytes())
+        .map_err(|_| anyhow::anyhow!("HMAC init error"))?;
     mac.update(string_to_sign.as_bytes());
     let signature = base64::engine::general_purpose::STANDARD.encode(mac.finalize().into_bytes());
 
@@ -232,7 +226,10 @@ mod tests {
     fn test_xml_tag_extraction() {
         let xml = r#"<AssumeRoleResponse><Credentials><AccessKeyId>STS.xxx</AccessKeyId><AccessKeySecret>xxx</AccessKeySecret><SecurityToken>token</SecurityToken><Expiration>2026-03-26T00:00:00Z</Expiration></Credentials></AssumeRoleResponse>"#;
         assert_eq!(extract_xml_tag(xml, "AccessKeyId").unwrap(), "STS.xxx");
-        assert_eq!(extract_xml_tag(xml, "Expiration").unwrap(), "2026-03-26T00:00:00Z");
+        assert_eq!(
+            extract_xml_tag(xml, "Expiration").unwrap(),
+            "2026-03-26T00:00:00Z"
+        );
         assert_eq!(extract_xml_tag(xml, "SecurityToken").unwrap(), "token");
     }
 

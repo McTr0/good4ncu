@@ -46,9 +46,18 @@ impl fmt::Debug for AppConfig {
             .field("blocked_keywords", &self.blocked_keywords)
             .field("oss_endpoint", &self.oss_endpoint)
             .field("oss_bucket", &self.oss_bucket)
-            .field("oss_role_arn", &self.oss_role_arn.as_ref().map(|_| "[REDACTED]"))
-            .field("oss_access_key_id", &self.oss_access_key_id.as_ref().map(|_| "[REDACTED]"))
-            .field("oss_access_key_secret", &self.oss_access_key_secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "oss_role_arn",
+                &self.oss_role_arn.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "oss_access_key_id",
+                &self.oss_access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "oss_access_key_secret",
+                &self.oss_access_key_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -112,8 +121,7 @@ impl AppConfig {
                 .unwrap_or_default(),
             oss_endpoint: std::env::var("OSS_ENDPOINT")
                 .unwrap_or_else(|_| "https://oss-cn-beijing.aliyuncs.com".into()),
-            oss_bucket: std::env::var("OSS_BUCKET")
-                .unwrap_or_else(|_| "good4ncu".into()),
+            oss_bucket: std::env::var("OSS_BUCKET").unwrap_or_else(|_| "good4ncu".into()),
             oss_role_arn: std::env::var("OSS_ROLE_ARN").ok(),
             oss_access_key_id: std::env::var("OSS_ACCESS_KEY_ID").ok(),
             oss_access_key_secret: std::env::var("OSS_ACCESS_KEY_SECRET").ok(),

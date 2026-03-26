@@ -1044,6 +1044,7 @@ dependencies = [
  "hmac",
  "inquire",
  "jsonwebtoken",
+ "lazy_static",
  "moka",
  "pgvector",
  "rand 0.10.0",
