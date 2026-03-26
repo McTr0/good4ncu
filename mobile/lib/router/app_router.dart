@@ -11,6 +11,7 @@ import '../pages/chat_page.dart';
 import '../pages/conversation_list_page.dart';
 import '../pages/user_chat_page.dart';
 import '../pages/login_page.dart';
+import '../pages/admin_page.dart';
 import '../pages/order_detail_page.dart';
 import '../pages/trust_page.dart';
 
@@ -58,6 +59,10 @@ final GoRouter appRouter = GoRouter(
         final id = state.pathParameters['id']!;
         return NoTransitionPage(child: OrderDetailPage(orderId: id));
       },
+    ),
+    GoRoute(
+      path: '/admin',
+      builder: (context, state) => const AdminPage(),
     ),
     ShellRoute(
       builder: (context, state, child) => _ShellScaffold(child: child),

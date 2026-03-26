@@ -197,6 +197,12 @@ class _ProfilePageState extends State<ProfilePage> {
             },
           ),
           _MenuCard(
+            icon: Icons.admin_panel_settings_outlined,
+            title: 'Admin Console',
+            subtitle: 'System overview & management',
+            onTap: () => context.push('/admin'),
+          ),
+          _MenuCard(
             icon: Icons.settings_outlined,
             title: l.settings,
             subtitle: l.settingsSubtitle,

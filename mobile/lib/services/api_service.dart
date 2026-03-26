@@ -336,6 +336,55 @@ class ApiService {
   }
 
   // ---------------------------------------------------------------------------
+  // Admin endpoints (role = 'admin' required)
+  // ---------------------------------------------------------------------------
+
+  Future<Map<String, dynamic>> getAdminStats() async {
+    final headers = await _authHeaders();
+    final response = await http.get(
+      Uri.parse('$baseUrl/api/admin/stats'),
+      headers: headers,
+    );
+    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> getAdminUsers({String? q, int limit = 20, int offset = 0}) async {
+    final headers = await _authHeaders();
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (q != null && q.isNotEmpty) queryParams['q'] = q;
+    final uri = Uri.parse('$baseUrl/api/admin/users').replace(queryParameters: queryParams);
+    final response = await http.get(uri, headers: headers);
+    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> getAdminListings({String? status, int limit = 50, int offset = 0}) async {
+    final headers = await _authHeaders();
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (status != null) queryParams['status'] = status;
+    final uri = Uri.parse('$baseUrl/api/admin/listings').replace(queryParameters: queryParams);
+    final response = await http.get(uri, headers: headers);
+    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> getAdminOrders({String? status, int limit = 50, int offset = 0}) async {
+    final headers = await _authHeaders();
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (status != null) queryParams['status'] = status;
+    final uri = Uri.parse('$baseUrl/api/admin/orders').replace(queryParameters: queryParams);
+    final response = await http.get(uri, headers: headers);
+    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+  }
+
+  // ---------------------------------------------------------------------------
   // Stats
   // ---------------------------------------------------------------------------
 
