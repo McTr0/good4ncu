@@ -28,51 +28,6 @@ use crate::api::AppState;
 // ---------------------------------------------------------------------------
 // Schema initialization
 // ---------------------------------------------------------------------------
-
-/// Initialize the user_chat schema: creates chat_connections table and
-/// adds read tracking columns to chat_messages. Safe to call multiple times.
-pub async fn init_chat_schema(pool: &sqlx::PgPool) -> anyhow::Result<()> {
-    // chat_connections table for tracking peer-to-peer chat relationships
-    sqlx::query(
-        r#"CREATE TABLE IF NOT EXISTS chat_connections (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            requester_id TEXT NOT NULL REFERENCES users(id),
-            receiver_id TEXT NOT NULL REFERENCES users(id),
-            status TEXT NOT NULL DEFAULT 'pending',
-            established_at TIMESTAMPTZ,
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            UNIQUE(requester_id, receiver_id)
-        )"#,
-    )
-    .execute(pool)
-    .await?;
-
-    // Index for fast lookup of connections by user
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_chat_connections_requester ON chat_connections(requester_id)",
-    )
-    .execute(pool)
-    .await?;
-    sqlx::query(
-        "CREATE INDEX IF NOT EXISTS idx_chat_connections_receiver ON chat_connections(receiver_id)",
-    )
-    .execute(pool)
-    .await?;
-
-    // Add read tracking columns to chat_messages if not present
-    sqlx::query("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS read_at TIMESTAMPTZ")
-        .execute(pool)
-        .await
-        .ok();
-    sqlx::query("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS read_by TEXT")
-        .execute(pool)
-        .await
-        .ok();
-
-    Ok(())
-}
-
-// ---------------------------------------------------------------------------
 // Request / Response types
 // ---------------------------------------------------------------------------
 
@@ -279,7 +234,7 @@ pub async fn connect_request(
         listing_id: body.listing_id,
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    let _ = ws::broadcast_to_user(&body.receiver_id, &payload);
+    ws::broadcast_to_user(&body.receiver_id, &payload);
 
     Ok(Json(ConnectRequestResponse {
         connection_id,
@@ -339,8 +294,8 @@ pub async fn connect_accept(
         established_at: established_at_str.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    let _ = ws::broadcast_to_user(&requester_id, &payload);
-    let _ = ws::broadcast_to_user(&receiver_id, &payload);
+    ws::broadcast_to_user(&requester_id, &payload);
+    ws::broadcast_to_user(&receiver_id, &payload);
 
     Ok(Json(ConnectAcceptResponse {
         status: "connected".to_string(),
@@ -635,7 +590,7 @@ pub async fn send_connection_message(
     .bind(&body.content)
     .bind(&body.image_base64)
     .bind(&body.audio_base64)
-    .bind(&read_at)
+    .bind(read_at)
     .fetch_one(&state.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
@@ -665,7 +620,7 @@ pub async fn send_connection_message(
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
     if let Some(ref recv) = receiver {
-        let _ = ws::broadcast_to_user(recv, &payload);
+        ws::broadcast_to_user(recv, &payload);
     }
 
     Ok(Json(SendMessageResponse {
@@ -719,8 +674,8 @@ pub async fn mark_message_read(
         return Err(ApiError::Forbidden);
     }
 
-    if current_read_at.is_some() {
-        let read_at_str = current_read_at.unwrap().to_rfc3339();
+    if let Some(read_at) = current_read_at {
+        let read_at_str = read_at.to_rfc3339();
         return Ok(Json(MarkReadResponse {
             message_id,
             read_at: read_at_str,
@@ -745,7 +700,7 @@ pub async fn mark_message_read(
         read_by: user_id.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    let _ = ws::broadcast_to_user(&sender, &payload);
+    ws::broadcast_to_user(&sender, &payload);
 
     Ok(Json(MarkReadResponse {
         message_id,

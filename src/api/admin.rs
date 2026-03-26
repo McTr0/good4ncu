@@ -148,12 +148,6 @@ pub struct UserInfo {
     pub listing_count: i64,
 }
 
-impl UserInfo {
-    pub fn joined_at(&self) -> String {
-        self.created_at.to_rfc3339()
-    }
-}
-
 /// GET /api/admin/listings - list all listings (requires admin role)
 pub async fn get_admin_listings(
     State(state): State<AppState>,
