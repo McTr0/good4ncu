@@ -11,7 +11,16 @@ pub struct RateLimitState {
     refill_duration: Duration,
 }
 
-const WHITELISTED_PATHS: &[&str] = &["/api/health", "/api/stats", "/api/categories"];
+const WHITELISTED_PATHS: &[&str] = &[
+    "/api/health",
+    "/api/stats",
+    "/api/categories",
+    "/api/chat/connections",
+    "/api/chat/conversations",
+    "/api/chat/messages",
+];
+const DEFAULT_MAX_REQUESTS: u64 = 100; // per window
+const DEFAULT_WINDOW_SECS: u64 = 60;
 
 impl RateLimitState {
     fn new(max_requests: u64, window_secs: u64) -> Self {
@@ -72,7 +81,7 @@ impl RateLimitStateHandle {
 }
 
 pub fn make_rate_limit_state() -> RateLimitStateHandle {
-    RateLimitStateHandle::new(20, 60)
+    RateLimitStateHandle::new(DEFAULT_MAX_REQUESTS, DEFAULT_WINDOW_SECS)
 }
 
 pub(crate) fn is_whitelisted(path: &str) -> bool {

@@ -243,19 +243,24 @@ pub async fn connect_request(
         return Err(ApiError::NotFound);
     }
 
-    let connection_id: String = sqlx::query(
-        r#"INSERT INTO chat_connections (requester_id, receiver_id, status)
-           VALUES ($1, $2, 'pending')
-           ON CONFLICT (requester_id, receiver_id)
-           DO UPDATE SET status = 'pending', established_at = NULL
-           RETURNING id"#,
-    )
-    .bind(&requester_id)
-    .bind(&body.receiver_id)
-    .fetch_one(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-    .get("id");
+    let connection_id: String = {
+        let row = sqlx::query(
+            r#"INSERT INTO chat_connections (requester_id, receiver_id, status)
+               VALUES ($1, $2, 'pending')
+               ON CONFLICT (requester_id, receiver_id)
+               DO UPDATE SET status = 'pending', established_at = NULL
+               RETURNING id"#,
+        )
+        .bind(&requester_id)
+        .bind(&body.receiver_id)
+        .fetch_one(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+        let uuid_val: uuid::Uuid = row
+            .try_get("id")
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+        uuid_val.to_string()
+    };
 
     let requester_username: Option<String> =
         sqlx::query("SELECT username FROM users WHERE id = $1")
@@ -274,7 +279,7 @@ pub async fn connect_request(
         listing_id: body.listing_id,
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    ws::broadcast_to_user(&body.receiver_id, &payload);
+    let _ = ws::broadcast_to_user(&body.receiver_id, &payload);
 
     Ok(Json(ConnectRequestResponse {
         connection_id,
@@ -334,8 +339,8 @@ pub async fn connect_accept(
         established_at: established_at_str.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    ws::broadcast_to_user(&requester_id, &payload);
-    ws::broadcast_to_user(&receiver_id, &payload);
+    let _ = ws::broadcast_to_user(&requester_id, &payload);
+    let _ = ws::broadcast_to_user(&receiver_id, &payload);
 
     Ok(Json(ConnectAcceptResponse {
         status: "connected".to_string(),
@@ -436,7 +441,7 @@ pub async fn list_connections(
                 row.try_get("established_at").ok().flatten();
             let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
             ConnectionEntry {
-                id: row.get("id"),
+                id: row.try_get::<uuid::Uuid, _>("id").map(|u| u.to_string()).unwrap_or_default(),
                 other_user_id: other_user_id.clone(),
                 other_username: usernames.get(&other_user_id).cloned(),
                 status: row.get("status"),
@@ -654,7 +659,7 @@ pub async fn send_connection_message(
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
     if let Some(ref recv) = receiver {
-        ws::broadcast_to_user(recv, &payload);
+        let _ = ws::broadcast_to_user(recv, &payload);
     }
 
     Ok(Json(SendMessageResponse {
@@ -734,7 +739,7 @@ pub async fn mark_message_read(
         read_by: user_id.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    ws::broadcast_to_user(&sender, &payload);
+    let _ = ws::broadcast_to_user(&sender, &payload);
 
     Ok(Json(MarkReadResponse {
         message_id,
