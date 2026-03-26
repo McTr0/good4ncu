@@ -71,7 +71,7 @@ jobs:
         uses: dtolnay/rust-action@stable
 
       - name: Run tests
-        run: cargo test --lib -- --nocapture
+        run: cargo test -- --nocapture
 
   build:
     name: Build Check
