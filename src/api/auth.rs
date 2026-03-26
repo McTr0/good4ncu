@@ -576,7 +576,7 @@ mod tests {
 
     #[test]
     fn test_generate_token_produces_valid_jwt() {
-        let token = generate_token("user-123", "user", "secret123456789012345678901234567890");
+        let token = generate_access_token("user-123", "user", "secret123456789012345678901234567890", 3600);
         // A valid JWT has three parts separated by dots
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
@@ -606,12 +606,14 @@ mod tests {
     fn test_auth_response_serialization() {
         let resp = AuthResponse {
             token: "jwt.token.here".to_string(),
+            refresh_token: "refresh.here".to_string(),
             user_id: "user-abc".to_string(),
             username: "alice".to_string(),
             message: "登录成功".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("jwt.token.here"));
+        assert!(json.contains("refresh.here"));
         assert!(json.contains("user-abc"));
         assert!(json.contains("alice"));
         assert!(json.contains("登录成功"));
@@ -640,7 +642,7 @@ mod tests {
 
     #[test]
     fn test_generate_token_with_empty_user_id() {
-        let token = generate_token("", "user", "secret123456789012345678901234567890");
+        let token = generate_access_token("", "user", "secret123456789012345678901234567890", 3600);
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
     }
@@ -648,7 +650,7 @@ mod tests {
     #[test]
     fn test_generate_token_verifies_correctly() {
         let secret = "secret123456789012345678901234567890";
-        let token = generate_token("test-user", "admin", secret);
+        let token = generate_access_token("test-user", "admin", secret, 3600);
         let extracted = extract_user_id_from_token(
             &{
                 let mut h = HeaderMap::new();
@@ -667,7 +669,7 @@ mod tests {
     #[test]
     fn test_generate_token_includes_role() {
         let secret = "secret123456789012345678901234567890";
-        let token = generate_token("test-user", "admin", secret);
+        let token = generate_access_token("test-user", "admin", secret, 3600);
         let (user_id, role) = extract_user_id_and_role_from_token_str(&token, secret).unwrap();
         assert_eq!(user_id, "test-user");
         assert_eq!(role, "admin");
