@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS inventory (
     category TEXT NOT NULL,
     brand TEXT NOT NULL,
     condition_score INTEGER NOT NULL CHECK (condition_score >= 1 AND condition_score <= 10),
-    suggested_price_cny INTEGER NOT NULL CHECK (suggested_price_cny >= 0),
+    suggested_price_cny BIGINT NOT NULL CHECK (suggested_price_cny >= 0),
     defects TEXT NOT NULL,
     description TEXT,
     owner_id TEXT NOT NULL,
@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS orders (
     listing_id TEXT NOT NULL,
     buyer_id TEXT NOT NULL,
     seller_id TEXT NOT NULL,
-    final_price INTEGER NOT NULL CHECK (final_price >= 0),
+    final_price BIGINT NOT NULL CHECK (final_price >= 0),
     status TEXT NOT NULL,
     cancellation_reason TEXT,
     paid_at TIMESTAMPTZ,
@@ -125,14 +125,14 @@ CREATE TABLE IF NOT EXISTS hitl_requests (
     listing_id TEXT NOT NULL,
     buyer_id TEXT NOT NULL,
     seller_id TEXT NOT NULL,
-    proposed_price INTEGER NOT NULL,
+    proposed_price BIGINT NOT NULL,
     reason TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'pending',
     -- pending: awaiting seller response
     -- approved: deal accepted
     -- rejected: seller declined
     -- countered: seller counter-offered with different price
-    counter_price INTEGER,
+    counter_price BIGINT,
     buyer_action TEXT,
     -- accepted: buyer accepted seller's counter --> triggers DealReached
     -- rejected: buyer declined seller's counter --> final rejection
