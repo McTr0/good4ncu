@@ -176,6 +176,8 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/change-password", post(auth::change_password))
+        .route("/api/auth/refresh", post(auth::refresh_token))
+        .route("/api/auth/logout", post(auth::logout))
         .route("/api/listings", get(listings::get_listings))
         .route("/api/listings/recognize", post(listings::recognize_item))
         .route("/api/listings/{id}", get(listings::get_listing))

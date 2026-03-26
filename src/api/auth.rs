@@ -6,6 +6,7 @@ use axum::http::HeaderMap;
 use axum::{extract::State, Json};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use sqlx::Row;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
@@ -22,6 +23,7 @@ pub struct AuthRequest {
 #[derive(Serialize)]
 pub struct AuthResponse {
     pub token: String,
+    pub refresh_token: String,
     pub user_id: String,
     pub username: String,
     pub message: String,
@@ -34,13 +36,31 @@ struct Claims {
     exp: usize,   // expiration time
 }
 
-/// Generate a JWT token for the given user_id and role using the provided secret.
-fn generate_token(user_id: &str, role: &str, jwt_secret: &str) -> String {
+/// Refresh token: 7 days validity
+const REFRESH_TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
+/// Access token: 1 hour validity
+const ACCESS_TOKEN_TTL_SECS: u64 = 3600;
+
+/// Generate a secure random refresh token (UUID v4)
+fn generate_refresh_token() -> String {
+    Uuid::new_v4().to_string()
+}
+
+/// Hash a refresh token with SHA-256 for storage (hex-encoded)
+fn hash_token(token: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(token.as_bytes());
+    let result = hasher.finalize();
+    hex::encode(result)
+}
+
+/// Generate an access token (JWT) with configurable expiry
+fn generate_access_token(user_id: &str, role: &str, jwt_secret: &str, ttl_secs: u64) -> String {
     let expiration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs() as usize
-        + 24 * 3600; // 1 day
+        + ttl_secs as usize;
 
     let claims = Claims {
         sub: user_id.to_string(),
@@ -54,6 +74,121 @@ fn generate_token(user_id: &str, role: &str, jwt_secret: &str) -> String {
         &EncodingKey::from_secret(jwt_secret.as_bytes()),
     )
     .unwrap_or_default()
+}
+
+/// Store a refresh token in the database (hash only, never plaintext)
+async fn store_refresh_token(
+    db: &sqlx::PgPool,
+    user_id: &str,
+    token: &str,
+    ttl_secs: u64,
+) -> anyhow::Result<()> {
+    let token_hash = hash_token(token);
+    let expires_at = chrono::Utc::now()
+        + chrono::Duration::seconds(ttl_secs as i64);
+
+    sqlx::query(
+        "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+    )
+    .bind(user_id)
+    .bind(&token_hash)
+    .bind(expires_at)
+    .execute(db)
+    .await?;
+
+    Ok(())
+}
+
+/// Validate a refresh token: returns user_id if valid, None if invalid/revoked/expired
+/// On success, atomically revokes the presented token and issues a new one.
+async fn rotate_refresh_token(
+    db: &sqlx::PgPool,
+    token: &str,
+    jwt_secret: &str,
+) -> anyhow::Result<(String, String)> {
+    let token_hash = hash_token(token);
+
+    // Find the token
+    let row = sqlx::query(
+        "SELECT id, user_id, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = $1",
+    )
+    .bind(&token_hash)
+    .fetch_optional(db)
+    .await?;
+
+    let row = match row {
+        Some(r) => r,
+        None => return Err(anyhow::anyhow!("Invalid refresh token")),
+    };
+
+    // Check revoked
+    let revoked_at: Option<chrono::DateTime<chrono::Utc>> = row.get("revoked_at");
+    if revoked_at.is_some() {
+        return Err(anyhow::anyhow!("Refresh token has been revoked"));
+    }
+
+    // Check expiry
+    let expires_at: chrono::DateTime<chrono::Utc> = row.get("expires_at");
+    if expires_at < chrono::Utc::now() {
+        return Err(anyhow::anyhow!("Refresh token has expired"));
+    }
+
+    let user_id: String = row.get("user_id");
+
+    // Revoke old token
+    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1")
+        .bind(&token_hash)
+        .execute(db)
+        .await?;
+
+    // Fetch user role
+    let user_row = sqlx::query("SELECT role FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_one(db)
+        .await?;
+    let role: String = user_row.get("role");
+
+    // Issue new tokens
+    let new_refresh = generate_refresh_token();
+    store_refresh_token(db, &user_id, &new_refresh, REFRESH_TOKEN_TTL_SECS).await?;
+    let new_access = generate_access_token(&user_id, &role, jwt_secret, ACCESS_TOKEN_TTL_SECS);
+
+    Ok((new_access, new_refresh))
+}
+
+/// Revoke all refresh tokens for a user
+async fn revoke_all_refresh_tokens(db: &sqlx::PgPool, user_id: &str) -> anyhow::Result<()> {
+    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL")
+        .bind(user_id)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+/// Revoke a specific refresh token
+async fn revoke_refresh_token(db: &sqlx::PgPool, token: &str) -> anyhow::Result<()> {
+    let token_hash = hash_token(token);
+    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL")
+        .bind(&token_hash)
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+pub struct RefreshTokenRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Serialize)]
+pub struct RefreshResponse {
+    pub token: String,
+    pub refresh_token: String,
+}
+
+#[derive(Deserialize)]
+pub struct LogoutRequest {
+    pub refresh_token: Option<String>,
 }
 
 /// POST /api/auth/register — returns 201 Created on success, 409 Conflict on duplicate.
@@ -120,9 +255,14 @@ pub async fn register(
 
     match result {
         Ok(_) => {
-            let token = generate_token(&user_id, "user", &state.jwt_secret);
+            let token = generate_access_token(&user_id, "user", &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
+            let refresh = generate_refresh_token();
+            store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e)))?;
             Ok(Json(AuthResponse {
                 token,
+                refresh_token: refresh,
                 user_id,
                 username: payload.username.clone(),
                 message: "注册成功".to_string(),
@@ -199,9 +339,14 @@ pub async fn login(
 
     match verify_result {
         Ok(true) => {
-            let token = generate_token(&user_id, &role, &state.jwt_secret);
+            let token = generate_access_token(&user_id, &role, &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
+            let refresh = generate_refresh_token();
+            store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e)))?;
             Ok(Json(AuthResponse {
                 token,
+                refresh_token: refresh,
                 user_id,
                 username: username.clone(),
                 message: "登录成功".to_string(),
@@ -217,6 +362,49 @@ pub async fn login(
             Err(ApiError::Internal(anyhow::anyhow!("Internal error: {}", e)))
         }
     }
+}
+
+/// POST /api/auth/refresh — rotate a refresh token, returns new access + refresh token pair
+pub async fn refresh_token(
+    State(state): State<AppState>,
+    Json(payload): Json<RefreshTokenRequest>,
+) -> Result<Json<RefreshResponse>, ApiError> {
+    let (new_access, new_refresh) = rotate_refresh_token(
+        &state.db,
+        &payload.refresh_token,
+        &state.jwt_secret,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(err = %e, "Refresh token rotation failed");
+        ApiError::Unauthorized
+    })?;
+
+    Ok(Json(RefreshResponse {
+        token: new_access,
+        refresh_token: new_refresh,
+    }))
+}
+
+/// POST /api/auth/logout — revoke refresh token(s) to invalidate the session
+pub async fn logout(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<LogoutRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    if let Some(ref token) = payload.refresh_token {
+        revoke_refresh_token(&state.db, token).await?;
+    }
+    revoke_all_refresh_tokens(&state.db, &user_id).await?;
+
+    tracing::info!(user_id = %user_id, "User logged out, all sessions revoked");
+
+    Ok(Json(serde_json::json!({
+        "message": "已退出登录"
+    })))
 }
 
 #[derive(Deserialize)]
