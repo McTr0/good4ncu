@@ -399,7 +399,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('${l.operationFailed(e)}'), backgroundColor: Colors.red),
+                          SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: Colors.red),
                         );
                       }
                     }
@@ -420,7 +420,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                     if (ctx.mounted) Navigator.pop(ctx);
                     _load();
                   } catch (e) {
-                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e)}')));
+                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e.toString())}')));
                   }
                 },
                 icon: const Icon(Icons.toggle_on),
@@ -536,7 +536,7 @@ class _OrdersTabState extends State<_OrdersTab> {
                       if (ctx.mounted) Navigator.pop(ctx);
                       _load();
                     } catch (e) {
-                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e)}')));
+                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e.toString())}')));
                     }
                   },
                   child: Text(l.cancel),
@@ -551,7 +551,7 @@ class _OrdersTabState extends State<_OrdersTab> {
                       if (ctx.mounted) Navigator.pop(ctx);
                       _load();
                     } catch (e) {
-                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e)}')));
+                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e.toString())}')));
                     }
                   },
                   child: Text(l.confirm),
@@ -789,7 +789,7 @@ class _UsersTabState extends State<_UsersTab> {
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${l.operationFailed(e)}'), backgroundColor: Colors.red),
+                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: Colors.red),
                           );
                         }
                       }
@@ -836,7 +836,7 @@ class _UsersTabState extends State<_UsersTab> {
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${l.operationFailed(e)}'), backgroundColor: Colors.red),
+                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: Colors.red),
                           );
                         }
                       }
