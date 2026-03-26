@@ -319,6 +319,13 @@ mod tests {
             .connect(&database_url)
             .await
             .unwrap();
+        // Clean up residual data from previous tests before running migrations.
+        sqlx::query(
+            "TRUNCATE TABLE chat_messages, chat_connections, orders, inventory, users CASCADE",
+        )
+        .execute(&pool)
+        .await
+        .ok();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
         pool
     }
