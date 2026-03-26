@@ -17,6 +17,10 @@ class WsNotification {
   final String? connectionId;
   /// 用于 new_message 和 message_read 事件
   final String? messageId;
+  /// 用于 typing 事件
+  final String? conversationId;
+  final String? typingUserId;
+  final String? typingUsername;
 
   WsNotification({
     this.id,
@@ -28,6 +32,9 @@ class WsNotification {
     this.negotiationId,
     this.connectionId,
     this.messageId,
+    this.conversationId,
+    this.typingUserId,
+    this.typingUsername,
   });
 
   factory WsNotification.fromJson(Map<String, dynamic> json) {
@@ -41,6 +48,9 @@ class WsNotification {
       negotiationId: json['negotiation_id']?.toString(),
       connectionId: json['connection_id']?.toString(),
       messageId: json['message_id']?.toString(),
+      conversationId: json['conversation_id']?.toString(),
+      typingUserId: json['user_id']?.toString(),
+      typingUsername: json['username']?.toString(),
     );
   }
 }

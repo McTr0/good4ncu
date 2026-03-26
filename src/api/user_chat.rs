@@ -72,6 +72,8 @@ pub struct ConnectionEntry {
     pub status: String,
     pub established_at: Option<String>,
     pub created_at: String,
+    /// 未读消息数
+    pub unread_count: i32,
 }
 
 #[derive(Serialize)]
@@ -91,6 +93,8 @@ pub struct SendMessageResponse {
     pub message_id: i64,
     pub sent_at: String,
     pub read_at: Option<String>,
+    /// 消息状态: sending | sent | delivered | read | failed
+    pub status: String,
 }
 
 #[derive(Deserialize)]
@@ -111,6 +115,10 @@ pub struct MessageEntry {
     pub read_by: Option<String>,
     pub image_data: Option<String>,
     pub audio_data: Option<String>,
+    /// 编辑状态: sending | sent | delivered | read | failed
+    pub status: String,
+    /// 已编辑时间
+    pub edited_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -124,6 +132,31 @@ pub struct MessageListResponse {
 pub struct MarkReadResponse {
     pub message_id: i64,
     pub read_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct EditMessageBody {
+    pub content: String,
+}
+
+#[derive(Serialize)]
+pub struct EditMessageResponse {
+    pub message_id: i64,
+    pub content: String,
+    pub edited_at: String,
+}
+
+#[derive(Deserialize)]
+pub struct TypingBody {
+    pub conversation_id: String,
+}
+
+#[derive(Serialize)]
+struct WsTypingEvent {
+    event: String,
+    conversation_id: String,
+    user_id: String,
+    username: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -359,6 +392,7 @@ pub async fn list_connections(
                cc.status,
                cc.established_at,
                cc.created_at,
+               cc.unread_count,
                cc.requester_id,
                cc.receiver_id,
                CASE WHEN cc.requester_id = $1 THEN cc.receiver_id ELSE cc.requester_id END as other_user_id
@@ -395,6 +429,7 @@ pub async fn list_connections(
             let established_at: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get("established_at").ok().flatten();
             let created_at: chrono::DateTime<chrono::Utc> = row.get("created_at");
+            let unread_count: i32 = row.try_get("unread_count").unwrap_or(0);
             ConnectionEntry {
                 id: row
                     .try_get::<uuid::Uuid, _>("id")
@@ -405,6 +440,7 @@ pub async fn list_connections(
                 status: row.get("status"),
                 established_at: established_at.map(|dt| dt.to_rfc3339()),
                 created_at: created_at.to_rfc3339(),
+                unread_count,
             }
         })
         .collect();
@@ -442,7 +478,7 @@ pub async fn get_connection_messages(
     }
 
     let rows = sqlx::query(
-        r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data
+        r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data, edited_at, status
            FROM chat_messages
            WHERE (sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1)
            ORDER BY id DESC
@@ -503,6 +539,9 @@ pub async fn get_connection_messages(
             let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
             let read_at: Option<chrono::DateTime<chrono::Utc>> =
                 row.try_get("read_at").ok().flatten();
+            let edited_at: Option<chrono::DateTime<chrono::Utc>> =
+                row.try_get("edited_at").ok().flatten();
+            let status: String = row.try_get("status").unwrap_or_else(|_| "sent".to_string());
             let sender_username = if sender == "assistant" {
                 None
             } else {
@@ -519,6 +558,8 @@ pub async fn get_connection_messages(
                 read_by: row.try_get("read_by").ok().flatten(),
                 image_data: row.try_get("image_data").ok().flatten(),
                 audio_data: row.try_get("audio_data").ok().flatten(),
+                edited_at: edited_at.map(|dt| dt.to_rfc3339()),
+                status,
             }
         })
         .collect();
@@ -580,8 +621,8 @@ pub async fn send_connection_message(
     let read_at_str = read_at.map(|dt| dt.to_rfc3339());
 
     let row = sqlx::query(
-        r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, read_at, read_by)
-           VALUES ($1::uuid, 'direct', $2, $3, false, $4, $5, $6, $7, $2)
+        r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, read_at, read_by, status)
+           VALUES ($1::uuid, 'direct', $2, $3, false, $4, $5, $6, $7, $2, 'sent')
            RETURNING id, timestamp"#,
     )
     .bind(&connection_id)
@@ -599,6 +640,13 @@ pub async fn send_connection_message(
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
 
     state.metrics.record_chat_message();
+
+    // Update unread_count for the receiver (always Some at this point)
+    sqlx::query("UPDATE chat_connections SET unread_count = unread_count + 1 WHERE id = $1::uuid")
+        .bind(&connection_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let sender_username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
         .bind(&sender_id)
@@ -629,6 +677,7 @@ pub async fn send_connection_message(
         message_id,
         sent_at: timestamp.to_rfc3339(),
         read_at: read_at_str,
+        status: "sent".to_string(),
     }))
 }
 
@@ -642,12 +691,9 @@ pub async fn mark_message_read(
         .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
-        r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cc.status
+        r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cm.conversation_id, cc.status
            FROM chat_messages cm
-           JOIN chat_connections cc ON (
-               (cc.requester_id = cm.sender AND cc.receiver_id = cm.receiver) OR
-               (cc.receiver_id = cm.sender AND cc.requester_id = cm.receiver)
-           )
+           JOIN chat_connections cc ON cc.id = cm.conversation_id::uuid
            WHERE cm.id = $1"#,
     )
     .bind(message_id)
@@ -658,6 +704,7 @@ pub async fn mark_message_read(
 
     let sender: String = row.get("sender");
     let receiver: Option<String> = row.try_get("receiver").ok().flatten();
+    let conversation_id: String = row.get("conversation_id");
     let current_read_at: Option<chrono::DateTime<chrono::Utc>> =
         row.try_get("read_at").ok().flatten();
     let status: String = row.get("status");
@@ -695,6 +742,13 @@ pub async fn mark_message_read(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
+    // Reset unread_count for the receiver
+    sqlx::query("UPDATE chat_connections SET unread_count = 0 WHERE id = $1::uuid")
+        .bind(&conversation_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
     let ws_event = WsMessageReadEvent {
         event: "message_read".to_string(),
         message_id,
@@ -708,6 +762,131 @@ pub async fn mark_message_read(
         message_id,
         read_at: read_at_str,
     }))
+}
+
+/// PATCH /api/chat/messages/:id — edit a message within 15 minutes of sending.
+pub async fn edit_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(message_id): Path<i64>,
+    Json(body): Json<EditMessageBody>,
+) -> Result<Json<EditMessageResponse>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    if body.content.is_empty() {
+        return Err(ApiError::BadRequest("消息内容不能为空".to_string()));
+    }
+    if body.content.len() > 2000 {
+        return Err(ApiError::BadRequest("消息内容不能超过2000字符".to_string()));
+    }
+
+    // Fetch the existing message
+    let row = sqlx::query(
+        r#"SELECT cm.id, cm.sender, cm.timestamp, cc.status
+           FROM chat_messages cm
+           JOIN chat_connections cc ON cc.id = cm.conversation_id::uuid
+           WHERE cm.id = $1"#,
+    )
+    .bind(message_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let sender: String = row.get("sender");
+    if sender != user_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
+    let status: String = row.get("status");
+
+    if status != "connected" {
+        return Err(ApiError::BadRequest(format!(
+            "连接状态不是 connected，无法编辑: {}",
+            status
+        )));
+    }
+
+    // Only allow editing within 15 minutes
+    let fifteen_minutes = chrono::Duration::minutes(15);
+    let now = chrono::Utc::now();
+    if now.signed_duration_since(timestamp) > fifteen_minutes {
+        return Err(ApiError::BadRequest(
+            "消息已超过15分钟，无法编辑".to_string(),
+        ));
+    }
+
+    let edited_at = chrono::Utc::now();
+    let edited_at_str = edited_at.to_rfc3339();
+
+    sqlx::query("UPDATE chat_messages SET content = $1, edited_at = $2 WHERE id = $3")
+        .bind(&body.content)
+        .bind(edited_at)
+        .bind(message_id)
+        .execute(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    Ok(Json(EditMessageResponse {
+        message_id,
+        content: body.content,
+        edited_at: edited_at_str,
+    }))
+}
+
+/// POST /api/chat/typing — broadcast a typing indicator to the other party.
+pub async fn typing_indicator(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<TypingBody>,
+) -> Result<(), ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Verify user is part of this connection
+    let row = sqlx::query(
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
+    )
+    .bind(&body.conversation_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let requester_id: String = row.get("requester_id");
+    let receiver_id: String = row.get("receiver_id");
+
+    if user_id != requester_id && user_id != receiver_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
+        .bind(&user_id)
+        .fetch_optional(&state.db)
+        .await
+        .ok()
+        .flatten()
+        .map(|row| row.get("username"));
+
+    let ws_event = WsTypingEvent {
+        event: "typing".to_string(),
+        conversation_id: body.conversation_id.clone(),
+        user_id: user_id.clone(),
+        username,
+    };
+    let payload = serde_json::to_string(&ws_event).unwrap_or_default();
+
+    // Broadcast to the other party
+    let recipient = if user_id == requester_id {
+        receiver_id
+    } else {
+        requester_id
+    };
+    ws::broadcast_to_user(&recipient, &payload);
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -727,11 +906,13 @@ mod tests {
             status: "connected".to_string(),
             established_at: Some("2024-01-01T00:00:00Z".to_string()),
             created_at: "2024-01-01T00:00:00Z".to_string(),
+            unread_count: 3,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("conn-1"));
         assert!(json.contains("connected"));
         assert!(json.contains("alice"));
+        assert!(json.contains("\"unread_count\":3"));
     }
 
     #[test]
@@ -747,11 +928,14 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            status: "sent".to_string(),
+            edited_at: None,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("Hello!"));
         assert!(json.contains("user-1"));
         assert!(json.contains("\"is_agent\":false"));
+        assert!(json.contains("\"status\":\"sent\""));
     }
 
     #[test]
@@ -771,10 +955,12 @@ mod tests {
             message_id: 42,
             sent_at: "2024-01-01T00:00:00Z".to_string(),
             read_at: Some("2024-01-01T00:00:01Z".to_string()),
+            status: "sent".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("42"));
         assert!(json.contains("2024-01-01T00:00:00Z"));
+        assert!(json.contains("\"status\":\"sent\""));
     }
 
     #[test]

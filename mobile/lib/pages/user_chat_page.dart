@@ -1,6 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:record/record.dart';
+import 'package:path_provider/path_provider.dart';
+import 'dart:io';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/ws_service.dart';
@@ -27,6 +30,7 @@ class _UserChatPageState extends State<UserChatPage> {
   final ApiService _apiService = ApiService();
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
+  final AudioRecorder _audioRecorder = AudioRecorder();
 
   List<ConversationMessage> _messages = [];
   String? _currentUserId;
@@ -37,6 +41,18 @@ class _UserChatPageState extends State<UserChatPage> {
   /// 连接状态: null=无连接, 'connecting'=连接中, 'connected'=已连接
   String? _connectionStatus;
 
+  /// 对方正在输入状态
+  bool _isOtherTyping = false;
+  Timer? _typingTimer;
+
+  /// 录音状态
+  bool _isRecording = false;
+  int _recordingSeconds = 0;
+  Timer? _recordingTimer;
+
+  /// 正在编辑的消息ID
+  String? _editingMessageId;
+
   StreamSubscription? _wsSubscription;
   WsService? _wsService;
 
@@ -46,6 +62,7 @@ class _UserChatPageState extends State<UserChatPage> {
     _loadCurrentUser();
     _loadMessages();
     _connectWs();
+    _markConnectionAsRead();
   }
 
   @override
@@ -54,6 +71,9 @@ class _UserChatPageState extends State<UserChatPage> {
     _scrollController.dispose();
     _wsSubscription?.cancel();
     _wsService?.dispose();
+    _typingTimer?.cancel();
+    _recordingTimer?.cancel();
+    _audioRecorder.dispose();
     super.dispose();
   }
 
@@ -95,6 +115,10 @@ class _UserChatPageState extends State<UserChatPage> {
     }
   }
 
+  Future<void> _markConnectionAsRead() async {
+    await _apiService.markConnectionAsRead(widget.conversationId).catchError((_) {});
+  }
+
   Future<void> _connectWs() async {
     _wsService = WsService();
     try {
@@ -125,6 +149,18 @@ class _UserChatPageState extends State<UserChatPage> {
 
       case 'message_read':
         _loadMessages();
+        break;
+
+      case 'typing':
+        // 显示对方正在输入
+        if (notif.conversationId == widget.conversationId &&
+            notif.typingUserId != _currentUserId) {
+          setState(() => _isOtherTyping = true);
+          _typingTimer?.cancel();
+          _typingTimer = Timer(const Duration(seconds: 3), () {
+            if (mounted) setState(() => _isOtherTyping = false);
+          });
+        }
         break;
 
       case 'connection_request':
@@ -185,11 +221,61 @@ class _UserChatPageState extends State<UserChatPage> {
     }
   }
 
+  /// 发送typing indicator
+  void _sendTypingIndicator() {
+    _apiService.sendTyping(widget.conversationId).catchError((_) {});
+  }
+
+  /// 开始编辑消息
+  void _startEditMessage(ConversationMessage msg) {
+    setState(() {
+      _editingMessageId = msg.id;
+      _textController.text = msg.content;
+    });
+  }
+
+  /// 取消编辑
+  void _cancelEdit() {
+    setState(() {
+      _editingMessageId = null;
+      _textController.clear();
+    });
+  }
+
+  /// 确认编辑
+  Future<void> _confirmEdit() async {
+    if (_editingMessageId == null || _textController.text.trim().isEmpty) return;
+
+    final newContent = _textController.text.trim();
+    try {
+      final updated = await _apiService.editMessage(_editingMessageId!, newContent);
+      if (!mounted) return;
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == _editingMessageId);
+        if (idx >= 0) {
+          _messages[idx] = updated;
+        }
+        _editingMessageId = null;
+        _textController.clear();
+      });
+      _showSnackBar('消息已编辑');
+    } catch (e) {
+      if (!mounted) return;
+      _showSnackBar('编辑失败: $e');
+    }
+  }
+
   Future<void> _sendMessage() async {
     if (_isSending || _textController.text.trim().isEmpty) return;
 
     if (_connectionStatus != 'connected') {
       _showSnackBar('等待连接建立后再发送消息');
+      return;
+    }
+
+    // 如果正在编辑，先确认编辑
+    if (_editingMessageId != null) {
+      await _confirmEdit();
       return;
     }
 
@@ -200,6 +286,7 @@ class _UserChatPageState extends State<UserChatPage> {
       senderId: _currentUserId ?? '',
       content: text,
       sentAt: DateTime.now(),
+      status: 'sending',
     );
 
     setState(() {
@@ -207,6 +294,7 @@ class _UserChatPageState extends State<UserChatPage> {
       _isSending = true;
     });
     _textController.clear();
+    _scrollToBottom();
 
     try {
       final reply = await _apiService.sendMessage(
@@ -215,7 +303,6 @@ class _UserChatPageState extends State<UserChatPage> {
       );
       if (!mounted) return;
       setState(() {
-        // Update last message with server response
         final idx = _messages.indexWhere((m) => m.id == tempMsg.id);
         if (idx >= 0) {
           _messages[idx] = reply;
@@ -225,7 +312,90 @@ class _UserChatPageState extends State<UserChatPage> {
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
-      // Rollback: remove failed message
+      setState(() {
+        _messages.removeWhere((m) => m.id == tempMsg.id);
+        _isSending = false;
+      });
+      _showSnackBar('发送失败: $e');
+    }
+  }
+
+  /// 切换录音状态
+  Future<void> _toggleRecording() async {
+    if (_isRecording) {
+      _recordingTimer?.cancel();
+      final path = await _audioRecorder.stop();
+      if (path != null) {
+        final bytes = await File(path).readAsBytes();
+        final audioBase64 = base64Encode(bytes);
+        setState(() => _isRecording = false);
+        await _sendAudioMessage(audioBase64);
+      } else {
+        setState(() => _isRecording = false);
+      }
+    } else {
+      if (await _audioRecorder.hasPermission()) {
+        final directory = await getTemporaryDirectory();
+        final path = '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.ogg';
+        await _audioRecorder.start(
+          const RecordConfig(encoder: AudioEncoder.opus),
+          path: path,
+        );
+        setState(() {
+          _isRecording = true;
+          _recordingSeconds = 0;
+        });
+        _recordingTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+          if (mounted) {
+            setState(() => _recordingSeconds++);
+            if (_recordingSeconds >= 60) {
+              _toggleRecording(); // 自动停止
+            }
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _sendAudioMessage(String audioBase64) async {
+    if (_connectionStatus != 'connected') {
+      _showSnackBar('等待连接建立后再发送消息');
+      return;
+    }
+
+    final tempMsg = ConversationMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      conversationId: widget.conversationId,
+      senderId: _currentUserId ?? '',
+      content: '[语音消息]',
+      audioBase64: audioBase64,
+      sentAt: DateTime.now(),
+      status: 'sending',
+    );
+
+    setState(() {
+      _messages.add(tempMsg);
+      _isSending = true;
+    });
+    _scrollToBottom();
+
+    try {
+      final reply = await _apiService.sendMessage(
+        widget.conversationId,
+        content: '[语音消息]',
+        audioBase64: audioBase64,
+      );
+      if (!mounted) return;
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == tempMsg.id);
+        if (idx >= 0) {
+          _messages[idx] = reply;
+        }
+        _isSending = false;
+      });
+      _scrollToBottom();
+    } catch (e) {
+      if (!mounted) return;
       setState(() {
         _messages.removeWhere((m) => m.id == tempMsg.id);
         _isSending = false;
@@ -269,6 +439,25 @@ class _UserChatPageState extends State<UserChatPage> {
       ),
       body: Column(
         children: [
+          if (_isOtherTyping)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              color: Colors.grey[100],
+              child: Row(
+                children: [
+                  const SizedBox(
+                    width: 12,
+                    height: 12,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    '${widget.otherUsername} 正在输入...',
+                    style: const TextStyle(color: Colors.grey, fontSize: 12),
+                  ),
+                ],
+              ),
+            ),
           Expanded(child: _buildMessageList()),
           _buildInputArea(),
         ],
@@ -311,6 +500,7 @@ class _UserChatPageState extends State<UserChatPage> {
           message: msg,
           isMe: isMe,
           isConnected: _connectionStatus == 'connected',
+          onEdit: isMe && msg.canEdit ? () => _startEditMessage(msg) : null,
         );
       },
     );
@@ -337,6 +527,34 @@ class _UserChatPageState extends State<UserChatPage> {
         ),
       );
     }
+
+    // 录音中显示倒计时
+    if (_isRecording) {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.red.shade50,
+          border: Border(top: BorderSide(color: Colors.red.shade200)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.circle, color: Colors.red, size: 12),
+            const SizedBox(width: 8),
+            Text(
+              '录音中 ${_recordingSeconds}s / 60s',
+              style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold),
+            ),
+            const Spacer(),
+            TextButton(
+              onPressed: _toggleRecording,
+              child: const Text('停止'),
+            ),
+          ],
+        ),
+      );
+    }
+
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
@@ -348,11 +566,21 @@ class _UserChatPageState extends State<UserChatPage> {
       child: SafeArea(
         child: Row(
           children: [
+            IconButton(
+              icon: Icon(_isRecording ? Icons.stop : Icons.mic,
+                  color: _isRecording ? Colors.red : null),
+              onPressed: _toggleRecording,
+            ),
+            if (_editingMessageId != null)
+              IconButton(
+                icon: const Icon(Icons.close, color: Colors.grey),
+                onPressed: _cancelEdit,
+              ),
             Expanded(
               child: TextField(
                 controller: _textController,
                 decoration: InputDecoration(
-                  hintText: '输入消息...',
+                  hintText: _editingMessageId != null ? '编辑消息...' : '输入消息...',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
                   ),
@@ -361,14 +589,15 @@ class _UserChatPageState extends State<UserChatPage> {
                     vertical: 8,
                   ),
                 ),
+                onChanged: (_) => _sendTypingIndicator(),
                 onSubmitted: (_) => _sendMessage(),
               ),
             ),
             const SizedBox(width: 8),
             IconButton(
-              icon: const Icon(Icons.send),
-              color: AppTheme.primary,
-              onPressed: _sendMessage,
+              icon: Icon(_editingMessageId != null ? Icons.check : Icons.send,
+                  color: _editingMessageId != null ? Colors.green : AppTheme.primary),
+              onPressed: _editingMessageId != null ? _confirmEdit : _sendMessage,
             ),
           ],
         ),
@@ -474,92 +703,123 @@ class _MessageBubble extends StatelessWidget {
   final ConversationMessage message;
   final bool isMe;
   final bool isConnected;
+  final VoidCallback? onEdit;
 
   const _MessageBubble({
     required this.message,
     required this.isMe,
     required this.isConnected,
+    this.onEdit,
   });
 
   @override
   Widget build(BuildContext context) {
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        constraints: BoxConstraints(
-          maxWidth: MediaQuery.of(context).size.width * 0.75,
-        ),
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.all(12),
-        decoration: BoxDecoration(
-          color: isMe ? AppTheme.primary : Colors.grey[200],
-          borderRadius: BorderRadius.circular(16).copyWith(
-            bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
-            bottomLeft: !isMe ? const Radius.circular(0) : const Radius.circular(16),
+      child: GestureDetector(
+        onLongPress: onEdit != null ? onEdit! : null,
+        child: Container(
+          constraints: BoxConstraints(
+            maxWidth: MediaQuery.of(context).size.width * 0.75,
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (message.imageBase64 != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(8),
-                  child: Image.memory(
-                    base64Decode(message.imageBase64!),
-                    width: 200,
-                    fit: BoxFit.cover,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          padding: const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: isMe ? AppTheme.primary : Colors.grey[200],
+            borderRadius: BorderRadius.circular(16).copyWith(
+              bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
+              bottomLeft: !isMe ? const Radius.circular(0) : const Radius.circular(16),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (message.imageBase64 != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(8),
+                    child: Image.memory(
+                      base64Decode(message.imageBase64!),
+                      width: 200,
+                      fit: BoxFit.cover,
+                    ),
                   ),
                 ),
+              if (message.audioBase64 != null)
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.mic,
+                        size: 16,
+                        color: isMe ? Colors.white : Colors.black87,
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        '语音消息',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: isMe ? Colors.white70 : Colors.black54,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Text(
+                message.content,
+                style: TextStyle(
+                  color: isMe ? Colors.white : Colors.black87,
+                  fontSize: 16,
+                ),
               ),
-            if (message.audioBase64 != null)
-              Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.mic,
-                      size: 16,
-                      color: isMe ? Colors.white : Colors.black87,
+              if (message.editedAt != null)
+                Padding(
+                  padding: const EdgeInsets.only(top: 2),
+                  child: Text(
+                    '（已编辑）',
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isMe ? Colors.white60 : Colors.black38,
+                      fontStyle: FontStyle.italic,
                     ),
+                  ),
+                ),
+              const SizedBox(height: 4),
+              Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _formatTime(message.sentAt),
+                    style: TextStyle(
+                      fontSize: 10,
+                      color: isMe ? Colors.white70 : Colors.black45,
+                    ),
+                  ),
+                  if (isMe && onEdit != null) ...[
                     const SizedBox(width: 4),
-                    Text(
-                      '语音消息',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: isMe ? Colors.white70 : Colors.black54,
+                    GestureDetector(
+                      onTap: onEdit,
+                      child: Text(
+                        '编辑',
+                        style: TextStyle(
+                          fontSize: 10,
+                          color: Colors.white60,
+                          decoration: TextDecoration.underline,
+                        ),
                       ),
                     ),
                   ],
-                ),
-              ),
-            Text(
-              message.content,
-              style: TextStyle(
-                color: isMe ? Colors.white : Colors.black87,
-                fontSize: 16,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _formatTime(message.sentAt),
-                  style: TextStyle(
-                    fontSize: 10,
-                    color: isMe ? Colors.white70 : Colors.black45,
-                  ),
-                ),
-                if (isMe) ...[
-                  const SizedBox(width: 4),
-                  _buildStatus(),
+                  if (isMe) ...[
+                    const SizedBox(width: 4),
+                    _buildStatus(),
+                  ],
                 ],
-              ],
-            ),
-          ],
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -569,16 +829,46 @@ class _MessageBubble extends StatelessWidget {
     if (!isConnected) {
       return const SizedBox.shrink();
     }
-    if (message.isRead) {
-      return const Text(
-        '已读',
-        style: TextStyle(fontSize: 10, color: AppTheme.success),
-      );
+    switch (message.status) {
+      case 'sending':
+        return const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 8,
+              height: 8,
+              child: CircularProgressIndicator(strokeWidth: 1, color: Colors.white54),
+            ),
+            SizedBox(width: 2),
+            Text(
+              '发送中',
+              style: TextStyle(fontSize: 10, color: Colors.white54),
+            ),
+          ],
+        );
+      case 'sent':
+        return const Text(
+          '已发送',
+          style: TextStyle(fontSize: 10, color: Colors.white70),
+        );
+      case 'delivered':
+        return const Text(
+          '已送达',
+          style: TextStyle(fontSize: 10, color: Colors.white70),
+        );
+      case 'read':
+        return const Text(
+          '已读',
+          style: TextStyle(fontSize: 10, color: AppTheme.success),
+        );
+      case 'failed':
+        return const Text(
+          '发送失败',
+          style: TextStyle(fontSize: 10, color: Colors.red),
+        );
+      default:
+        return const SizedBox.shrink();
     }
-    return const Text(
-      '已送达',
-      style: TextStyle(fontSize: 10, color: Colors.grey),
-    );
   }
 
   String _formatTime(DateTime dt) {

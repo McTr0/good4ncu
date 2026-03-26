@@ -307,6 +307,8 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/chat/messages/{id}/read",
             post(user_chat::mark_message_read),
         )
+        .route("/api/chat/messages/{id}", patch(user_chat::edit_message))
+        .route("/api/chat/typing", post(user_chat::typing_indicator))
         .route("/api/upload/token", get(upload::get_upload_token))
         .route("/api/ws", get(ws::ws_handler))
         .layer(cors)

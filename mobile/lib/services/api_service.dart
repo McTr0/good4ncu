@@ -717,6 +717,50 @@ class ApiService {
     );
     _handleResponse(response, (_) {});
   }
+
+  /// 编辑消息（发送后15分钟内）
+  Future<ConversationMessage> editMessage(String messageId, String content) async {
+    final headers = await _authHeaders();
+    final response = await http.patch(
+      Uri.parse('$baseUrl/api/chat/messages/$messageId'),
+      headers: headers,
+      body: jsonEncode({'content': content}),
+    );
+    return _handleResponse(
+      response,
+      (d) => ConversationMessage.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  /// 发送typing indicator
+  Future<void> sendTyping(String conversationId) async {
+    final headers = await _authHeaders();
+    final response = await _post(
+      Uri.parse('$baseUrl/api/chat/typing'),
+      headers,
+      jsonEncode({'conversation_id': conversationId}),
+    );
+    _handleResponse(response, (_) {});
+  }
+
+  /// 标记整个会话为已读（重置unread_count）
+  Future<void> markConnectionAsRead(String conversationId) async {
+    // The backend resets unread_count when any message in the conversation is marked as read.
+    // For simplicity, we just mark all unread messages as read.
+    final headers = await _authHeaders();
+    final uri = Uri.parse(
+      '$baseUrl/api/chat/conversations/$conversationId/messages?limit=50&offset=0',
+    );
+    final response = await _get(uri, headers);
+    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
+    final messages = data['messages'] as List<dynamic>? ?? [];
+    for (final msg in messages) {
+      final readAt = msg['read_at'];
+      if (readAt == null) {
+        await markMessageRead(msg['id'].toString()).catchError((_) {});
+      }
+    }
+  }
 }
 
 class RecognizedItem {

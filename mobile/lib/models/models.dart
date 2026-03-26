@@ -149,6 +149,8 @@ class Conversation {
   final String status; // 'connected' | 'pending' | 'established'
   final String? lastMessage;
   final DateTime? lastMessageAt;
+  /// 未读消息数
+  final int unreadCount;
 
   Conversation({
     required this.id,
@@ -157,6 +159,7 @@ class Conversation {
     required this.status,
     this.lastMessage,
     this.lastMessageAt,
+    this.unreadCount = 0,
   });
 
   factory Conversation.fromJson(Map<String, dynamic> json) {
@@ -169,6 +172,7 @@ class Conversation {
       lastMessageAt: json['last_message_at'] != null
           ? DateTime.tryParse(json['last_message_at'].toString())
           : null,
+      unreadCount: json['unread_count'] ?? 0,
     );
   }
 
@@ -192,6 +196,10 @@ class ConversationMessage {
   final String? audioBase64;
   final DateTime sentAt;
   final DateTime? readAt;
+  /// 消息状态: sending | sent | delivered | read | failed
+  final String status;
+  /// 已编辑时间
+  final DateTime? editedAt;
 
   ConversationMessage({
     required this.id,
@@ -202,6 +210,8 @@ class ConversationMessage {
     this.audioBase64,
     required this.sentAt,
     this.readAt,
+    this.status = 'sent',
+    this.editedAt,
   });
 
   factory ConversationMessage.fromJson(Map<String, dynamic> json) {
@@ -210,8 +220,8 @@ class ConversationMessage {
       conversationId: json['conversation_id']?.toString() ?? '',
       senderId: json['sender']?.toString() ?? '',
       content: json['content'] ?? '',
-      imageBase64: json['image_base64'],
-      audioBase64: json['audio_base64'],
+      imageBase64: json['image_base64'] ?? json['image_data'],
+      audioBase64: json['audio_base64'] ?? json['audio_data'],
       sentAt: json['sent_at'] != null
           ? DateTime.parse(json['sent_at'].toString())
           : json['timestamp'] != null
@@ -219,6 +229,10 @@ class ConversationMessage {
               : DateTime.now(),
       readAt: json['read_at'] != null
           ? DateTime.tryParse(json['read_at'].toString())
+          : null,
+      status: json['status'] ?? 'sent',
+      editedAt: json['edited_at'] != null
+          ? DateTime.tryParse(json['edited_at'].toString())
           : null,
     );
   }
@@ -228,6 +242,39 @@ class ConversationMessage {
 
   /// 消息是否由指定用户发送
   bool isFrom(String userId) => senderId == userId;
+
+  /// 是否可编辑（发送后15分钟内）
+  bool get canEdit {
+    if (editedAt != null) return false;
+    final diff = DateTime.now().difference(sentAt);
+    return diff.inMinutes < 15;
+  }
+
+  ConversationMessage copyWith({
+    String? id,
+    String? conversationId,
+    String? senderId,
+    String? content,
+    String? imageBase64,
+    String? audioBase64,
+    DateTime? sentAt,
+    DateTime? readAt,
+    String? status,
+    DateTime? editedAt,
+  }) {
+    return ConversationMessage(
+      id: id ?? this.id,
+      conversationId: conversationId ?? this.conversationId,
+      senderId: senderId ?? this.senderId,
+      content: content ?? this.content,
+      imageBase64: imageBase64 ?? this.imageBase64,
+      audioBase64: audioBase64 ?? this.audioBase64,
+      sentAt: sentAt ?? this.sentAt,
+      readAt: readAt ?? this.readAt,
+      status: status ?? this.status,
+      editedAt: editedAt ?? this.editedAt,
+    );
+  }
 }
 
 class HitlRequest {
