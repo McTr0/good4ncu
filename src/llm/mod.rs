@@ -7,7 +7,120 @@ use futures::Stream;
 use rig::completion::Message;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 use tokio::sync::mpsc;
+use tokio::sync::RwLock;
+
+/// Circuit breaker state for LLM resilience.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CircuitState {
+    /// Circuit is closed — LLM calls proceed normally.
+    Closed,
+    /// Circuit is half-open — one test request allowed to pass.
+    HalfOpen,
+    /// Circuit is open — all LLM calls fail fast with degraded message.
+    Open,
+}
+
+/// Circuit breaker for LLM HTTP client.
+///
+/// Tracks consecutive failures; after `failure_threshold` failures,
+/// the circuit opens and LLM calls fail fast with a degraded message
+/// instead of blocking on timeout.
+#[derive(Debug)]
+pub struct CircuitBreaker {
+    state: RwLock<CircuitState>,
+    failures: RwLock<u32>,
+    last_failure: RwLock<Option<Instant>>,
+    /// Number of failures before opening circuit.
+    failure_threshold: u32,
+    /// Time to wait before transitioning Open -> HalfOpen.
+    recovery_timeout: Duration,
+}
+
+impl CircuitBreaker {
+    /// Creates a new circuit breaker with sensible defaults:
+    /// - Opens after 5 consecutive failures
+    /// - Allows half-open test after 30 seconds
+    pub fn new() -> Self {
+        Self {
+            state: RwLock::new(CircuitState::Closed),
+            failures: RwLock::new(0),
+            last_failure: RwLock::new(None),
+            failure_threshold: 5,
+            recovery_timeout: Duration::from_secs(30),
+        }
+    }
+
+    /// Returns true if the circuit is open and LLM calls should fail fast.
+    pub async fn is_open(&self) -> bool {
+        let state = self.state.read().await;
+        if *state == CircuitState::Open {
+            // Check if recovery timeout has elapsed — transition to half-open.
+            let last_failure = self.last_failure.read().await;
+            if let Some(instant) = *last_failure {
+                if instant.elapsed() >= self.recovery_timeout {
+                    drop(last_failure);
+                    drop(state);
+                    let mut s = self.state.write().await;
+                    let mut f = self.failures.write().await;
+                    *s = CircuitState::HalfOpen;
+                    *f = 0;
+                    tracing::info!("LLM circuit breaker: 熔断打开 -> 半开 (30s recovery elapsed)");
+                    return false; // Half-open allows the request through
+                }
+            }
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Records a successful LLM call — resets the circuit to closed.
+    pub async fn record_success(&self) {
+        let mut failures = self.failures.write().await;
+        *failures = 0;
+        let mut state = self.state.write().await;
+        if *state != CircuitState::Closed {
+            tracing::info!("LLM circuit breaker: 半开 -> 闭合 (success)");
+        }
+        *state = CircuitState::Closed;
+    }
+
+    /// Records a failed LLM call — may open the circuit if threshold reached.
+    pub async fn record_failure(&self) {
+        let mut failures = self.failures.write().await;
+        let mut last_failure = self.last_failure.write().await;
+        *last_failure = Some(Instant::now());
+        *failures += 1;
+
+        if *failures >= self.failure_threshold {
+            let mut state = self.state.write().await;
+            if *state != CircuitState::Open {
+                tracing::warn!(
+                    "LLM circuit breaker: 闭合 -> 熔断打开 ({} failures)",
+                    *failures
+                );
+            }
+            *state = CircuitState::Open;
+        }
+    }
+
+    /// Returns the degraded fallback message when circuit is open.
+    pub fn degraded_message() -> String {
+        "抱歉，AI 服务暂时不可用，请稍后再试或联系客服。".to_string()
+    }
+}
+
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+lazy_static::lazy_static! {
+    pub static ref LLM_CIRCUIT_BREAKER: Arc<CircuitBreaker> = Arc::new(CircuitBreaker::new());
+}
 
 /// Unified LLM provider interface.
 ///

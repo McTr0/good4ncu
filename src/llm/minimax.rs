@@ -1,4 +1,7 @@
-use super::{MarketplaceAgent, NegotiateAgent, NEGOTIATION_PREAMBLE, PREAMBLE};
+use super::{
+    CircuitBreaker, MarketplaceAgent, NegotiateAgent, LLM_CIRCUIT_BREAKER, NEGOTIATION_PREAMBLE,
+    PREAMBLE,
+};
 use crate::agents::models::Document;
 use crate::agents::tools::{EmbedFn, ToolContext, ToolError};
 use crate::services::BusinessEvent;
@@ -185,7 +188,20 @@ pub struct MiniMaxMarketplaceAgent(
 #[async_trait]
 impl MarketplaceAgent for MiniMaxMarketplaceAgent {
     async fn prompt(&self, msg: String) -> anyhow::Result<String> {
-        Ok(self.0.prompt(msg).await?)
+        if LLM_CIRCUIT_BREAKER.is_open().await {
+            tracing::warn!("LLM circuit breaker: prompt rejected (circuit open)");
+            return Err(anyhow::anyhow!(CircuitBreaker::degraded_message()));
+        }
+        match self.0.prompt(msg).await {
+            Ok(r) => {
+                LLM_CIRCUIT_BREAKER.record_success().await;
+                Ok(r)
+            }
+            Err(e) => {
+                LLM_CIRCUIT_BREAKER.record_failure().await;
+                Err(anyhow::anyhow!(e))
+            }
+        }
     }
 
     async fn prompt_with_history(
@@ -193,13 +209,26 @@ impl MarketplaceAgent for MiniMaxMarketplaceAgent {
         msg: String,
         history: Vec<Message>,
     ) -> anyhow::Result<String> {
+        if LLM_CIRCUIT_BREAKER.is_open().await {
+            tracing::warn!("LLM circuit breaker: prompt_with_history rejected (circuit open)");
+            return Err(anyhow::anyhow!(CircuitBreaker::degraded_message()));
+        }
         let mut h = history;
-        let reply = self
+        match self
             .0
             .prompt(rig::completion::Message::user(msg))
             .with_history(&mut h)
-            .await?;
-        Ok(reply)
+            .await
+        {
+            Ok(reply) => {
+                LLM_CIRCUIT_BREAKER.record_success().await;
+                Ok(reply)
+            }
+            Err(e) => {
+                LLM_CIRCUIT_BREAKER.record_failure().await;
+                Err(anyhow::anyhow!(e))
+            }
+        }
     }
 
     fn stream_chat(
@@ -209,19 +238,38 @@ impl MarketplaceAgent for MiniMaxMarketplaceAgent {
     ) -> Pin<Box<dyn futures::Stream<Item = Result<String, anyhow::Error>> + Send>> {
         let h = history;
         let agent = self.0.clone();
+        let circuit_breaker = LLM_CIRCUIT_BREAKER.clone();
         Box::pin(::async_stream::try_stream! {
+            // Check circuit breaker at stream start — fail fast before any LLM call.
+            if circuit_breaker.is_open().await {
+                tracing::warn!("LLM circuit breaker: stream_chat rejected (circuit open)");
+                Err(anyhow::anyhow!(CircuitBreaker::degraded_message()))?;
+            }
+
             let mut current_msg = Message::user(msg);
             let mut chat_history = h;
             let mut did_call_tool = false;
+            let mut call_succeeded = false;
 
             loop {
-                let mut stream = agent
+                let stream_result = agent
                     .stream_completion(current_msg.clone(), chat_history.clone())
-                    .await
-                    .map_err(|e| anyhow::anyhow!("stream error: {}", e))?
-                    .stream()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("stream error: {}", e))?;
+                    .await;
+                let stream = match stream_result {
+                    Ok(s) => s,
+                    Err(e) => {
+                        circuit_breaker.record_failure().await;
+                        Err(anyhow::anyhow!("stream error: {}", e))?
+                    }
+                };
+
+                let mut stream = match stream.stream().await {
+                    Ok(s) => s,
+                    Err(e) => {
+                        circuit_breaker.record_failure().await;
+                        Err(anyhow::anyhow!("stream error: {}", e))?
+                    }
+                };
 
                 chat_history.push(current_msg.clone());
                 let mut tool_calls = vec![];
@@ -231,6 +279,7 @@ impl MarketplaceAgent for MiniMaxMarketplaceAgent {
                         StreamedAssistantContent::Text(text) => {
                             yield text.text;
                             did_call_tool = false;
+                            call_succeeded = true;
                         }
                         StreamedAssistantContent::ToolCall { tool_call, internal_call_id: _ } => {
                             let args_str = tool_call.function.arguments.to_string();
@@ -241,6 +290,7 @@ impl MarketplaceAgent for MiniMaxMarketplaceAgent {
                                 .map_err(|e| anyhow::anyhow!("tool error: {}", e))?;
                             tool_calls.push((tool_call.id.clone(), tool_call.call_id.clone(), result));
                             did_call_tool = true;
+                            call_succeeded = true;
                         }
                         StreamedAssistantContent::Reasoning(reasoning) => {
                             let rendered = reasoning.display_text();
@@ -248,6 +298,7 @@ impl MarketplaceAgent for MiniMaxMarketplaceAgent {
                                 yield rendered;
                             }
                             did_call_tool = false;
+                            call_succeeded = true;
                         }
                         StreamedAssistantContent::ToolCallDelta { .. } => {}
                         StreamedAssistantContent::ReasoningDelta { .. } => {}
@@ -268,6 +319,11 @@ impl MarketplaceAgent for MiniMaxMarketplaceAgent {
                 }
 
                 current_msg = chat_history.last().cloned().unwrap_or(current_msg);
+            }
+
+            // Record success only if at least one LLM call succeeded.
+            if call_succeeded {
+                circuit_breaker.record_success().await;
             }
         })
     }
