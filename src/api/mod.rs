@@ -1,5 +1,6 @@
 use crate::agents::router::IntentRouter;
 use crate::llm::{LlmProvider, MarketplaceAgent};
+use crate::api::metrics::MetricsService;
 use crate::services::chat::ChatService;
 use crate::services::notification::NotificationService;
 use crate::services::BusinessEvent;
@@ -17,6 +18,7 @@ pub mod auth;
 pub mod conversations;
 pub mod error;
 pub mod listings;
+pub mod metrics;
 pub mod negotiate;
 pub mod notifications;
 pub mod orders;
@@ -81,6 +83,7 @@ pub async fn rate_limit_middleware(
         .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
 
     if !state.rate_limit.check_rate_limit(&peer_addr.to_string()).await {
+        state.metrics.record_rate_limit_rejected();
         return ApiError::RateLimitExceeded.into_response();
     }
 
@@ -132,6 +135,7 @@ pub struct AppState {
     pub oss_role_arn: Option<String>,
     pub oss_access_key_id: Option<String>,
     pub oss_access_key_secret: Option<String>,
+    pub metrics: std::sync::Arc<MetricsService>,
 }
 
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
@@ -157,6 +161,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
 
     Router::new()
         .route("/api/health", get(health_check))
+        .route("/api/metrics", get(get_metrics))
         .route("/api/stats", get(stats::get_stats))
         .route("/api/admin/stats", get(admin::get_admin_stats))
         .route("/api/admin/users", get(admin::get_admin_users))
@@ -265,6 +270,11 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             rate_limit_middleware,
         ))
         .with_state(state)
+}
+
+/// GET /api/metrics — Prometheus text format metrics (no auth required)
+async fn get_metrics(State(state): State<AppState>) -> String {
+    state.metrics.render()
 }
 
 async fn health_check(State(state): State<AppState>) -> Result<&'static str, ApiError> {
@@ -412,6 +422,8 @@ async fn handle_chat(
         tracing::warn!(%e, "Failed to log user message — continuing anyway");
     }
 
+    state.metrics.record_chat_message();
+
     let history_entries = chat_svc
         .get_conversation_history(&conversation_id)
         .await
@@ -452,8 +464,11 @@ async fn handle_chat(
         .await
         .map_err(|e| {
             tracing::error!(err = %e, "LLM prompt failed");
+            state.metrics.record_llm_error();
             ApiError::Internal(anyhow::anyhow!(e))
         })?;
+
+    state.metrics.record_llm_call();
 
     // Log agent reply — fire and forget, errors are non-fatal.
     // Agent messages have no receiver (they're broadcast-style from the AI assistant).

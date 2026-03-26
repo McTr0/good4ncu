@@ -288,6 +288,8 @@ pub async fn cancel_order(
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
+    state.metrics.record_order_cancelled();
+
     tracing::info!(
         order_id = %order_id,
         cancelled_by = %user_id,
@@ -344,6 +346,8 @@ pub async fn confirm_order(
         )));
     }
 
+    state.metrics.record_order_completed();
+
     tracing::info!(order_id = %order_id, confirmed_by = %user_id, "Order confirmed");
 
     Ok(Json(serde_json::json!({
@@ -391,6 +395,8 @@ pub async fn pay_order(
             status
         )));
     }
+
+    state.metrics.record_order_paid();
 
     tracing::info!(order_id = %order_id, paid_by = %user_id, "Order paid");
 
@@ -447,6 +453,8 @@ pub async fn ship_order(
         .execute(&state.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    state.metrics.record_order_shipped();
 
     tracing::info!(order_id = %order_id, shipped_by = %user_id, "Order shipped");
 
@@ -545,6 +553,8 @@ pub async fn create_order(
     .execute(&state.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    state.metrics.record_order_created();
 
     // Notify seller that their item was purchased (same notification as AI tool path)
     let _ = state

@@ -23,11 +23,26 @@ async fn main() -> Result<(), anyhow::Error> {
         return Ok(());
     }
 
-    tracing_subscriber::fmt::init();
+    // Initialize structured JSON logging for production observability
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("good4ncu=info".parse().unwrap())
+                .add_directive("hyper=warn".parse().unwrap())
+                .add_directive("tower=warn".parse().unwrap()),
+        )
+        .with_target(true)
+        .with_thread_ids(true)
+        .json()
+        .init();
 
     // Load unified configuration at startup — fail fast if env vars are missing
     let config = config::AppConfig::load();
     tracing::info!(provider = %config.llm_provider, vector_dim = config.vector_dim, "Initializing LLM provider");
+
+    // Metrics service — shared across all request handlers
+    let metrics = Arc::new(api::metrics::MetricsService::new());
+    tracing::info!("Metrics service initialized");
 
     // Single PgPool for relational + vector data (pgvector lives in the same Postgres instance)
     let db_pool = db::init_db(&config.database_url).await?;
@@ -109,6 +124,7 @@ async fn main() -> Result<(), anyhow::Error> {
         oss_role_arn: config.oss_role_arn.clone(),
         oss_access_key_id: config.oss_access_key_id.clone(),
         oss_access_key_secret: config.oss_access_key_secret.clone(),
+        metrics: Arc::clone(&metrics),
     };
 
     let app = api::create_router(app_state, &config.cors_origins);

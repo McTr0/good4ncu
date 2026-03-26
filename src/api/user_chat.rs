@@ -598,6 +598,8 @@ pub async fn send_connection_message(
     let message_id: i64 = row.get("id");
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
 
+    state.metrics.record_chat_message();
+
     let sender_username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
         .bind(&sender_id)
         .fetch_optional(&state.db)

@@ -14,7 +14,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 chrono = { version = "0.4", features = ["serde"] }
 dotenvy = "0.15"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing = "0.1"
 reqwest = { version = "0.13", default-features = false, features = ["rustls"] }
 rig-postgres = "0.2.2"
@@ -41,6 +41,7 @@ hex = "0.4"
 tokio-tungstenite = "0.28"
 futures-util = "0.3"
 futures = "0.3"
+prometheus = "0.13"
 
 [features]
 default = []
