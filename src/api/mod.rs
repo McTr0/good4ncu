@@ -12,6 +12,7 @@ use axum::{
 };
 use futures::StreamExt;
 use sqlx::Row;
+pub mod admin;
 pub mod auth;
 pub mod conversations;
 pub mod error;
@@ -157,8 +158,18 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     Router::new()
         .route("/api/health", get(health_check))
         .route("/api/stats", get(stats::get_stats))
-        .route("/api/recommendations/feed", get(recommendations::get_recommendation_feed))
-        .route("/api/recommendations/similar", get(recommendations::get_similar_listings))
+        .route("/api/admin/stats", get(admin::get_admin_stats))
+        .route("/api/admin/users", get(admin::get_admin_users))
+        .route("/api/admin/listings", get(admin::get_admin_listings))
+        .route("/api/admin/orders", get(admin::get_admin_orders))
+        .route(
+            "/api/recommendations/feed",
+            get(recommendations::get_recommendation_feed),
+        )
+        .route(
+            "/api/recommendations/similar",
+            get(recommendations::get_similar_listings),
+        )
         .route("/api/categories", get(listings::get_categories))
         .route("/api/chat", post(handle_chat))
         .route("/api/chat/stream", get(handle_chat_stream))
@@ -219,10 +230,14 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/negotiations/{id}/accept",
             patch(negotiate::accept_counter_negotiation),
         )
-        .route("/api/negotiations/{id}/reject",
+        .route(
+            "/api/negotiations/{id}/reject",
             patch(negotiate::reject_counter_negotiation),
         )
-        .route("/api/chat/connect/request", post(user_chat::connect_request))
+        .route(
+            "/api/chat/connect/request",
+            post(user_chat::connect_request),
+        )
         .route("/api/chat/connect/accept", post(user_chat::connect_accept))
         .route("/api/chat/connect/reject", post(user_chat::connect_reject))
         .route("/api/chat/connections", get(user_chat::list_connections))
@@ -234,9 +249,12 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/chat/conversations/{id}/messages",
             post(user_chat::send_connection_message),
         )
-        .route("/api/chat/messages/{id}/read", post(user_chat::mark_message_read))
+        .route(
+            "/api/chat/messages/{id}/read",
+            post(user_chat::mark_message_read),
+        )
         .route("/api/upload/token", get(upload::get_upload_token))
-        .route("/ws", get(ws::ws_handler))
+        .route("/api/ws", get(ws::ws_handler))
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(middleware::from_fn(security_headers_middleware))

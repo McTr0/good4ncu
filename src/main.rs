@@ -2,6 +2,7 @@ mod agents;
 mod services;
 
 mod api;
+mod cli;
 mod config;
 mod db;
 mod llm;
@@ -15,6 +16,13 @@ use crate::llm::LlmProvider;
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
     dotenvy::dotenv().ok();
+
+    // Check for CLI commands first
+    let cli_args: Vec<String> = std::env::args().collect();
+    if cli::run_cli(&cli_args).await? {
+        return Ok(());
+    }
+
     tracing_subscriber::fmt::init();
 
     // Load unified configuration at startup — fail fast if env vars are missing

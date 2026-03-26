@@ -29,12 +29,13 @@ pub struct AuthResponse {
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Claims {
-    sub: String, // subject (user_id)
-    exp: usize,  // expiration time
+    sub: String,  // subject (user_id)
+    role: String, // user role: "user" or "admin"
+    exp: usize,   // expiration time
 }
 
-/// Generate a JWT token for the given user_id using the provided secret.
-fn generate_token(user_id: &str, jwt_secret: &str) -> String {
+/// Generate a JWT token for the given user_id and role using the provided secret.
+fn generate_token(user_id: &str, role: &str, jwt_secret: &str) -> String {
     let expiration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -43,6 +44,7 @@ fn generate_token(user_id: &str, jwt_secret: &str) -> String {
 
     let claims = Claims {
         sub: user_id.to_string(),
+        role: role.to_string(),
         exp: expiration,
     };
 
@@ -106,16 +108,19 @@ pub async fn register(
     let user_id = Uuid::new_v4().to_string();
 
     // Insert into database — unique constraint on username will trigger CONFLICT
-    let result = sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, $3)")
-        .bind(&user_id)
-        .bind(&payload.username)
-        .bind(&password_hash)
-        .execute(&state.db)
-        .await;
+    let result = sqlx::query(
+        "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)",
+    )
+    .bind(&user_id)
+    .bind(&payload.username)
+    .bind(&password_hash)
+    .bind("user")
+    .execute(&state.db)
+    .await;
 
     match result {
         Ok(_) => {
-            let token = generate_token(&user_id, &state.jwt_secret);
+            let token = generate_token(&user_id, "user", &state.jwt_secret);
             Ok(Json(AuthResponse {
                 token,
                 user_id,
@@ -153,27 +158,29 @@ pub async fn login(
     }
 
     // Fetch user from database
-    let user_row =
-        match sqlx::query("SELECT id, username, password_hash FROM users WHERE username = $1")
-            .bind(&payload.username)
-            .fetch_optional(&state.db)
-            .await
-        {
-            Ok(Some(row)) => row,
-            Ok(None) => {
-                // Return 401 to prevent username enumeration
-                tracing::warn!(username = %payload.username, "Login failed — user not found");
-                return Err(ApiError::Unauthorized);
-            }
-            Err(e) => {
-                tracing::error!(err = %e, "Database error during login");
-                return Err(ApiError::Internal(anyhow::anyhow!("Database error: {}", e)));
-            }
-        };
+    let user_row = match sqlx::query(
+        "SELECT id, username, password_hash, role FROM users WHERE username = $1",
+    )
+    .bind(&payload.username)
+    .fetch_optional(&state.db)
+    .await
+    {
+        Ok(Some(row)) => row,
+        Ok(None) => {
+            // Return 401 to prevent username enumeration
+            tracing::warn!(username = %payload.username, "Login failed — user not found");
+            return Err(ApiError::Unauthorized);
+        }
+        Err(e) => {
+            tracing::error!(err = %e, "Database error during login");
+            return Err(ApiError::Internal(anyhow::anyhow!("Database error: {}", e)));
+        }
+    };
 
     let user_id: String = user_row.get("id");
     let username: String = user_row.get("username");
     let stored_hash: String = user_row.get("password_hash");
+    let role: String = user_row.get("role");
 
     let password = payload.password.clone();
     let hash_clone = stored_hash.clone();
@@ -192,7 +199,7 @@ pub async fn login(
 
     match verify_result {
         Ok(true) => {
-            let token = generate_token(&user_id, &state.jwt_secret);
+            let token = generate_token(&user_id, &role, &state.jwt_secret);
             Ok(Json(AuthResponse {
                 token,
                 user_id,
@@ -309,6 +316,22 @@ pub fn extract_user_id_from_token_str(token: &str, jwt_secret: &str) -> Result<S
     Ok(token_data.claims.sub)
 }
 
+/// Extract and validate the user_id and role from a raw JWT token string.
+/// Returns `Ok((user_id, role))` if the token is valid, or `Err(message)` if invalid.
+pub fn extract_user_id_and_role_from_token_str(
+    token: &str,
+    jwt_secret: &str,
+) -> Result<(String, String), String> {
+    let token_data = decode::<Claims>(
+        token,
+        &DecodingKey::from_secret(jwt_secret.as_bytes()),
+        &Validation::default(),
+    )
+    .map_err(|e| format!("Invalid token: {}", e))?;
+
+    Ok((token_data.claims.sub, token_data.claims.role))
+}
+
 /// Extract and validate the user_id from the Authorization header using the provided secret.
 /// Returns `Ok(user_id)` if the token is valid, or `Err(message)` if invalid/missing.
 pub fn extract_user_id_from_token(headers: &HeaderMap, jwt_secret: &str) -> Result<String, String> {
@@ -321,14 +344,25 @@ pub fn extract_user_id_from_token(headers: &HeaderMap, jwt_secret: &str) -> Resu
         .strip_prefix("Bearer ")
         .ok_or_else(|| "Invalid Authorization format".to_string())?;
 
-    let token_data = decode::<Claims>(
-        token,
-        &DecodingKey::from_secret(jwt_secret.as_bytes()),
-        &Validation::default(),
-    )
-    .map_err(|e| format!("Invalid token: {}", e))?;
+    extract_user_id_from_token_str(token, jwt_secret)
+}
 
-    Ok(token_data.claims.sub)
+/// Extract and validate the user_id and role from the Authorization header using the provided secret.
+/// Returns `Ok((user_id, role))` if the token is valid, or `Err(message)` if invalid/missing.
+pub fn extract_user_id_and_role_from_token(
+    headers: &HeaderMap,
+    jwt_secret: &str,
+) -> Result<(String, String), String> {
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Missing Authorization header".to_string())?;
+
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| "Invalid Authorization format".to_string())?;
+
+    extract_user_id_and_role_from_token_str(token, jwt_secret)
 }
 
 #[cfg(test)]
@@ -354,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_generate_token_produces_valid_jwt() {
-        let token = generate_token("user-123", "secret123456789012345678901234567890");
+        let token = generate_token("user-123", "user", "secret123456789012345678901234567890");
         // A valid JWT has three parts separated by dots
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
@@ -399,6 +433,7 @@ mod tests {
     fn test_claims_serialization() {
         let claims = Claims {
             sub: "user-xyz".to_string(),
+            role: "user".to_string(),
             exp: 1700000000,
         };
         let json = serde_json::to_string(&claims).unwrap();
@@ -408,15 +443,16 @@ mod tests {
 
     #[test]
     fn test_claims_deserialization() {
-        let json = r#"{"sub": "user-123", "exp": 1700000000}"#;
+        let json = r#"{"sub": "user-123", "role": "admin", "exp": 1700000000}"#;
         let claims: Claims = serde_json::from_str(json).unwrap();
         assert_eq!(claims.sub, "user-123");
+        assert_eq!(claims.role, "admin");
         assert_eq!(claims.exp, 1700000000);
     }
 
     #[test]
     fn test_generate_token_with_empty_user_id() {
-        let token = generate_token("", "secret123456789012345678901234567890");
+        let token = generate_token("", "user", "secret123456789012345678901234567890");
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
     }
@@ -424,7 +460,7 @@ mod tests {
     #[test]
     fn test_generate_token_verifies_correctly() {
         let secret = "secret123456789012345678901234567890";
-        let token = generate_token("test-user", secret);
+        let token = generate_token("test-user", "admin", secret);
         let extracted = extract_user_id_from_token(
             &{
                 let mut h = HeaderMap::new();
@@ -438,5 +474,14 @@ mod tests {
         );
         assert!(extracted.is_ok());
         assert_eq!(extracted.unwrap(), "test-user");
+    }
+
+    #[test]
+    fn test_generate_token_includes_role() {
+        let secret = "secret123456789012345678901234567890";
+        let token = generate_token("test-user", "admin", secret);
+        let (user_id, role) = extract_user_id_and_role_from_token_str(&token, secret).unwrap();
+        assert_eq!(user_id, "test-user");
+        assert_eq!(role, "admin");
     }
 }
