@@ -13,7 +13,7 @@ pub mod redis_backend;
 pub mod traits;
 
 // Re-export for backward compatibility with code that imported from `middleware::rate_limit`
-pub use local::{RateLimitStateHandle, make_rate_limit_state, is_whitelisted};
+pub use local::{RateLimitStateHandle, is_whitelisted};
 
 /// Factory for creating [`RateLimiter`] instances based on configuration.
 #[allow(dead_code)]

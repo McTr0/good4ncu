@@ -80,7 +80,7 @@ pub async fn rate_limit_middleware(
         .copied()
         .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
 
-    if !state.rate_limit.check_rate_limit(&peer_addr.to_string()) {
+    if !state.rate_limit.check_rate_limit(&peer_addr.to_string()).await {
         return ApiError::RateLimitExceeded.into_response();
     }
 

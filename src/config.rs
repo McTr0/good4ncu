@@ -27,6 +27,12 @@ pub struct AppConfig {
     pub oss_role_arn: Option<String>,
     pub oss_access_key_id: Option<String>,
     pub oss_access_key_secret: Option<String>,
+    /// Redis URL for distributed rate limiter (optional — falls back to local moka if not set).
+    pub redis_url: Option<String>,
+    /// Maximum requests per window for rate limiting. Defaults to 100.
+    pub rate_limit_max_requests: u64,
+    /// Rate limit window in seconds. Defaults to 60.
+    pub rate_limit_window_secs: u64,
 }
 
 impl fmt::Debug for AppConfig {
@@ -58,6 +64,9 @@ impl fmt::Debug for AppConfig {
                 "oss_access_key_secret",
                 &self.oss_access_key_secret.as_ref().map(|_| "[REDACTED]"),
             )
+            .field("redis_url", &self.redis_url)
+            .field("rate_limit_max_requests", &self.rate_limit_max_requests)
+            .field("rate_limit_window_secs", &self.rate_limit_window_secs)
             .finish()
     }
 }
@@ -125,6 +134,15 @@ impl AppConfig {
             oss_role_arn: std::env::var("OSS_ROLE_ARN").ok(),
             oss_access_key_id: std::env::var("OSS_ACCESS_KEY_ID").ok(),
             oss_access_key_secret: std::env::var("OSS_ACCESS_KEY_SECRET").ok(),
+            redis_url: std::env::var("REDIS_URL").ok(),
+            rate_limit_max_requests: std::env::var("RATE_LIMIT_MAX_REQUESTS")
+                .unwrap_or_else(|_| "100".into())
+                .parse()
+                .unwrap_or(100),
+            rate_limit_window_secs: std::env::var("RATE_LIMIT_WINDOW_SECS")
+                .unwrap_or_else(|_| "60".into())
+                .parse()
+                .unwrap_or(60),
         })
     }
 }

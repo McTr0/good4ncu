@@ -46,5 +46,8 @@ Thumbs.db
 # === Misc ===
 *.log
 
+# === Claude Code ===
+.claude/
+
 # === Internal Docs (never commit) ===
 docs/

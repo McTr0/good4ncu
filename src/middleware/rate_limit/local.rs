@@ -19,8 +19,6 @@ const WHITELISTED_PATHS: &[&str] = &[
     "/api/chat/conversations",
     "/api/chat/messages",
 ];
-const DEFAULT_MAX_REQUESTS: u64 = 100;
-const DEFAULT_WINDOW_SECS: u64 = 60;
 
 /// Token bucket rate limiter using moka cache.
 /// Each IP gets a token bucket that refills over time.
@@ -145,27 +143,20 @@ mod tests {
 // Backward-compatible wrappers (used by AppState)
 // ---------------------------------------------------------------------------
 
-/// Handle to a [`LocalRateLimiter`] that implements [`Clone`] and can be
-/// shared across request handlers. Exposes a synchronous `check_rate_limit`
-/// API for use in Axum extractors.
+/// Handle to a [`RateLimiter`] that implements [`Clone`] and can be shared across
+/// request handlers. The underlying limiter can be local (moka) or distributed (Redis).
+/// Exposes an async `check_rate_limit` API compatible with the [`RateLimiter`] trait.
 #[derive(Clone)]
-pub struct RateLimitStateHandle(Arc<LocalRateLimiter>);
+pub struct RateLimitStateHandle(pub Arc<dyn RateLimiter>);
 
 impl RateLimitStateHandle {
-    pub fn new(max_requests: u64, window_secs: u64) -> Self {
-        Self(Arc::new(LocalRateLimiter::new(max_requests, window_secs)))
+    pub fn new(limiter: impl RateLimiter + 'static) -> Self {
+        Self(Arc::new(limiter))
     }
 
-    pub fn check_rate_limit(&self, ip: &str) -> bool {
-        // LocalRateLimiter::check_rate_limit is sync (moka is thread-safe)
-        // Use blocking check since we don't want async overhead in the hot path
-        self.0.check(ip)
+    pub async fn check_rate_limit(&self, ip: &str) -> bool {
+        self.0.check_rate_limit(ip).await.unwrap_or(false)
     }
-}
-
-/// Create the default rate limit state (100 requests per 60 seconds per IP).
-pub fn make_rate_limit_state() -> RateLimitStateHandle {
-    RateLimitStateHandle::new(DEFAULT_MAX_REQUESTS, DEFAULT_WINDOW_SECS)
 }
 
 /// Returns `true` if the given path is whitelisted from rate limiting.

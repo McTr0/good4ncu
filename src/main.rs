@@ -92,7 +92,13 @@ async fn main() -> Result<(), anyhow::Error> {
         db: db_pool.clone(),
         llm_provider: Arc::clone(&llm_provider),
         event_tx: event_tx.clone(),
-        rate_limit: middleware::rate_limit::make_rate_limit_state(),
+        rate_limit: {
+            let factory = middleware::rate_limit::RateLimiterFactory::new(
+                config.rate_limit_max_requests,
+                config.rate_limit_window_secs,
+            );
+            middleware::rate_limit::RateLimitStateHandle::new(factory.build_local())
+        },
         jwt_secret: config.jwt_secret.clone(),
         gemini_api_key: config.gemini_api_key.clone(),
         notification,
