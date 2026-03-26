@@ -20,6 +20,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   Listing? _listing;
   bool _loading = true;
   String? _error;
+  bool _isOperating = false;
 
   @override
   void initState() {
@@ -38,8 +39,11 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   }
 
   Future<void> _handleContactSeller(BuildContext context) async {
+    if (_isOperating) return;
     final listing = _listing;
     if (listing == null || listing.ownerId == null) return;
+
+    setState(() => _isOperating = true);
 
     // Can't chat with yourself
     try {
@@ -50,9 +54,17 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('不能和自己聊天')),
         );
+        setState(() => _isOperating = false);
         return;
       }
-    } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加载失败: $e'), backgroundColor: Colors.red),
+      );
+      setState(() => _isOperating = false);
+      return;
+    }
 
     try {
       // Check existing connections
@@ -81,14 +93,19 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('连接失败: $e'), duration: const Duration(seconds: 3)),
+        SnackBar(content: Text('连接失败，请稍后重试'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
       );
+    } finally {
+      if (mounted) setState(() => _isOperating = false);
     }
   }
 
   Future<void> _handlePurchase(BuildContext context) async {
+    if (_isOperating) return;
     final listing = _listing;
     if (listing == null) return;
+
+    setState(() => _isOperating = true);
 
     try {
       await _apiService.createOrder(
@@ -96,29 +113,34 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
         offeredPriceCny: listing.suggestedPriceCny,
       );
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
           content: Text('购买成功！订单已创建'),
           backgroundColor: Colors.green,
           duration: Duration(seconds: 3),
-        ),
-      );
+        ));
       context.push('/orders');
     } on ConflictException {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
           content: Text('哎呀，该商品太火爆，已经被别人抢先一步啦！'),
           backgroundColor: Colors.orange,
-          duration: Duration(seconds: 3),
-        ),
-      );
+        ));
       _loadDetail();
     } catch (e) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('购买失败: $e'), duration: const Duration(seconds: 3)),
-      );
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(const SnackBar(
+          content: Text('购买失败，请稍后重试'),
+          backgroundColor: Colors.red,
+          duration: Duration(seconds: 4),
+        ));
+    } finally {
+      if (mounted) setState(() => _isOperating = false);
     }
   }
 

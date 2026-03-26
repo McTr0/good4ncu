@@ -20,12 +20,32 @@ class ConflictException implements Exception {
   String toString() => message;
 }
 
+/// 网络不可达 / 超时
+class NetworkException implements Exception {
+  final String message;
+  NetworkException([this.message = '网络连接失败，请检查网络设置']);
+  @override
+  String toString() => message;
+}
+
+/// 服务器错误（5xx）
+class ServerException implements Exception {
+  final String message;
+  final int statusCode;
+  ServerException(this.statusCode, [this.message = '服务器异常，请稍后再试']);
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   // Global navigator key for programmatic navigation (e.g., force logout)
   static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
   // Use localhost for Chrome/Web; use 10.0.2.2 for Android Emulator
   static const String baseUrl = 'http://localhost:3000';
+
+  // Timeout-enabled client
+  final http.Client _client = http.Client();
 
   /// Build headers with JWT token if available.
   Future<Map<String, String>> _authHeaders() async {
@@ -40,9 +60,11 @@ class ApiService {
     return headers;
   }
 
-  /// Handle responses, throwing AuthException on 401.
+  /// Handle responses, throwing appropriate exceptions.
   T _handleResponse<T>(http.Response response, T Function(dynamic) parse) {
     if (response.statusCode == 401) {
+      // 自动清除 token 并跳转登录页
+      _clearAuthAndRedirect();
       throw AuthException('Session expired. Please login again.');
     }
     if (response.statusCode == 409) {
@@ -53,28 +75,64 @@ class ApiService {
       } catch (_) {}
       throw ConflictException(msg);
     }
+    if (response.statusCode == 403) {
+      throw AuthException('Permission denied.');
+    }
+    if (response.statusCode >= 500) {
+      throw ServerException(response.statusCode);
+    }
     if (response.statusCode != 200) {
-      throw Exception('Request failed: ${response.statusCode}');
+      String msg = 'Request failed: $response.statusCode';
+      try {
+        final body = jsonDecode(response.body);
+        msg = body['message']?.toString() ?? msg;
+      } catch (_) {}
+      throw NetworkException(msg);
     }
     return parse(jsonDecode(response.body));
   }
 
+  Future<void> _clearAuthAndRedirect() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('jwt_token');
+    await prefs.remove('refresh_token');
+    if (navigatorKey.currentState != null) {
+      navigatorKey.currentState!.pushReplacementNamed('/login');
+    }
+  }
+
+  /// GET request with 15s timeout.
+  Future<http.Response> _get(Uri url, Map<String, String> headers) async {
+    return _client.get(url, headers: headers).timeout(
+      const Duration(seconds: 15),
+      onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+    );
+  }
+
+  /// POST request with 30s timeout.
+  Future<http.Response> _post(Uri url, Map<String, String> headers, String body) async {
+    return _client.post(url, headers: headers, body: body).timeout(
+      const Duration(seconds: 30),
+      onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+    );
+  }
+
   Future<String> sendChatMessage(ChatMessage message) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/chat'),
-      headers: headers,
-      body: jsonEncode(message.toJson()),
+      headers,
+      jsonEncode(message.toJson()),
     );
 
     return _handleResponse(response, (data) => data['reply'] ?? 'Empty response');
   }
 
   Future<String> login(String username, String password) async {
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/auth/login'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': username, 'password': password}),
+      {'Content-Type': 'application/json'},
+      jsonEncode({'username': username, 'password': password}),
     );
 
     if (response.statusCode == 200) {
@@ -90,10 +148,10 @@ class ApiService {
   }
 
   Future<String> register(String username, String password) async {
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/auth/register'),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode({'username': username, 'password': password}),
+      {'Content-Type': 'application/json'},
+      jsonEncode({'username': username, 'password': password}),
     );
 
     if (response.statusCode == 200) {
@@ -110,9 +168,9 @@ class ApiService {
 
   Future<Map<String, dynamic>> getUserProfile() async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/user/profile'),
-      headers: headers,
+      headers,
     );
 
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
@@ -121,9 +179,9 @@ class ApiService {
   Future<Map<String, dynamic>> getUserListings(
       {int limit = 20, int offset = 0}) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/user/listings?limit=$limit&offset=$offset'),
-      headers: headers,
+      headers,
     );
 
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
@@ -150,15 +208,15 @@ class ApiService {
     final uri = Uri.parse('$baseUrl/api/listings').replace(
       queryParameters: queryParams,
     );
-    final response = await http.get(uri, headers: headers);
+    final response = await _get(uri, headers);
     return _handleResponse(response, (data) => ListingsResponse.fromJson(data));
   }
 
   Future<Listing> getListingDetail(String id) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/listings/$id'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(
         response, (data) => Listing.fromJson(data as Map<String, dynamic>));
@@ -174,10 +232,10 @@ class ApiService {
     String? description,
   }) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/listings'),
-      headers: headers,
-      body: jsonEncode({
+      headers,
+      jsonEncode({
         'title': title,
         'category': category,
         'brand': brand,
@@ -192,10 +250,10 @@ class ApiService {
 
   Future<RecognizedItem> recognizeItem(String imageBase64) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/listings/recognize'),
-      headers: headers,
-      body: jsonEncode({'image_base64': imageBase64}),
+      headers,
+      jsonEncode({'image_base64': imageBase64}),
     );
     return _handleResponse(response, (data) => RecognizedItem.fromJson(data));
   }
@@ -212,15 +270,15 @@ class ApiService {
     };
     if (role != null) queryParams['role'] = role;
     final uri = Uri.parse('$baseUrl/api/orders').replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+    final response = await _get(uri, headers);
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
   Future<Map<String, dynamic>> getOrder(String orderId) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/orders/$orderId'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
@@ -230,10 +288,10 @@ class ApiService {
     required double offeredPriceCny,
   }) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/orders'),
-      headers: headers,
-      body: jsonEncode({
+      headers,
+      jsonEncode({
         'listing_id': listingId,
         'offered_price_cny': offeredPriceCny,
       }),
@@ -243,40 +301,40 @@ class ApiService {
 
   Future<void> payOrder(String orderId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/orders/$orderId/pay'),
-      headers: headers,
-      body: '{}',
+      headers,
+      '{}',
     );
     _handleResponse(response, (_) {});
   }
 
   Future<void> shipOrder(String orderId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/orders/$orderId/ship'),
-      headers: headers,
-      body: '{}',
+      headers,
+      '{}',
     );
     _handleResponse(response, (_) {});
   }
 
   Future<void> confirmOrder(String orderId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/orders/$orderId/confirm'),
-      headers: headers,
-      body: '{}',
+      headers,
+      '{}',
     );
     _handleResponse(response, (_) {});
   }
 
   Future<void> cancelOrder(String orderId, {String? reason}) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/orders/$orderId/cancel'),
-      headers: headers,
-      body: jsonEncode({'reason': reason}),
+      headers,
+      jsonEncode({'reason': reason}),
     );
     _handleResponse(response, (_) {});
   }
@@ -287,19 +345,19 @@ class ApiService {
 
   Future<List<dynamic>> getWatchlist() async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/watchlist'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as List<dynamic>);
   }
 
   Future<void> addToWatchlist(String listingId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/watchlist/$listingId'),
-      headers: headers,
-      body: '{}',
+      headers,
+      '{}',
     );
     _handleResponse(response, (_) {});
   }
@@ -315,9 +373,9 @@ class ApiService {
 
   Future<bool> isWatched(String listingId) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/watchlist/$listingId'),
-      headers: headers,
+      headers,
     );
     final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
     return data['watched'] ?? false;
@@ -329,18 +387,18 @@ class ApiService {
 
   Future<List<dynamic>> getConversations() async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/conversations'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as List<dynamic>);
   }
 
   Future<Map<String, dynamic>> getConversationMessages(String conversationId, {int limit = 50, int offset = 0}) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/conversations/$conversationId/messages?limit=$limit&offset=$offset'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
@@ -351,18 +409,18 @@ class ApiService {
 
   Future<Map<String, dynamic>> getPublicUserProfile(String userId) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/users/$userId'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
   Future<Map<String, dynamic>> searchUsers(String query, {int limit = 20, int offset = 0}) async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/users/search?q=$query&limit=$limit&offset=$offset'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
@@ -373,42 +431,39 @@ class ApiService {
 
   Future<void> banUser(String userId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/admin/users/$userId/ban'),
-      headers: headers,
+      headers,
+      '{}',
     );
-    if (response.statusCode != 200) {
-      throw Exception('Ban failed: ${response.statusCode}');
-    }
+    _handleResponse(response, (_) => null);
   }
 
   Future<void> unbanUser(String userId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/admin/users/$userId/unban'),
-      headers: headers,
+      headers,
+      '{}',
     );
-    if (response.statusCode != 200) {
-      throw Exception('Unban failed: ${response.statusCode}');
-    }
+    _handleResponse(response, (_) => null);
   }
 
   Future<void> takedownListing(String listingId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/admin/listings/$listingId/takedown'),
-      headers: headers,
+      headers,
+      '{}',
     );
-    if (response.statusCode != 200) {
-      throw Exception('Takedown failed: ${response.statusCode}');
-    }
+    _handleResponse(response, (_) => null);
   }
 
   Future<Map<String, dynamic>> getAdminStats() async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/admin/stats'),
-      headers: headers,
+      headers,
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
@@ -421,7 +476,7 @@ class ApiService {
     };
     if (q != null && q.isNotEmpty) queryParams['q'] = q;
     final uri = Uri.parse('$baseUrl/api/admin/users').replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+    final response = await _get(uri, headers);
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
@@ -433,7 +488,7 @@ class ApiService {
     };
     if (status != null) queryParams['status'] = status;
     final uri = Uri.parse('$baseUrl/api/admin/listings').replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+    final response = await _get(uri, headers);
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
@@ -445,7 +500,7 @@ class ApiService {
     };
     if (status != null) queryParams['status'] = status;
     final uri = Uri.parse('$baseUrl/api/admin/orders').replace(queryParameters: queryParams);
-    final response = await http.get(uri, headers: headers);
+    final response = await _get(uri, headers);
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
@@ -454,9 +509,9 @@ class ApiService {
   // ---------------------------------------------------------------------------
 
   Future<Map<String, dynamic>> getStats() async {
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/stats'),
-      headers: {'Content-Type': 'application/json'},
+      {'Content-Type': 'application/json'},
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
@@ -486,10 +541,10 @@ class ApiService {
 
   Future<void> changePassword(String currentPassword, String newPassword) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/auth/change-password'),
-      headers: headers,
-      body: jsonEncode({
+      headers,
+      jsonEncode({
         'current_password': currentPassword,
         'new_password': newPassword,
       }),
@@ -505,9 +560,9 @@ class ApiService {
   /// Sellers see pending + expired; buyers see countered + approved + rejected + expired.
   Future<List<HitlRequest>> getNegotiations() async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/negotiations'),
-      headers: headers,
+      headers,
     );
     final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
     final items = data['items'] as List<dynamic>? ?? [];
@@ -564,9 +619,9 @@ class ApiService {
   /// 获取会话列表
   Future<List<Conversation>> getConnections() async {
     final headers = await _authHeaders();
-    final response = await http.get(
+    final response = await _get(
       Uri.parse('$baseUrl/api/chat/connections'),
-      headers: headers,
+      headers,
     );
     final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
     final items = data['items'] as List<dynamic>? ?? [];
@@ -580,10 +635,10 @@ class ApiService {
     final headers = await _authHeaders();
     final body = <String, dynamic>{'receiver_id': receiverId};
     if (listingId != null) body['listing_id'] = listingId;
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/chat/connect/request'),
-      headers: headers,
-      body: jsonEncode(body),
+      headers,
+      jsonEncode(body),
     );
     _handleResponse(response, (_) {});
   }
@@ -591,10 +646,10 @@ class ApiService {
   /// 接受连接
   Future<void> acceptConnection(String connectionId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/chat/connect/accept'),
-      headers: headers,
-      body: jsonEncode({'connection_id': connectionId}),
+      headers,
+      jsonEncode({'connection_id': connectionId}),
     );
     _handleResponse(response, (_) {});
   }
@@ -602,10 +657,10 @@ class ApiService {
   /// 拒绝连接
   Future<void> rejectConnection(String connectionId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/chat/connect/reject'),
-      headers: headers,
-      body: jsonEncode({'connection_id': connectionId}),
+      headers,
+      jsonEncode({'connection_id': connectionId}),
     );
     _handleResponse(response, (_) {});
   }
@@ -622,10 +677,10 @@ class ApiService {
     if (imageBase64 != null) body['image_base64'] = imageBase64;
     if (audioBase64 != null) body['audio_base64'] = audioBase64;
 
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/chat/conversations/$conversationId/messages'),
-      headers: headers,
-      body: jsonEncode(body),
+      headers,
+      jsonEncode(body),
     );
     final data = _handleResponse(
       response,
@@ -644,7 +699,7 @@ class ApiService {
     final uri = Uri.parse(
       '$baseUrl/api/chat/conversations/$conversationId/messages?limit=$limit&offset=$offset',
     );
-    final response = await http.get(uri, headers: headers);
+    final response = await _get(uri, headers);
     final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
     final messages = data['messages'] as List<dynamic>? ?? [];
     return messages
@@ -655,10 +710,10 @@ class ApiService {
   /// 标记消息已读
   Future<void> markMessageRead(String messageId) async {
     final headers = await _authHeaders();
-    final response = await http.post(
+    final response = await _post(
       Uri.parse('$baseUrl/api/chat/messages/$messageId/read'),
-      headers: headers,
-      body: '{}',
+      headers,
+      '{}',
     );
     _handleResponse(response, (_) {});
   }

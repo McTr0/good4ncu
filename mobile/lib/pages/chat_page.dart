@@ -561,12 +561,27 @@ class _ChatPageState extends State<ChatPage> {
     ));
 
     try {
-      // Connect SSE stream.
-      await _sseService.connect(
-        message: userMsg.content,
-        imageBase64: userMsg.imageBase64,
-        audioBase64: userMsg.audioBase64,
-      );
+      // Connect SSE stream with timeout.
+      bool connected;
+      try {
+        await _sseService
+            .connect(
+              message: userMsg.content,
+              imageBase64: userMsg.imageBase64,
+              audioBase64: userMsg.audioBase64,
+            )
+            .timeout(const Duration(seconds: 30));
+        connected = true;
+      } catch (_) {
+        connected = false;
+      }
+      if (!connected && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('连接失败，请检查网络'), backgroundColor: Colors.red),
+        );
+        setState(() => _isStreaming = false);
+        return;
+      }
 
       String fullReply = '';
       await for (final token in _sseService.stream) {

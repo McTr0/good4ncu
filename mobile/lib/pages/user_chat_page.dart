@@ -31,6 +31,7 @@ class _UserChatPageState extends State<UserChatPage> {
   List<ConversationMessage> _messages = [];
   String? _currentUserId;
   bool _isLoading = true;
+  bool _isSending = false;
   String? _error;
 
   /// 连接状态: null=无连接, 'connecting'=连接中, 'connected'=已连接
@@ -62,7 +63,12 @@ class _UserChatPageState extends State<UserChatPage> {
       setState(() {
         _currentUserId = profile['user_id']?.toString();
       });
-    } catch (_) {}
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('加载失败: $e'), backgroundColor: Colors.red),
+      );
+    }
   }
 
   Future<void> _loadMessages() async {
@@ -180,30 +186,50 @@ class _UserChatPageState extends State<UserChatPage> {
   }
 
   Future<void> _sendMessage() async {
+    if (_isSending || _textController.text.trim().isEmpty) return;
+
     if (_connectionStatus != 'connected') {
       _showSnackBar('等待连接建立后再发送消息');
       return;
     }
-    final text = _textController.text.trim();
-    if (text.isEmpty) return;
 
+    final text = _textController.text.trim();
+    final tempMsg = ConversationMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      conversationId: widget.conversationId,
+      senderId: _currentUserId ?? '',
+      content: text,
+      sentAt: DateTime.now(),
+    );
+
+    setState(() {
+      _messages.add(tempMsg);
+      _isSending = true;
+    });
     _textController.clear();
-    setState(() => _isLoading = true);
 
     try {
-      final message = await _apiService.sendMessage(
+      final reply = await _apiService.sendMessage(
         widget.conversationId,
         content: text,
       );
       if (!mounted) return;
       setState(() {
-        _messages.add(message);
-        _isLoading = false;
+        // Update last message with server response
+        final idx = _messages.indexWhere((m) => m.id == tempMsg.id);
+        if (idx >= 0) {
+          _messages[idx] = reply;
+        }
+        _isSending = false;
       });
       _scrollToBottom();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _isLoading = false);
+      // Rollback: remove failed message
+      setState(() {
+        _messages.removeWhere((m) => m.id == tempMsg.id);
+        _isSending = false;
+      });
       _showSnackBar('发送失败: $e');
     }
   }

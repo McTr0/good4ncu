@@ -31,7 +31,7 @@ class _ProfilePageState extends State<ProfilePage> {
       final profile = await _apiService.getUserProfile();
       if (mounted) setState(() { _profile = profile; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+      if (mounted) setState(() { _loading = false; _error = '个人资料加载失败'; });
     }
   }
 
@@ -200,7 +200,16 @@ class _ProfilePageState extends State<ProfilePage> {
             icon: Icons.admin_panel_settings_outlined,
             title: 'Admin Console',
             subtitle: 'System overview & management',
-            onTap: () => context.push('/admin'),
+            onTap: () {
+              final isAdmin = _profile?['role'] == 'admin';
+              if (!isAdmin) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text('仅管理员可用'), backgroundColor: Colors.orange),
+                );
+                return;
+              }
+              context.push('/admin');
+            },
           ),
           _MenuCard(
             icon: Icons.settings_outlined,
