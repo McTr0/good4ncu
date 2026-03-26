@@ -168,6 +168,9 @@ mod tests {
             oss_role_arn: Some("acs:ram::123456:role/TestRole".to_string()),
             oss_access_key_id: Some("oss-key-id".to_string()),
             oss_access_key_secret: Some("oss-secret".to_string()),
+            redis_url: None,
+            rate_limit_max_requests: 100,
+            rate_limit_window_secs: 60,
         };
 
         let debug_str = format!("{:?}", config);
