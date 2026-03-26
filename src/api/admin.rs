@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     Json,
 };
@@ -10,12 +10,23 @@ use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::middleware::admin::require_admin;
 
+/// Revoke all refresh tokens for a user (used when banning a user).
+async fn revoke_all_refresh_tokens(db: &sqlx::PgPool, user_id: &str) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 /// GET /api/admin/stats - admin marketplace statistics (requires admin role)
 pub async fn get_admin_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<AdminStats>, ApiError> {
-    require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
 
     let total_listings: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM inventory")
         .fetch_one(&state.db)
@@ -93,15 +104,15 @@ pub async fn get_admin_users(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminUsersResponse>, ApiError> {
-    require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
 
     let users = sqlx::query(
         r#"
-        SELECT u.id, u.username, u.role, u.created_at,
+        SELECT u.id, u.username, u.role, u.status, u.created_at,
                COUNT(i.id) as listing_count
         FROM users u
         LEFT JOIN inventory i ON u.id = i.owner_id
-        GROUP BY u.id, u.username, u.role, u.created_at
+        GROUP BY u.id, u.username, u.role, u.status, u.created_at
         ORDER BY u.created_at DESC
         LIMIT $1 OFFSET $2
         "#,
@@ -125,6 +136,7 @@ pub async fn get_admin_users(
             id: row.get("id"),
             username: row.get("username"),
             role: row.get("role"),
+            status: row.get("status"),
             created_at: row.get("created_at"),
             listing_count: row.try_get("listing_count").unwrap_or(0),
         })
@@ -144,6 +156,7 @@ pub struct UserInfo {
     pub id: String,
     pub username: String,
     pub role: String,
+    pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub listing_count: i64,
 }
@@ -154,7 +167,7 @@ pub async fn get_admin_listings(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminListingsResponse>, ApiError> {
-    require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
 
     let listings = sqlx::query(
         "SELECT id, title, category, brand, condition_score, suggested_price_cny, description, status, owner_id, created_at FROM inventory ORDER BY created_at DESC LIMIT $1 OFFSET $2"
@@ -217,7 +230,7 @@ pub async fn get_admin_orders(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminOrdersResponse>, ApiError> {
-    require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
 
     let orders = sqlx::query(
         "SELECT id, listing_id, buyer_id, seller_id, final_price, status, created_at FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2"
@@ -266,4 +279,119 @@ pub struct OrderInfo {
     pub final_price: i64,
     pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// POST /api/admin/users/:user_id/ban - ban a user (requires admin role)
+pub async fn ban_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(target_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+
+    // Check target user exists and is not an admin
+    let user_row = sqlx::query("SELECT id, role FROM users WHERE id = $1")
+        .bind(&target_user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let role: String = user_row.get("role");
+    if role == "admin" {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Ban the user
+    let banned = sqlx::query(
+        "UPDATE users SET status = 'banned' WHERE id = $1 AND status = 'active' RETURNING id",
+    )
+    .bind(&target_user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if banned.is_none() {
+        return Err(ApiError::BadRequest("用户已被封禁或不存在".to_string()));
+    }
+
+    // Revoke all sessions
+    revoke_all_refresh_tokens(&state.db, &target_user_id)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to revoke sessions: {}", e)))?;
+
+    tracing::info!(
+        admin_id = %admin_id,
+        target_user_id = %target_user_id,
+        "Admin banned user"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "用户已被封禁" })))
+}
+
+/// POST /api/admin/users/:user_id/unban - unban a user (requires admin role)
+pub async fn unban_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(target_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+
+    let unbanned = sqlx::query(
+        "UPDATE users SET status = 'active' WHERE id = $1 AND status = 'banned' RETURNING id",
+    )
+    .bind(&target_user_id)
+    .fetch_optional(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if unbanned.is_none() {
+        return Err(ApiError::BadRequest("用户未被封禁或不存在".to_string()));
+    }
+
+    tracing::info!(
+        admin_id = %admin_id,
+        target_user_id = %target_user_id,
+        "Admin unbanned user"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "用户已解封" })))
+}
+
+/// POST /api/admin/listings/:listing_id/takedown - takedown a listing (requires admin role)
+pub async fn takedown_listing(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(listing_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+
+    // Takedown the listing
+    let takedown =
+        sqlx::query("UPDATE inventory SET status = 'takedown' WHERE id = $1 RETURNING id")
+            .bind(&listing_id)
+            .fetch_optional(&state.db)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if takedown.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    // Cancel any pending orders for this listing
+    sqlx::query(
+        "UPDATE orders SET status = 'cancelled' WHERE listing_id = $1 AND status = 'pending'",
+    )
+    .bind(&listing_id)
+    .execute(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    tracing::info!(
+        admin_id = %admin_id,
+        listing_id = %listing_id,
+        "Admin takedown listing"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "商品已下架" })))
 }

@@ -371,6 +371,39 @@ class ApiService {
   // Admin endpoints (role = 'admin' required)
   // ---------------------------------------------------------------------------
 
+  Future<void> banUser(String userId) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/ban'),
+      headers: headers,
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Ban failed: ${response.statusCode}');
+    }
+  }
+
+  Future<void> unbanUser(String userId) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/unban'),
+      headers: headers,
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Unban failed: ${response.statusCode}');
+    }
+  }
+
+  Future<void> takedownListing(String listingId) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/admin/listings/$listingId/takedown'),
+      headers: headers,
+    );
+    if (response.statusCode != 200) {
+      throw Exception('Takedown failed: ${response.statusCode}');
+    }
+  }
+
   Future<Map<String, dynamic>> getAdminStats() async {
     final headers = await _authHeaders();
     final response = await http.get(

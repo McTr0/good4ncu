@@ -17,16 +17,17 @@ pub async fn admin_middleware(mut request: Request, next: Next) -> Response {
 }
 
 /// Extract and validate admin role from Authorization header.
-/// Returns Ok(()) if admin, Err(ApiError::Forbidden) otherwise.
+/// Returns Ok(admin_id) if admin, Err(ApiError::Forbidden) otherwise.
 #[allow(dead_code)]
-pub fn require_admin(headers: &HeaderMap, jwt_secret: &str) -> Result<(), ApiError> {
-    let (_, role) = crate::api::auth::extract_user_id_and_role_from_token(headers, jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+pub fn require_admin(headers: &HeaderMap, jwt_secret: &str) -> Result<String, ApiError> {
+    let (user_id, role) =
+        crate::api::auth::extract_user_id_and_role_from_token(headers, jwt_secret)
+            .map_err(|_| ApiError::Unauthorized)?;
 
     if role != "admin" {
         tracing::warn!(role = %role, "Non-admin user attempted to access admin endpoint");
         return Err(ApiError::Forbidden);
     }
 
-    Ok(())
+    Ok(user_id)
 }
