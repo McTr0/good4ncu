@@ -45,7 +45,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     try {
       final profile = await _apiService.getUserProfile();
       if (!mounted) return;
-      final currentUserId = profile['id']?.toString();
+      final currentUserId = profile['user_id']?.toString();
       if (currentUserId == listing.ownerId) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('不能和自己聊天')),

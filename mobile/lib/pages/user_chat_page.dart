@@ -60,7 +60,7 @@ class _UserChatPageState extends State<UserChatPage> {
     try {
       final profile = await _apiService.getUserProfile();
       setState(() {
-        _currentUserId = profile['id']?.toString();
+        _currentUserId = profile['user_id']?.toString();
       });
     } catch (_) {}
   }
@@ -180,6 +180,10 @@ class _UserChatPageState extends State<UserChatPage> {
   }
 
   Future<void> _sendMessage() async {
+    if (_connectionStatus != 'connected') {
+      _showSnackBar('等待连接建立后再发送消息');
+      return;
+    }
     final text = _textController.text.trim();
     if (text.isEmpty) return;
 
@@ -287,6 +291,26 @@ class _UserChatPageState extends State<UserChatPage> {
   }
 
   Widget _buildInputArea() {
+    if (_connectionStatus != 'connected') {
+      return Container(
+        padding: const EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: Colors.orange.shade50,
+          border: Border(top: BorderSide(color: Colors.orange.shade200)),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.hourglass_empty, color: Colors.orange.shade700, size: 18),
+            const SizedBox(width: 8),
+            Text(
+              '等待对方接受连接',
+              style: TextStyle(color: Colors.orange.shade700),
+            ),
+          ],
+        ),
+      );
+    }
     return Container(
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(

@@ -437,7 +437,7 @@ class _ChatPageState extends State<ChatPage> {
     try {
       final profile = await _apiService.getUserProfile();
       setState(() {
-        _currentUserId = profile['id']?.toString();
+        _currentUserId = profile['user_id']?.toString();
       });
       await _loadNegotiations();
     } catch (_) {}
