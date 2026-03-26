@@ -210,6 +210,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/admin/orders", get(admin::get_admin_orders))
         .route("/api/admin/users/{id}/ban", post(admin::ban_user))
         .route("/api/admin/users/{id}/unban", post(admin::unban_user))
+        .route("/api/admin/users/{id}/impersonate", post(admin::impersonate_user))
         .route(
             "/api/admin/listings/{id}/takedown",
             post(admin::takedown_listing),

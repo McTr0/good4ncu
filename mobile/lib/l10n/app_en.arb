@@ -19,6 +19,7 @@
   "comingSoon": "Coming soon...",
   "condition": "Condition",
   "conditionLabel": "Condition",
+  "confirm": "Confirm",
   "confirmPassword": "Confirm Password",
   "connectionFailedRetry": "Connection failed, please try again later",
   "connectionRequestSent": "Connection request sent, waiting for acceptance",
@@ -153,5 +154,49 @@
   "typeMessage": "Type a message...",
   "uploadFromCamera": "Upload from camera",
   "uploadFromGallery": "Upload from gallery",
-  "username": "Username"
+  "username": "Username",
+  "adminConsole": "Admin Console",
+  "adminStatsTab": "Stats",
+  "adminListingsTab": "Listings",
+  "adminOrdersTab": "Orders",
+  "adminUsersTab": "Users",
+  "adminTotalListings": "Total Listings",
+  "adminActive": "Active",
+  "adminUsers": "Users",
+  "adminOrders": "Orders",
+  "adminTrend7Days": "Trend (7 days)",
+  "adminTakedown": "Takedown",
+  "adminTakedownConfirm": "Confirm Takedown",
+  "adminTakedownConfirmMessage": "Are you sure you want to takedown \"{title}\"?",
+  "adminTakedownSuccess": "Listing taken down",
+  "adminBan": "Ban",
+  "adminBanConfirm": "Confirm Ban",
+  "adminBanConfirmMessage": "Are you sure you want to ban this user? All their sessions will be terminated.",
+  "adminBanSuccess": "User banned",
+  "adminUnban": "Unban",
+  "adminUnbanSuccess": "User unbanned",
+  "adminSearchListingsPlaceholder": "Search listings...",
+  "adminSearchUsersPlaceholder": "Search users...",
+  "adminNoUsersFound": "No users found",
+  "adminNoListingsFound": "No listings found",
+  "adminLoginAs": "Login as user",
+  "adminLoginAsSuccess": "Logged in as {username}",
+  "adminLoginAsFailed": "Login failed",
+  "adminLoginAsConfirm": "Confirm",
+  "adminLoginAsWarning": "You are about to switch to this user's identity",
+  "adminViewListings": "View Listings",
+  "myOrders": "My Orders",
+  "orderId": "Order ID",
+  "orderDetail": "Order Detail",
+  "noOrders": "No orders",
+  "@adminTakedownConfirmMessage": {
+    "placeholders": {
+      "title": {"type": "String"}
+    }
+  },
+  "@adminLoginAsSuccess": {
+    "placeholders": {
+      "username": {"type": "String"}
+    }
+  }
 }

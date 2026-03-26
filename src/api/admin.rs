@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
 use crate::api::error::ApiError;
+use crate::api::auth::generate_access_token;
 use crate::api::AppState;
 use crate::middleware::admin::require_admin;
 
@@ -394,4 +395,55 @@ pub async fn takedown_listing(
     );
 
     Ok(Json(serde_json::json!({ "message": "商品已下架" })))
+}
+
+/// POST /api/admin/users/:user_id/impersonate - generate a JWT as any user (admin only)
+/// WARNING: This logs an audit trail. Use with caution.
+pub async fn impersonate_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(target_user_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+
+    // Fetch target user info
+    let row = sqlx::query("SELECT username, role, status FROM users WHERE id = $1")
+        .bind(&target_user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
+
+    let username: String = row.get("username");
+    let role: String = row.get("role");
+    let status: String = row.get("status");
+
+    // Admins cannot impersonate other admins (security boundary)
+    if role == "admin" {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Generate JWT for target user (shorter TTL: 30 minutes for impersonation)
+    let token = generate_access_token(
+        &target_user_id,
+        &role,
+        &state.jwt_secret,
+        1800, // 30 min TTL
+    );
+
+    tracing::info!(
+        admin_id = %admin_id,
+        target_user_id = %target_user_id,
+        target_username = %username,
+        "Admin impersonated user"
+    );
+
+    Ok(Json(serde_json::json!({
+        "token": token,
+        "user_id": target_user_id,
+        "username": username,
+        "role": role,
+        "status": status,
+        "message": "已以该用户身份登录"
+    })))
 }

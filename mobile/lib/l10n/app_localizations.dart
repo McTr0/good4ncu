@@ -212,6 +212,12 @@ abstract class AppLocalizations {
   /// **'Condition'**
   String get conditionLabel;
 
+  /// No description provided for @confirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm'**
+  String get confirm;
+
   /// No description provided for @confirmPassword.
   ///
   /// In en, this message translates to:
@@ -727,6 +733,204 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Username'**
   String get username;
+
+  /// No description provided for @adminConsole.
+  ///
+  /// In en, this message translates to:
+  /// **'Admin Console'**
+  String get adminConsole;
+
+  /// No description provided for @adminStatsTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Stats'**
+  String get adminStatsTab;
+
+  /// No description provided for @adminListingsTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Listings'**
+  String get adminListingsTab;
+
+  /// No description provided for @adminOrdersTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Orders'**
+  String get adminOrdersTab;
+
+  /// No description provided for @adminUsersTab.
+  ///
+  /// In en, this message translates to:
+  /// **'Users'**
+  String get adminUsersTab;
+
+  /// No description provided for @adminTotalListings.
+  ///
+  /// In en, this message translates to:
+  /// **'Total Listings'**
+  String get adminTotalListings;
+
+  /// No description provided for @adminActive.
+  ///
+  /// In en, this message translates to:
+  /// **'Active'**
+  String get adminActive;
+
+  /// No description provided for @adminUsers.
+  ///
+  /// In en, this message translates to:
+  /// **'Users'**
+  String get adminUsers;
+
+  /// No description provided for @adminOrders.
+  ///
+  /// In en, this message translates to:
+  /// **'Orders'**
+  String get adminOrders;
+
+  /// No description provided for @adminTrend7Days.
+  ///
+  /// In en, this message translates to:
+  /// **'Trend (7 days)'**
+  String get adminTrend7Days;
+
+  /// No description provided for @adminTakedown.
+  ///
+  /// In en, this message translates to:
+  /// **'Takedown'**
+  String get adminTakedown;
+
+  /// No description provided for @adminTakedownConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm Takedown'**
+  String get adminTakedownConfirm;
+
+  /// No description provided for @adminTakedownConfirmMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Are you sure you want to takedown \"{title}\"?'**
+  String adminTakedownConfirmMessage(String title);
+
+  /// No description provided for @adminTakedownSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Listing taken down'**
+  String get adminTakedownSuccess;
+
+  /// No description provided for @adminBan.
+  ///
+  /// In en, this message translates to:
+  /// **'Ban'**
+  String get adminBan;
+
+  /// No description provided for @adminBanConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm Ban'**
+  String get adminBanConfirm;
+
+  /// No description provided for @adminBanConfirmMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Are you sure you want to ban this user? All their sessions will be terminated.'**
+  String get adminBanConfirmMessage;
+
+  /// No description provided for @adminBanSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'User banned'**
+  String get adminBanSuccess;
+
+  /// No description provided for @adminUnban.
+  ///
+  /// In en, this message translates to:
+  /// **'Unban'**
+  String get adminUnban;
+
+  /// No description provided for @adminUnbanSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'User unbanned'**
+  String get adminUnbanSuccess;
+
+  /// No description provided for @adminSearchListingsPlaceholder.
+  ///
+  /// In en, this message translates to:
+  /// **'Search listings...'**
+  String get adminSearchListingsPlaceholder;
+
+  /// No description provided for @adminSearchUsersPlaceholder.
+  ///
+  /// In en, this message translates to:
+  /// **'Search users...'**
+  String get adminSearchUsersPlaceholder;
+
+  /// No description provided for @adminNoUsersFound.
+  ///
+  /// In en, this message translates to:
+  /// **'No users found'**
+  String get adminNoUsersFound;
+
+  /// No description provided for @adminNoListingsFound.
+  ///
+  /// In en, this message translates to:
+  /// **'No listings found'**
+  String get adminNoListingsFound;
+
+  /// No description provided for @adminLoginAs.
+  ///
+  /// In en, this message translates to:
+  /// **'Login as user'**
+  String get adminLoginAs;
+
+  /// No description provided for @adminLoginAsSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Logged in as {username}'**
+  String adminLoginAsSuccess(String username);
+
+  /// No description provided for @adminLoginAsFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Login failed'**
+  String get adminLoginAsFailed;
+
+  /// No description provided for @adminLoginAsConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Confirm'**
+  String get adminLoginAsConfirm;
+
+  /// No description provided for @adminLoginAsWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'You are about to switch to this user\'s identity'**
+  String get adminLoginAsWarning;
+
+  /// No description provided for @adminViewListings.
+  ///
+  /// In en, this message translates to:
+  /// **'View Listings'**
+  String get adminViewListings;
+
+  /// No description provided for @orderId.
+  ///
+  /// In en, this message translates to:
+  /// **'Order ID'**
+  String get orderId;
+
+  /// No description provided for @orderDetail.
+  ///
+  /// In en, this message translates to:
+  /// **'Order Detail'**
+  String get orderDetail;
+
+  /// No description provided for @noOrders.
+  ///
+  /// In en, this message translates to:
+  /// **'No orders'**
+  String get noOrders;
 }
 
 class _AppLocalizationsDelegate

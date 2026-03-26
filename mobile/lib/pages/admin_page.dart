@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../services/api_service.dart';
-import '../models/models.dart';
+import '../l10n/app_localizations.dart';
 
 class AdminPage extends StatefulWidget {
   const AdminPage({super.key});
@@ -11,7 +11,6 @@ class AdminPage extends StatefulWidget {
 }
 
 class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMixin {
-  final ApiService _api = ApiService();
   late TabController _tabController;
 
   @override
@@ -28,9 +27,10 @@ class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMix
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Admin Console'),
+        title: Text(l.adminConsole),
         backgroundColor: Colors.deepPurple,
         foregroundColor: Colors.white,
         bottom: TabBar(
@@ -38,11 +38,11 @@ class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMix
           labelColor: Colors.white,
           unselectedLabelColor: Colors.white70,
           indicatorColor: Colors.amber,
-          tabs: const [
-            Tab(icon: Icon(Icons.dashboard), text: 'Stats'),
-            Tab(icon: Icon(Icons.inventory), text: 'Listings'),
-            Tab(icon: Icon(Icons.shopping_cart), text: 'Orders'),
-            Tab(icon: Icon(Icons.people), text: 'Users'),
+          tabs: [
+            Tab(icon: const Icon(Icons.dashboard), text: l.adminStatsTab),
+            Tab(icon: const Icon(Icons.inventory), text: l.adminListingsTab),
+            Tab(icon: const Icon(Icons.shopping_cart), text: l.adminOrdersTab),
+            Tab(icon: const Icon(Icons.people), text: l.adminUsersTab),
           ],
         ),
       ),
@@ -97,8 +97,9 @@ class _StatsTabState extends State<_StatsTab> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) return Center(child: Text('${l.error}: $_error'));
 
     final categories = _stats!['categories'] as List? ?? [];
 
@@ -109,14 +110,14 @@ class _StatsTabState extends State<_StatsTab> {
         children: [
           Row(children: [
             _StatCard(
-              title: 'Total Listings',
+              title: l.adminTotalListings,
               value: '${_stats!['total_listings']}',
               icon: Icons.inventory_2,
               color: Colors.blue,
             ),
             const SizedBox(width: 12),
             _StatCard(
-              title: 'Active',
+              title: l.adminActive,
               value: '${_stats!['active_listings']}',
               icon: Icons.check_circle,
               color: Colors.green,
@@ -125,28 +126,28 @@ class _StatsTabState extends State<_StatsTab> {
           const SizedBox(height: 12),
           Row(children: [
             _StatCard(
-              title: 'Users',
+              title: l.adminUsers,
               value: '${_stats!['total_users']}',
               icon: Icons.people,
               color: Colors.orange,
             ),
             const SizedBox(width: 12),
             _StatCard(
-              title: 'Orders',
+              title: l.adminOrders,
               value: '${_stats!['total_orders']}',
               icon: Icons.shopping_cart,
               color: Colors.purple,
             ),
           ]),
           const SizedBox(height: 24),
-          const Text('趋势 (7日)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(l.adminTrend7Days, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           SizedBox(
             height: 200,
             child: _chartLoaded ? _buildTrendChart() : const Center(child: CircularProgressIndicator()),
           ),
           const SizedBox(height: 24),
-          const Text('Categories', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(l.category, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           ...categories.map((c) => ListTile(
             leading: const Icon(Icons.category),
@@ -228,7 +229,6 @@ class _ListingsTab extends StatefulWidget {
 
 class _ListingsTabState extends State<_ListingsTab> {
   final ScrollController _scrollController = ScrollController();
-  Map<String, dynamic>? _data;
   List<dynamic>? _listings;
   bool _loading = true;
   bool _loadingMore = false;
@@ -265,7 +265,6 @@ class _ListingsTabState extends State<_ListingsTab> {
       final data = await ApiService().getAdminListings(limit: 20, offset: 0);
       final listings = (data['listings'] as List?) ?? [];
       setState(() {
-        _data = data;
         _listings = listings;
         _loading = false;
         if (listings.length < 20) {
@@ -301,8 +300,9 @@ class _ListingsTabState extends State<_ListingsTab> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) return Center(child: Text('${l.error}: $_error'));
 
     final listings = _listings ?? [];
 
@@ -334,7 +334,7 @@ class _ListingsTabState extends State<_ListingsTab> {
             title: Text(item['title'] ?? ''),
             subtitle: Text('${item['category']} · ¥${item['suggested_price_cny'] ?? 0} · ${item['status']}'),
             trailing: isTakedown
-                ? const Chip(label: Text('已下架'), backgroundColor: Colors.red)
+                ? Chip(label: Text(l.adminTakedown, style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red)
                 : const Icon(Icons.chevron_right),
             onTap: isTakedown ? null : () => _showListingDetail(context, item),
           );
@@ -344,6 +344,7 @@ class _ListingsTabState extends State<_ListingsTab> {
   }
 
   void _showListingDetail(BuildContext context, Map<String, dynamic> item) {
+    final l = AppLocalizations.of(context)!;
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Padding(
@@ -355,11 +356,11 @@ class _ListingsTabState extends State<_ListingsTab> {
             Text(item['title'] ?? '', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             const SizedBox(height: 8),
             Text('ID: ${item['id']}'),
-            Text('Category: ${item['category']}'),
-            Text('Brand: ${item['brand'] ?? 'N/A'}'),
-            Text('Price: ¥${item['suggested_price_cny'] ?? 0}'),
-            Text('Condition: ${item['condition_score'] ?? 0}'),
-            Text('Status: ${item['status']}'),
+            Text('${l.categoryLabel}: ${item['category']}'),
+            Text('${l.brandLabel}: ${item['brand'] ?? 'N/A'}'),
+            Text('${l.priceLabel}: ¥${item['suggested_price_cny'] ?? 0}'),
+            Text('${l.conditionLabel}: ${item['condition_score'] ?? 0}'),
+            Text('${l.status}: ${item['status']}'),
             Text('Owner ID: ${item['owner_id']}'),
             const SizedBox(height: 16),
             SizedBox(
@@ -369,17 +370,17 @@ class _ListingsTabState extends State<_ListingsTab> {
                   final confirmed = await showDialog<bool>(
                     context: ctx,
                     builder: (dialogCtx) => AlertDialog(
-                      title: const Text('确认下架'),
-                      content: Text('确定要强制下架 "${item['title']}" 吗？'),
+                      title: Text(l.adminTakedownConfirm),
+                      content: Text(l.adminTakedownConfirmMessage(item['title'] ?? '')),
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.pop(dialogCtx, false),
-                          child: const Text('取消'),
+                          child: Text(l.cancel),
                         ),
                         FilledButton(
                           onPressed: () => Navigator.pop(dialogCtx, true),
                           style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                          child: const Text('确认下架'),
+                          child: Text(l.adminTakedown),
                         ),
                       ],
                     ),
@@ -391,14 +392,14 @@ class _ListingsTabState extends State<_ListingsTab> {
                       await ApiService().takedownListing(item['id'] as String);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('商品已强制下架'), backgroundColor: Colors.green),
+                          SnackBar(content: Text(l.adminTakedownSuccess), backgroundColor: Colors.green),
                         );
                       }
                       _load();
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Takedown failed: $e'), backgroundColor: Colors.red),
+                          SnackBar(content: Text('${l.operationFailed(e)}'), backgroundColor: Colors.red),
                         );
                       }
                     }
@@ -406,7 +407,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                 },
                 style: FilledButton.styleFrom(backgroundColor: Colors.red),
                 icon: const Icon(Icons.archive),
-                label: const Text('强制下架 (Takedown)'),
+                label: Text(l.adminTakedown),
               ),
             ),
             const SizedBox(height: 8),
@@ -419,11 +420,11 @@ class _ListingsTabState extends State<_ListingsTab> {
                     if (ctx.mounted) Navigator.pop(ctx);
                     _load();
                   } catch (e) {
-                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Update failed: $e')));
+                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e)}')));
                   }
                 },
                 icon: const Icon(Icons.toggle_on),
-                label: Text(item['status'] == 'active' ? 'Mark Sold' : 'Reactivate'),
+                label: Text(item['status'] == 'active' ? l.sold : l.adminUnban),
               ),
             ),
           ],
@@ -474,8 +475,9 @@ class _OrdersTabState extends State<_OrdersTab> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     if (_loading) return const Center(child: CircularProgressIndicator());
-    if (_error != null) return Center(child: Text('Error: $_error'));
+    if (_error != null) return Center(child: Text('${l.error}: $_error'));
 
     final items = _orders?['orders'] as List? ?? [];
 
@@ -495,7 +497,7 @@ class _OrdersTabState extends State<_OrdersTab> {
             ),
             title: Text('Order #${(item['id'] ?? '').toString().substring(0, 8)}'),
             subtitle: Text('${item['status'] ?? 'unknown'} · ¥${item['final_price'] ?? 0}'),
-            trailing: Icon(Icons.chevron_right),
+            trailing: const Icon(Icons.chevron_right),
             onTap: () => _showOrderDetail(context, item),
           );
         },
@@ -504,6 +506,7 @@ class _OrdersTabState extends State<_OrdersTab> {
   }
 
   void _showOrderDetail(BuildContext context, Map<String, dynamic> item) {
+    final l = AppLocalizations.of(context)!;
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -533,10 +536,10 @@ class _OrdersTabState extends State<_OrdersTab> {
                       if (ctx.mounted) Navigator.pop(ctx);
                       _load();
                     } catch (e) {
-                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Cancel failed: $e')));
+                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e)}')));
                     }
                   },
-                  child: const Text('Cancel'),
+                  child: Text(l.cancel),
                 ),
               ),
               const SizedBox(width: 12),
@@ -548,10 +551,10 @@ class _OrdersTabState extends State<_OrdersTab> {
                       if (ctx.mounted) Navigator.pop(ctx);
                       _load();
                     } catch (e) {
-                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('Confirm failed: $e')));
+                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e)}')));
                     }
                   },
-                  child: const Text('Confirm'),
+                  child: Text(l.confirm),
                 ),
               ),
             ]),
@@ -650,6 +653,7 @@ class _UsersTabState extends State<_UsersTab> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Column(
       children: [
         Padding(
@@ -657,7 +661,7 @@ class _UsersTabState extends State<_UsersTab> {
           child: TextField(
             controller: _searchController,
             decoration: InputDecoration(
-              hintText: 'Search users by username...',
+              hintText: l.adminSearchUsersPlaceholder,
               prefixIcon: const Icon(Icons.search),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
               suffixIcon: IconButton(
@@ -675,11 +679,11 @@ class _UsersTabState extends State<_UsersTab> {
           child: _loading
               ? const Center(child: CircularProgressIndicator())
               : _error != null
-                  ? Center(child: Text('Error: $_error'))
+                  ? Center(child: Text('${l.error}: $_error'))
                   : _users == null
-                      ? const Center(child: Text('Enter username to search'))
+                      ? Center(child: Text(l.adminSearchUsersPlaceholder))
                       : _users!.isEmpty
-                          ? const Center(child: Text('No users found'))
+                          ? Center(child: Text(l.adminNoUsersFound))
                           : ListView.builder(
                               controller: _scrollController,
                               itemCount: _users!.length + (_loadingMore ? 1 : 0),
@@ -703,7 +707,7 @@ class _UsersTabState extends State<_UsersTab> {
                                   ),
                                   title: Text(u['username'] ?? 'Unknown'),
                                   subtitle: Text('${u['role']} · Joined: ${u['created_at'] ?? 'N/A'}'),
-                                  trailing: Text('Listings: ${u['listing_count'] ?? 0}'),
+                                  trailing: Text('${l.myListings}: ${u['listing_count'] ?? 0}'),
                                   onTap: () => _showUserDetail(context, u),
                                 );
                               },
@@ -714,6 +718,7 @@ class _UsersTabState extends State<_UsersTab> {
   }
 
   void _showUserDetail(BuildContext context, Map<String, dynamic> u) {
+    final l = AppLocalizations.of(context)!;
     final isBanned = u['status'] == 'banned';
     showModalBottomSheet(
       context: context,
@@ -742,8 +747,8 @@ class _UsersTabState extends State<_UsersTab> {
               ),
             ]),
             const Divider(),
-            Text('Status: ${u['status'] ?? 'active'}'),
-            Text('Listing count: ${u['listing_count'] ?? 0}'),
+            Text('${l.status}: ${u['status'] ?? 'active'}'),
+            Text('${l.myListings}: ${u['listing_count'] ?? 0}'),
             Text('Joined: ${u['created_at'] ?? 'N/A'}'),
             Text('Role: ${u['role'] ?? 'user'}'),
             const SizedBox(height: 16),
@@ -755,17 +760,17 @@ class _UsersTabState extends State<_UsersTab> {
                     final confirmed = await showDialog<bool>(
                       context: ctx,
                       builder: (dialogCtx) => AlertDialog(
-                        title: const Text('Confirm Ban'),
-                        content: Text('Are you sure you want to ban user "${u['username']}"?'),
+                        title: Text(l.adminBanConfirm),
+                        content: Text(l.adminBanConfirmMessage),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(dialogCtx, false),
-                            child: const Text('Cancel'),
+                            child: Text(l.cancel),
                           ),
                           FilledButton(
                             onPressed: () => Navigator.pop(dialogCtx, true),
                             style: FilledButton.styleFrom(backgroundColor: Colors.red),
-                            child: const Text('Ban'),
+                            child: Text(l.adminBan),
                           ),
                         ],
                       ),
@@ -777,14 +782,14 @@ class _UsersTabState extends State<_UsersTab> {
                         await ApiService().banUser(u['id'] ?? u['user_id']);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('用户已封禁'), backgroundColor: Colors.green),
+                            SnackBar(content: Text(l.adminBanSuccess), backgroundColor: Colors.green),
                           );
                         }
                         _search('', reset: true);
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Ban failed: $e'), backgroundColor: Colors.red),
+                            SnackBar(content: Text('${l.operationFailed(e)}'), backgroundColor: Colors.red),
                           );
                         }
                       }
@@ -792,7 +797,7 @@ class _UsersTabState extends State<_UsersTab> {
                   },
                   style: FilledButton.styleFrom(backgroundColor: Colors.red),
                   icon: const Icon(Icons.block),
-                  label: const Text('封禁用户 (Ban)'),
+                  label: Text(l.adminBan),
                 ),
               )
             else
@@ -803,16 +808,16 @@ class _UsersTabState extends State<_UsersTab> {
                     final confirmed = await showDialog<bool>(
                       context: ctx,
                       builder: (dialogCtx) => AlertDialog(
-                        title: const Text('Confirm Unban'),
+                        title: Text(l.adminUnban),
                         content: Text('Are you sure you want to unban user "${u['username']}"?'),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(dialogCtx, false),
-                            child: const Text('Cancel'),
+                            child: Text(l.cancel),
                           ),
                           FilledButton(
                             onPressed: () => Navigator.pop(dialogCtx, true),
-                            child: const Text('Unban'),
+                            child: Text(l.adminUnban),
                           ),
                         ],
                       ),
@@ -824,14 +829,14 @@ class _UsersTabState extends State<_UsersTab> {
                         await ApiService().unbanUser(u['id'] ?? u['user_id']);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            const SnackBar(content: Text('用户已解封'), backgroundColor: Colors.green),
+                            SnackBar(content: Text(l.adminUnbanSuccess), backgroundColor: Colors.green),
                           );
                         }
                         _search('', reset: true);
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('Unban failed: $e'), backgroundColor: Colors.red),
+                            SnackBar(content: Text('${l.operationFailed(e)}'), backgroundColor: Colors.red),
                           );
                         }
                       }
@@ -839,7 +844,7 @@ class _UsersTabState extends State<_UsersTab> {
                   },
                   style: FilledButton.styleFrom(backgroundColor: Colors.green),
                   icon: const Icon(Icons.check_circle),
-                  label: const Text('解封用户 (Unban)'),
+                  label: Text(l.adminUnban),
                 ),
               ),
             const SizedBox(height: 8),
@@ -852,7 +857,7 @@ class _UsersTabState extends State<_UsersTab> {
                   _search(u['username'] ?? '');
                 },
                 icon: const Icon(Icons.visibility),
-                label: const Text('View Listings'),
+                label: Text(l.adminViewListings),
               ),
             ),
           ],

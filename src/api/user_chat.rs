@@ -480,12 +480,11 @@ pub async fn get_connection_messages(
     let rows = sqlx::query(
         r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data, edited_at, status
            FROM chat_messages
-           WHERE (sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1)
+           WHERE conversation_id = $1::uuid
            ORDER BY id DESC
-           LIMIT $3 OFFSET $4"#,
+           LIMIT $2 OFFSET $3"#,
     )
-    .bind(&requester_id)
-    .bind(&receiver_id)
+    .bind(&connection_id)
     .bind(limit)
     .bind(offset)
     .fetch_all(&state.db)

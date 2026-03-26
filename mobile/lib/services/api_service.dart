@@ -71,7 +71,7 @@ class ApiService {
       String msg = 'Resource conflict.';
       try {
         final body = jsonDecode(response.body);
-        msg = body['message']?.toString() ?? msg;
+        msg = body['error']?.toString() ?? body['message']?.toString() ?? msg;
       } catch (_) {}
       throw ConflictException(msg);
     }
@@ -501,6 +501,16 @@ class ApiService {
     if (status != null) queryParams['status'] = status;
     final uri = Uri.parse('$baseUrl/api/admin/orders').replace(queryParameters: queryParams);
     final response = await _get(uri, headers);
+    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> impersonateUser(String userId) async {
+    final headers = await _authHeaders();
+    final response = await _post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/impersonate'),
+      headers,
+      '{}',
+    );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 

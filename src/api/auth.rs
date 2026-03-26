@@ -39,7 +39,7 @@ struct Claims {
 /// Refresh token: 7 days validity
 const REFRESH_TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
 /// Access token: 1 hour validity
-const ACCESS_TOKEN_TTL_SECS: u64 = 3600;
+pub const ACCESS_TOKEN_TTL_SECS: u64 = 3600;
 
 /// Generate a secure random refresh token (UUID v4)
 fn generate_refresh_token() -> String {
@@ -55,7 +55,7 @@ fn hash_token(token: &str) -> String {
 }
 
 /// Generate an access token (JWT) with configurable expiry
-fn generate_access_token(user_id: &str, role: &str, jwt_secret: &str, ttl_secs: u64) -> String {
+pub fn generate_access_token(user_id: &str, role: &str, jwt_secret: &str, ttl_secs: u64) -> String {
     let expiration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()

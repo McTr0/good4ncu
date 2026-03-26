@@ -67,6 +67,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get conditionLabel => 'Condition';
 
   @override
+  String get confirm => 'Confirm';
+
+  @override
   String get confirmPassword => 'Confirm Password';
 
   @override
@@ -341,4 +344,109 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get username => 'Username';
+
+  @override
+  String get adminConsole => 'Admin Console';
+
+  @override
+  String get adminStatsTab => 'Stats';
+
+  @override
+  String get adminListingsTab => 'Listings';
+
+  @override
+  String get adminOrdersTab => 'Orders';
+
+  @override
+  String get adminUsersTab => 'Users';
+
+  @override
+  String get adminTotalListings => 'Total Listings';
+
+  @override
+  String get adminActive => 'Active';
+
+  @override
+  String get adminUsers => 'Users';
+
+  @override
+  String get adminOrders => 'Orders';
+
+  @override
+  String get adminTrend7Days => 'Trend (7 days)';
+
+  @override
+  String get adminTakedown => 'Takedown';
+
+  @override
+  String get adminTakedownConfirm => 'Confirm Takedown';
+
+  @override
+  String adminTakedownConfirmMessage(String title) {
+    return 'Are you sure you want to takedown \"$title\"?';
+  }
+
+  @override
+  String get adminTakedownSuccess => 'Listing taken down';
+
+  @override
+  String get adminBan => 'Ban';
+
+  @override
+  String get adminBanConfirm => 'Confirm Ban';
+
+  @override
+  String get adminBanConfirmMessage =>
+      'Are you sure you want to ban this user? All their sessions will be terminated.';
+
+  @override
+  String get adminBanSuccess => 'User banned';
+
+  @override
+  String get adminUnban => 'Unban';
+
+  @override
+  String get adminUnbanSuccess => 'User unbanned';
+
+  @override
+  String get adminSearchListingsPlaceholder => 'Search listings...';
+
+  @override
+  String get adminSearchUsersPlaceholder => 'Search users...';
+
+  @override
+  String get adminNoUsersFound => 'No users found';
+
+  @override
+  String get adminNoListingsFound => 'No listings found';
+
+  @override
+  String get adminLoginAs => 'Login as user';
+
+  @override
+  String adminLoginAsSuccess(String username) {
+    return 'Logged in as $username';
+  }
+
+  @override
+  String get adminLoginAsFailed => 'Login failed';
+
+  @override
+  String get adminLoginAsConfirm => 'Confirm';
+
+  @override
+  String get adminLoginAsWarning =>
+      'You are about to switch to this user\'s identity';
+
+  @override
+  String get adminViewListings => 'View Listings';
+
+  @override
+  String get orderId => 'Order ID';
+
+  @override
+  String get orderDetail => 'Order Detail';
+
+  @override
+  String get noOrders => 'No orders';
 }

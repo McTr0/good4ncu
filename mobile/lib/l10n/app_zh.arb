@@ -8,6 +8,7 @@
   "appTitle": "校园集市",
   "brand": "品牌",
   "brandLabel": "品牌",
+  "books": "图书",
   "buyNow": "立即购买",
   "cancel": "取消",
   "category": "分类",
@@ -18,6 +19,7 @@
   "comingSoon": "即将推出...",
   "condition": "成色",
   "conditionLabel": "成色",
+  "confirm": "确认",
   "confirmPassword": "确认密码",
   "connectionFailedRetry": "连接失败，请稍后重试",
   "connectionRequestSent": "已发送连接请求，等待对方接受",
@@ -152,5 +154,49 @@
   "typeMessage": "输入消息...",
   "uploadFromCamera": "拍照上传",
   "uploadFromGallery": "相册上传",
-  "username": "用户名"
+  "username": "用户名",
+  "adminConsole": "管理后台",
+  "adminStatsTab": "统计",
+  "adminListingsTab": "商品",
+  "adminOrdersTab": "订单",
+  "adminUsersTab": "用户",
+  "adminTotalListings": "商品总数",
+  "adminActive": "在售",
+  "adminUsers": "用户总数",
+  "adminOrders": "订单总数",
+  "adminTrend7Days": "趋势 (7日)",
+  "adminTakedown": "强制下架 (Takedown)",
+  "adminTakedownConfirm": "确认下架",
+  "adminTakedownConfirmMessage": "确定要强制下架 \"{title}\" 吗？",
+  "adminTakedownSuccess": "商品已强制下架",
+  "adminBan": "封禁用户 (Ban)",
+  "adminBanConfirm": "确认封禁",
+  "adminBanConfirmMessage": "确定要封禁该用户吗？封禁后该用户所有登录状态将被清除。",
+  "adminBanSuccess": "用户已被封禁",
+  "adminUnban": "解封用户 (Unban)",
+  "adminUnbanSuccess": "用户已解封",
+  "adminSearchListingsPlaceholder": "搜索商品...",
+  "adminSearchUsersPlaceholder": "搜索用户...",
+  "adminNoUsersFound": "未找到用户",
+  "adminNoListingsFound": "未找到商品",
+  "adminLoginAs": "以该用户登录",
+  "adminLoginAsSuccess": "已以 {username} 身份登录",
+  "adminLoginAsFailed": "登录失败",
+  "adminLoginAsConfirm": "确认登录",
+  "adminLoginAsWarning": "即将切换到该用户身份",
+  "adminViewListings": "查看商品",
+  "myOrders": "我的订单",
+  "orderId": "订单号",
+  "orderDetail": "订单详情",
+  "noOrders": "暂无订单",
+  "@adminTakedownConfirmMessage": {
+    "placeholders": {
+      "title": {"type": "String"}
+    }
+  },
+  "@adminLoginAsSuccess": {
+    "placeholders": {
+      "username": {"type": "String"}
+    }
+  }
 }

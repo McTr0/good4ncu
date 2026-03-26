@@ -33,7 +33,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get brandLabel => '品牌';
 
   @override
-  String get books => 'Books';
+  String get books => '图书';
 
   @override
   String get buyNow => '立即购买';
@@ -64,6 +64,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get conditionLabel => '成色';
+
+  @override
+  String get confirm => '确认';
 
   @override
   String get confirmPassword => '确认密码';
@@ -336,4 +339,107 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get username => '用户名';
+
+  @override
+  String get adminConsole => '管理后台';
+
+  @override
+  String get adminStatsTab => '统计';
+
+  @override
+  String get adminListingsTab => '商品';
+
+  @override
+  String get adminOrdersTab => '订单';
+
+  @override
+  String get adminUsersTab => '用户';
+
+  @override
+  String get adminTotalListings => '商品总数';
+
+  @override
+  String get adminActive => '在售';
+
+  @override
+  String get adminUsers => '用户总数';
+
+  @override
+  String get adminOrders => '订单总数';
+
+  @override
+  String get adminTrend7Days => '趋势 (7日)';
+
+  @override
+  String get adminTakedown => '强制下架 (Takedown)';
+
+  @override
+  String get adminTakedownConfirm => '确认下架';
+
+  @override
+  String adminTakedownConfirmMessage(String title) {
+    return '确定要强制下架 \"$title\" 吗？';
+  }
+
+  @override
+  String get adminTakedownSuccess => '商品已强制下架';
+
+  @override
+  String get adminBan => '封禁用户 (Ban)';
+
+  @override
+  String get adminBanConfirm => '确认封禁';
+
+  @override
+  String get adminBanConfirmMessage => '确定要封禁该用户吗？封禁后该用户所有登录状态将被清除。';
+
+  @override
+  String get adminBanSuccess => '用户已被封禁';
+
+  @override
+  String get adminUnban => '解封用户 (Unban)';
+
+  @override
+  String get adminUnbanSuccess => '用户已解封';
+
+  @override
+  String get adminSearchListingsPlaceholder => '搜索商品...';
+
+  @override
+  String get adminSearchUsersPlaceholder => '搜索用户...';
+
+  @override
+  String get adminNoUsersFound => '未找到用户';
+
+  @override
+  String get adminNoListingsFound => '未找到商品';
+
+  @override
+  String get adminLoginAs => '以该用户登录';
+
+  @override
+  String adminLoginAsSuccess(String username) {
+    return '已以 $username 身份登录';
+  }
+
+  @override
+  String get adminLoginAsFailed => '登录失败';
+
+  @override
+  String get adminLoginAsConfirm => '确认登录';
+
+  @override
+  String get adminLoginAsWarning => '即将切换到该用户身份';
+
+  @override
+  String get adminViewListings => '查看商品';
+
+  @override
+  String get orderId => '订单号';
+
+  @override
+  String get orderDetail => '订单详情';
+
+  @override
+  String get noOrders => '暂无订单';
 }
