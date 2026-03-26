@@ -18,10 +18,8 @@ use std::time::Duration;
 /// All metric collectors are registered here and exposed via `/api/metrics`.
 pub struct MetricsService {
     registry: Registry,
-    // HTTP — pending HTTP metrics middleware
-    #[allow(dead_code)]
+    // HTTP
     pub http_requests_total: CounterVec,
-    #[allow(dead_code)]
     pub http_request_duration_seconds: HistogramVec,
     // Business
     pub orders_created_total: Counter,

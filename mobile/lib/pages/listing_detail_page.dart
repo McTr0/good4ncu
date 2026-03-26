@@ -86,6 +86,42 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     }
   }
 
+  Future<void> _handlePurchase(BuildContext context) async {
+    final listing = _listing;
+    if (listing == null) return;
+
+    try {
+      await _apiService.createOrder(
+        listingId: listing.id,
+        offeredPriceCny: listing.suggestedPriceCny,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('购买成功！订单已创建'),
+          backgroundColor: Colors.green,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      context.push('/orders');
+    } on ConflictException {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('哎呀，该商品太火爆，已经被别人抢先一步啦！'),
+          backgroundColor: Colors.orange,
+          duration: Duration(seconds: 3),
+        ),
+      );
+      _loadDetail();
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('购买失败: $e'), duration: const Duration(seconds: 3)),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
@@ -284,11 +320,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
             const SizedBox(width: 12),
             Expanded(
               child: ElevatedButton(
-                onPressed: () {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Purchase coming soon...')),
-                  );
-                },
+                onPressed: () => _handlePurchase(context),
                 child: Text(l.buyNow),
               ),
             ),

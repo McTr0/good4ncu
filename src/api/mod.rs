@@ -43,6 +43,7 @@ use tower_http::limit::RequestBodyLimitLayer;
 use uuid::Uuid;
 
 use crate::middleware::rate_limit::{is_whitelisted, RateLimitStateHandle};
+use regex::Regex;
 
 /// Security headers applied to all responses.
 async fn security_headers_middleware(
@@ -92,6 +93,42 @@ pub async fn rate_limit_middleware(
     }
 
     next.run(request).await
+}
+
+/// Normalize dynamic path segments to prevent Prometheus label cardinality explosion.
+/// Replaces UUIDs, MongoDB ObjectIds, and numeric IDs with `{id}`.
+fn normalize_path(path: &str) -> String {
+    let uuid_regex =
+        Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+            .unwrap();
+    let mongo_id_regex = Regex::new(r"[0-9a-fA-F]{24}").unwrap();
+    let numeric_regex = Regex::new(r"\d+").unwrap();
+
+    let step1 = uuid_regex.replace_all(path, "{id}");
+    let step2 = mongo_id_regex.replace_all(&step1, "{id}");
+    let step3 = numeric_regex.replace_all(&step2, "{id}");
+    step3.to_string()
+}
+
+/// HTTP metrics middleware that records request count and latency per endpoint.
+pub async fn http_metrics_middleware(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    let start = std::time::Instant::now();
+    let method = request.method().as_str().to_string();
+    let path = request.uri().path().to_string();
+
+    let response = next.run(request).await;
+    let duration = start.elapsed();
+    let status = response.status().as_u16();
+
+    state
+        .metrics
+        .record_http(&method, &normalize_path(&path), status, duration);
+
+    response
 }
 
 /// Extractor that provides the direct TCP peer address of the connected client.
@@ -272,6 +309,10 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
+        ))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            http_metrics_middleware,
         ))
         .with_state(state)
 }

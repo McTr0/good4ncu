@@ -536,7 +536,7 @@ pub async fn create_order(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     if result.is_none() {
-        return Err(ApiError::BadRequest(
+        return Err(ApiError::Conflict(
             "商品已售出或不存在，无法创建订单".to_string(),
         ));
     }

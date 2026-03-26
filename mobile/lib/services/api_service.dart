@@ -12,6 +12,14 @@ class AuthException implements Exception {
   String toString() => message;
 }
 
+/// Thrown when API returns 409 Conflict
+class ConflictException implements Exception {
+  final String message;
+  ConflictException([this.message = 'Resource conflict.']);
+  @override
+  String toString() => message;
+}
+
 class ApiService {
   // Global navigator key for programmatic navigation (e.g., force logout)
   static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
@@ -36,6 +44,14 @@ class ApiService {
   T _handleResponse<T>(http.Response response, T Function(dynamic) parse) {
     if (response.statusCode == 401) {
       throw AuthException('Session expired. Please login again.');
+    }
+    if (response.statusCode == 409) {
+      String msg = 'Resource conflict.';
+      try {
+        final body = jsonDecode(response.body);
+        msg = body['message']?.toString() ?? msg;
+      } catch (_) {}
+      throw ConflictException(msg);
     }
     if (response.statusCode != 200) {
       throw Exception('Request failed: ${response.statusCode}');
@@ -205,6 +221,22 @@ class ApiService {
     final response = await http.get(
       Uri.parse('$baseUrl/api/orders/$orderId'),
       headers: headers,
+    );
+    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+  }
+
+  Future<Map<String, dynamic>> createOrder({
+    required String listingId,
+    required double offeredPriceCny,
+  }) async {
+    final headers = await _authHeaders();
+    final response = await http.post(
+      Uri.parse('$baseUrl/api/orders'),
+      headers: headers,
+      body: jsonEncode({
+        'listing_id': listingId,
+        'offered_price_cny': offeredPriceCny,
+      }),
     );
     return _handleResponse(response, (data) => data as Map<String, dynamic>);
   }
