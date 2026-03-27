@@ -495,7 +495,7 @@ class _OrdersTabState extends State<_OrdersTab> {
                 style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
-            title: Text('Order #${(item['id'] ?? '').toString().substring(0, 8)}'),
+            title: Text('Order #${(item['id'] ?? '').toString().substring(0, (item['id'] ?? '').toString().length.clamp(0, 8))}'),
             subtitle: Text('${item['status'] ?? 'unknown'} · ¥${item['final_price'] ?? 0}'),
             trailing: const Icon(Icons.chevron_right),
             onTap: () => _showOrderDetail(context, item),

@@ -6,8 +6,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::api::error::ApiError;
 use crate::api::auth::generate_access_token;
+use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::middleware::admin::require_admin;
 
@@ -65,12 +65,28 @@ pub async fn get_admin_stats(
         .try_get("cnt")
         .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
 
+    let category_rows = sqlx::query(
+        "SELECT COALESCE(category, 'Other') as category, COUNT(*) as cnt FROM inventory GROUP BY category ORDER BY cnt DESC LIMIT 20",
+    )
+    .fetch_all(&state.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    let categories: Vec<CategoryCount> = category_rows
+        .iter()
+        .map(|row| CategoryCount {
+            category: row.get("category"),
+            count: row.try_get("cnt").unwrap_or(0),
+        })
+        .collect();
+
     Ok(Json(AdminStats {
         total_listings,
         active_listings,
         total_users,
         total_orders,
         admin_users,
+        categories,
     }))
 }
 
@@ -81,6 +97,13 @@ pub struct AdminStats {
     pub total_users: i64,
     pub total_orders: i64,
     pub admin_users: i64,
+    pub categories: Vec<CategoryCount>,
+}
+
+#[derive(Serialize)]
+pub struct CategoryCount {
+    pub category: String,
+    pub count: i64,
 }
 
 /// Query parameters for admin list endpoints
@@ -429,7 +452,8 @@ pub async fn impersonate_user(
         &role,
         &state.jwt_secret,
         1800, // 30 min TTL
-    );
+    )
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to generate token: {}", e)))?;
 
     tracing::info!(
         admin_id = %admin_id,

@@ -210,7 +210,10 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/admin/orders", get(admin::get_admin_orders))
         .route("/api/admin/users/{id}/ban", post(admin::ban_user))
         .route("/api/admin/users/{id}/unban", post(admin::unban_user))
-        .route("/api/admin/users/{id}/impersonate", post(admin::impersonate_user))
+        .route(
+            "/api/admin/users/{id}/impersonate",
+            post(admin::impersonate_user),
+        )
         .route(
             "/api/admin/listings/{id}/takedown",
             post(admin::takedown_listing),
@@ -614,7 +617,9 @@ async fn handle_chat_stream(
         let payload = serde_json::json!({ "token": reply, "conversation_id": conversation_id });
         let body = axum::body::Body::from(format!(
             "data: {}\n\n",
-            serde_json::to_string(&payload).unwrap()
+            serde_json::to_string(&payload).expect(
+                "intent payload serializes to JSON; this is a programmer error if it panics"
+            )
         ));
         return Ok(Response::builder()
             .header("Content-Type", "text/event-stream")
@@ -735,11 +740,11 @@ async fn handle_chat_stream(
         let line = match result {
             Ok(token) => {
                 let payload = serde_json::json!({ "token": token, "conversation_id": conv_id });
-                format!("data: {}\n\n", serde_json::to_string(&payload).unwrap())
+                format!("data: {}\n\n", serde_json::to_string(&payload).expect("LLM token payload serializes to JSON; this is a programmer error if it panics"))
             }
             Err(e) => {
                 let payload = serde_json::json!({ "error": e.to_string() });
-                format!("data: {}\n\n", serde_json::to_string(&payload).unwrap())
+                format!("data: {}\n\n", serde_json::to_string(&payload).expect("error payload serializes to JSON; this is a programmer error if it panics"))
             }
         };
         Ok::<_, std::convert::Infallible>(line.into_bytes())

@@ -28,6 +28,12 @@ pub enum ApiError {
     Internal(#[from] anyhow::Error),
 }
 
+impl From<jsonwebtoken::errors::Error> for ApiError {
+    fn from(e: jsonwebtoken::errors::Error) -> Self {
+        ApiError::Internal(anyhow::anyhow!("JWT error: {}", e))
+    }
+}
+
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, msg) = match &self {

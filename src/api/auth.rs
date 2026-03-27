@@ -55,7 +55,12 @@ fn hash_token(token: &str) -> String {
 }
 
 /// Generate an access token (JWT) with configurable expiry
-pub fn generate_access_token(user_id: &str, role: &str, jwt_secret: &str, ttl_secs: u64) -> String {
+pub fn generate_access_token(
+    user_id: &str,
+    role: &str,
+    jwt_secret: &str,
+    ttl_secs: u64,
+) -> Result<String, jsonwebtoken::errors::Error> {
     let expiration = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -73,7 +78,6 @@ pub fn generate_access_token(user_id: &str, role: &str, jwt_secret: &str, ttl_se
         &claims,
         &EncodingKey::from_secret(jwt_secret.as_bytes()),
     )
-    .unwrap_or_default()
 }
 
 /// Store a refresh token in the database (hash only, never plaintext)
@@ -148,7 +152,7 @@ async fn rotate_refresh_token(
     // Issue new tokens
     let new_refresh = generate_refresh_token();
     store_refresh_token(db, &user_id, &new_refresh, REFRESH_TOKEN_TTL_SECS).await?;
-    let new_access = generate_access_token(&user_id, &role, jwt_secret, ACCESS_TOKEN_TTL_SECS);
+    let new_access = generate_access_token(&user_id, &role, jwt_secret, ACCESS_TOKEN_TTL_SECS)?;
 
     Ok((new_access, new_refresh))
 }
@@ -257,7 +261,7 @@ pub async fn register(
     match result {
         Ok(_) => {
             let token =
-                generate_access_token(&user_id, "user", &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
+                generate_access_token(&user_id, "user", &state.jwt_secret, ACCESS_TOKEN_TTL_SECS)?;
             let refresh = generate_refresh_token();
             store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
                 .await
@@ -344,7 +348,7 @@ pub async fn login(
     match verify_result {
         Ok(true) => {
             let token =
-                generate_access_token(&user_id, &role, &state.jwt_secret, ACCESS_TOKEN_TTL_SECS);
+                generate_access_token(&user_id, &role, &state.jwt_secret, ACCESS_TOKEN_TTL_SECS)?;
             let refresh = generate_refresh_token();
             store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
                 .await
@@ -585,7 +589,8 @@ mod tests {
             "user",
             "secret123456789012345678901234567890",
             3600,
-        );
+        )
+        .unwrap();
         // A valid JWT has three parts separated by dots
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
@@ -651,7 +656,8 @@ mod tests {
 
     #[test]
     fn test_generate_token_with_empty_user_id() {
-        let token = generate_access_token("", "user", "secret123456789012345678901234567890", 3600);
+        let token = generate_access_token("", "user", "secret123456789012345678901234567890", 3600)
+            .unwrap();
         let parts: Vec<&str> = token.split('.').collect();
         assert_eq!(parts.len(), 3);
     }
@@ -659,7 +665,7 @@ mod tests {
     #[test]
     fn test_generate_token_verifies_correctly() {
         let secret = "secret123456789012345678901234567890";
-        let token = generate_access_token("test-user", "admin", secret, 3600);
+        let token = generate_access_token("test-user", "admin", secret, 3600).unwrap();
         let extracted = extract_user_id_from_token(
             &{
                 let mut h = HeaderMap::new();
@@ -678,7 +684,7 @@ mod tests {
     #[test]
     fn test_generate_token_includes_role() {
         let secret = "secret123456789012345678901234567890";
-        let token = generate_access_token("test-user", "admin", secret, 3600);
+        let token = generate_access_token("test-user", "admin", secret, 3600).unwrap();
         let (user_id, role) = extract_user_id_and_role_from_token_str(&token, secret).unwrap();
         assert_eq!(user_id, "test-user");
         assert_eq!(role, "admin");
