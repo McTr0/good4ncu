@@ -217,7 +217,7 @@ pub async fn get_admin_listings(
             category: row.get("category"),
             brand: row.get("brand"),
             condition_score: row.get("condition_score"),
-            suggested_price_cny: row.get::<i64, _>("suggested_price_cny") as f64 / 100.0,
+            suggested_price_cny: row.get::<i32, _>("suggested_price_cny") as f64 / 100.0,
             description: row.try_get("description").ok(),
             status: row.get("status"),
             owner_id: row.get("owner_id"),

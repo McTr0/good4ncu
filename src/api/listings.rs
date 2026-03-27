@@ -272,7 +272,7 @@ pub async fn get_listings(
                 brand: row.get("brand"),
                 condition_score: row.get("condition_score"),
                 // stored as integer cents, display as yuan
-                suggested_price_cny: cents_to_yuan(row.get::<i64, _>("suggested_price_cny")),
+                suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
                 status: row.get("status"),
                 defect_hint,
             }
@@ -327,7 +327,7 @@ pub async fn get_listing(
         category: row.get("category"),
         brand: row.get("brand"),
         condition_score: row.get("condition_score"),
-        suggested_price_cny: cents_to_yuan(row.get::<i64, _>("suggested_price_cny")),
+        suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
         defects,
         description: row.try_get("description").ok(),
         // Reveal owner_id to all authenticated users so they can contact the seller via chat

@@ -174,7 +174,7 @@ pub async fn get_user_listings(
             category: row.get("category"),
             brand: row.get("brand"),
             condition_score: row.get("condition_score"),
-            suggested_price_cny: cents_to_yuan(row.get::<i64, _>("suggested_price_cny")),
+            suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
             description: row.try_get("description").ok(),
             status: row.get("status"),
         })
