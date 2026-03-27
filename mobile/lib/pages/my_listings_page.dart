@@ -81,7 +81,7 @@ class _MyListingsPageState extends State<MyListingsPage> {
             Icon(
               Icons.inventory_2_outlined,
               size: 64,
-              color: AppTheme.textSecondary.withOpacity(0.5),
+              color: AppTheme.textSecondary.withValues(alpha: 0.5),
             ),
             const SizedBox(height: 16),
             Text(

@@ -8,7 +8,34 @@ import 'services/locale_service.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await LocaleService.init();
+  ErrorWidget.builder = (details) => _FallbackErrorWidget(details: details);
   runApp(const Good4NCUApp());
+}
+
+class _FallbackErrorWidget extends StatelessWidget {
+  final FlutterErrorDetails details;
+  const _FallbackErrorWidget({required this.details});
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const Icon(Icons.error_outline, size: 64, color: Colors.red),
+              const SizedBox(height: 16),
+              const Text('出现了一些问题', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              Text(details.exceptionAsString(), style: const TextStyle(fontSize: 12, color: Colors.grey)),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
 }
 
 class Good4NCUApp extends StatefulWidget {

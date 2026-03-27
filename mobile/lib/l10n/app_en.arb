@@ -200,6 +200,9 @@
   "orderId": "Order ID",
   "orderDetail": "Order Detail",
   "noOrders": "No orders",
+  "buyerInitiatedNegotiation": "Buyer initiated negotiation",
+  "cannotContactSeller": "无法联系卖家：缺少卖家信息",
+  "itemAlreadyPurchased": "哎呀，该商品太火爆，已经被别人抢先一步啦！",
   "@adminTakedownConfirmMessage": {
     "placeholders": {
       "title": {"type": "String"}

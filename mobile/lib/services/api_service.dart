@@ -89,7 +89,11 @@ class ApiService {
       } catch (_) {}
       throw NetworkException(msg);
     }
-    return parse(jsonDecode(response.body));
+    try {
+      return parse(jsonDecode(response.body));
+    } catch (e) {
+      throw ServerException(response.statusCode, '服务器返回数据格式错误');
+    }
   }
 
   Future<void> _clearAuthAndRedirect() async {

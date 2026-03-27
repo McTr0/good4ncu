@@ -39,11 +39,12 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   }
 
   Future<void> _handleContactSeller(BuildContext context) async {
+    final l = AppLocalizations.of(context)!;
     if (_isOperating) return;
     final listing = _listing;
     if (listing == null || listing.ownerId == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('无法联系卖家：缺少卖家信息'), backgroundColor: Colors.red),
+        SnackBar(content: Text(l.cannotContactSeller), backgroundColor: AppTheme.error),
       );
       setState(() => _isOperating = false);
       return;
@@ -58,7 +59,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
       final currentUserId = profile['user_id']?.toString();
       if (currentUserId == listing.ownerId) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('不能和自己聊天')),
+          SnackBar(content: Text(l.chatWithSelf)),
         );
         setState(() => _isOperating = false);
         return;
@@ -66,7 +67,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('加载失败: $e'), backgroundColor: Colors.red),
+        SnackBar(content: Text(l.loadFailed(e.toString())), backgroundColor: AppTheme.error),
       );
       setState(() => _isOperating = false);
       return;
@@ -91,7 +92,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
         await _apiService.requestConnection(listing.ownerId!, listingId: listing.id);
         if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('已发送连接请求，等待对方接受'), duration: Duration(seconds: 3)),
+          SnackBar(content: Text(l.connectionRequestSent), duration: const Duration(seconds: 3)),
         );
         // Navigate to conversation list so user can see the pending state
         context.push('/conversations');
@@ -99,7 +100,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('连接失败，请稍后重试'), backgroundColor: Colors.red, duration: const Duration(seconds: 3)),
+        SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error, duration: const Duration(seconds: 3)),
       );
     } finally {
       if (mounted) setState(() => _isOperating = false);
@@ -107,6 +108,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   }
 
   Future<void> _handlePurchase(BuildContext context) async {
+    final l = AppLocalizations.of(context)!;
     if (_isOperating) return;
     final listing = _listing;
     if (listing == null) return;
@@ -121,29 +123,29 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(
-          content: Text('购买成功！订单已创建'),
-          backgroundColor: Colors.green,
-          duration: Duration(seconds: 3),
+        ..showSnackBar(SnackBar(
+          content: Text(l.purchaseSuccess),
+          backgroundColor: AppTheme.success,
+          duration: const Duration(seconds: 3),
         ));
       context.push('/orders');
     } on ConflictException {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(
-          content: Text('哎呀，该商品太火爆，已经被别人抢先一步啦！'),
-          backgroundColor: Colors.orange,
+        ..showSnackBar(SnackBar(
+          content: Text(l.itemAlreadyPurchased),
+          backgroundColor: AppTheme.warning,
         ));
       _loadDetail();
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
-        ..showSnackBar(const SnackBar(
-          content: Text('购买失败，请稍后重试'),
-          backgroundColor: Colors.red,
-          duration: Duration(seconds: 4),
+        ..showSnackBar(SnackBar(
+          content: Text(l.purchaseFailed),
+          backgroundColor: AppTheme.error,
+          duration: const Duration(seconds: 4),
         ));
     } finally {
       if (mounted) setState(() => _isOperating = false);
@@ -200,14 +202,14 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
             height: 240,
             width: double.infinity,
             decoration: BoxDecoration(
-              color: AppTheme.primary.withOpacity(0.08),
+              color: AppTheme.primary.withValues(alpha: 0.08),
               borderRadius: BorderRadius.circular(AppTheme.radiusMd),
             ),
             child: Center(
               child: Icon(
                 Icons.inventory_2_outlined,
                 size: 80,
-                color: AppTheme.primary.withOpacity(0.3),
+                color: AppTheme.primary.withValues(alpha: 0.3),
               ),
             ),
           ),
@@ -251,7 +253,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
               children: listing.defects!
                   .map((d) => Chip(
                         label: Text(d, style: const TextStyle(fontSize: 13)),
-                        backgroundColor: AppTheme.error.withOpacity(0.1),
+                        backgroundColor: AppTheme.error.withValues(alpha: 0.1),
                         labelStyle: const TextStyle(color: AppTheme.error),
                         side: BorderSide.none,
                       ))
@@ -281,7 +283,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
             Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: AppTheme.primary.withOpacity(0.15),
+                  backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
                   child: const Icon(Icons.person, color: AppTheme.primary),
                 ),
                 const SizedBox(width: 12),

@@ -31,6 +31,7 @@ class NegotiationCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final isPending = request.status == 'pending';
     final isCountered = request.status == 'countered';
 
@@ -51,21 +52,21 @@ class NegotiationCard extends StatelessWidget {
     if (request.isExpired) {
       return _StatusBadge(
         icon: Icons.timer_off,
-        label: '议价已超时取消',
+        label: l.negotiationExpired,
         color: Colors.grey,
       );
     }
     if (request.status == 'approved') {
       return _StatusBadge(
         icon: Icons.check_circle,
-        label: '卖家已接受，交易完成',
+        label: l.sellerAcceptedDealComplete,
         color: Colors.green,
       );
     }
     if (request.status == 'rejected' || request.status == 'buyer_rejected') {
       return _StatusBadge(
         icon: Icons.cancel,
-        label: '议价已拒绝',
+        label: l.negotiationRejected,
         color: Colors.red,
       );
     }
@@ -150,6 +151,7 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     return Card(
       margin: const EdgeInsets.symmetric(vertical: 4),
       child: Padding(
@@ -162,7 +164,7 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
                 const Icon(Icons.handshake, color: Color(0xFF6366F1), size: 20),
                 const SizedBox(width: 8),
                 Text(
-                  '买家发起议价',
+                  l.buyerInitiatedNegotiation,
                   style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[800]),
                 ),
               ],
@@ -789,7 +791,7 @@ class _ChatPageState extends State<ChatPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('议价详情', style: Theme.of(context).textTheme.titleLarge),
+            Builder(builder: (ctx) => Text(AppLocalizations.of(ctx)!.negotiationDetails, style: Theme.of(ctx).textTheme.titleLarge)),
             const SizedBox(height: 12),
             Text('商品: ${req.listingId}'),
             Text('买家报价: ¥${req.proposedPrice.toStringAsFixed(2)}'),
@@ -825,14 +827,15 @@ class _HitlChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     Color tagColor;
     String label;
     if (request.isPending) {
       tagColor = Colors.orange;
-      label = '待处理议价';
+      label = l.pendingNegotiation;
     } else if (request.isCountered) {
       tagColor = Colors.blue;
-      label = '卖家已还价';
+      label = l.sellerCounterOffered;
     } else {
       tagColor = Colors.grey;
       label = '议价已${request.status}';

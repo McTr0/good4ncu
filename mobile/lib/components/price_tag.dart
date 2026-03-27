@@ -63,7 +63,7 @@ class ConditionBadge extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.12),
+        color: color.withValues(alpha: 0.12),
         borderRadius: BorderRadius.circular(6),
       ),
       child: Text(
@@ -110,12 +110,12 @@ class ListingCard extends StatelessWidget {
               flex: 3,
               child: Container(
                 width: double.infinity,
-                color: AppTheme.primary.withOpacity(0.08),
+                color: AppTheme.primary.withValues(alpha: 0.08),
                 child: Center(
                   child: Icon(
                     Icons.inventory_2_outlined,
                     size: 48,
-                    color: AppTheme.primary.withOpacity(0.4),
+                    color: AppTheme.primary.withValues(alpha: 0.4),
                   ),
                 ),
               ),

@@ -287,10 +287,10 @@ class _CreateListingPageState extends State<CreateListingPage> {
               Container(
                 padding: const EdgeInsets.all(AppTheme.sp16),
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.08),
+                  color: AppTheme.primary.withValues(alpha: 0.08),
                   borderRadius: BorderRadius.circular(AppTheme.radiusMd),
                   border: Border.all(
-                    color: AppTheme.primary.withOpacity(0.2),
+                    color: AppTheme.primary.withValues(alpha: 0.2),
                     style: BorderStyle.solid,
                   ),
                 ),
@@ -299,14 +299,14 @@ class _CreateListingPageState extends State<CreateListingPage> {
                     Icon(
                       Icons.auto_awesome,
                       size: 40,
-                      color: AppTheme.primary.withOpacity(0.6),
+                      color: AppTheme.primary.withValues(alpha: 0.6),
                     ),
                     const SizedBox(height: 8),
                     Text(
                       '点击右上角相机图标拍照或选择图片',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: AppTheme.primary.withOpacity(0.8),
+                        color: AppTheme.primary.withValues(alpha: 0.8),
                         fontSize: 14,
                       ),
                     ),
@@ -314,7 +314,7 @@ class _CreateListingPageState extends State<CreateListingPage> {
                       'AI将自动识别商品信息',
                       textAlign: TextAlign.center,
                       style: TextStyle(
-                        color: AppTheme.primary.withOpacity(0.6),
+                        color: AppTheme.primary.withValues(alpha: 0.6),
                         fontSize: 12,
                       ),
                     ),
@@ -344,7 +344,7 @@ class _CreateListingPageState extends State<CreateListingPage> {
                 width: double.infinity,
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(AppTheme.radiusMd),
-                  color: AppTheme.success.withOpacity(0.1),
+                  color: AppTheme.success.withValues(alpha: 0.1),
                 ),
                 child: Stack(
                   children: [
@@ -459,7 +459,7 @@ class _CreateListingPageState extends State<CreateListingPage> {
                 Container(
                   padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                   decoration: BoxDecoration(
-                    color: _conditionColor.withOpacity(0.12),
+                    color: _conditionColor.withValues(alpha: 0.12),
                     borderRadius: BorderRadius.circular(8),
                   ),
                   child: Text(
@@ -506,7 +506,7 @@ class _CreateListingPageState extends State<CreateListingPage> {
                           label: Text(d),
                           deleteIcon: const Icon(Icons.close, size: 16),
                           onDeleted: () => setState(() => _defects.remove(d)),
-                          backgroundColor: AppTheme.error.withOpacity(0.1),
+                          backgroundColor: AppTheme.error.withValues(alpha: 0.1),
                           labelStyle: const TextStyle(color: AppTheme.error),
                           side: BorderSide.none,
                         ))

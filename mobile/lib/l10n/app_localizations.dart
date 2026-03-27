@@ -997,6 +997,24 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'No orders'**
   String get noOrders;
+
+  /// No description provided for @buyerInitiatedNegotiation.
+  ///
+  /// In en, this message translates to:
+  /// **'Buyer initiated negotiation'**
+  String get buyerInitiatedNegotiation;
+
+  /// No description provided for @cannotContactSeller.
+  ///
+  /// In en, this message translates to:
+  /// **'无法联系卖家：缺少卖家信息'**
+  String get cannotContactSeller;
+
+  /// No description provided for @itemAlreadyPurchased.
+  ///
+  /// In en, this message translates to:
+  /// **'哎呀，该商品太火爆，已经被别人抢先一步啦！'**
+  String get itemAlreadyPurchased;
 }
 
 class _AppLocalizationsDelegate

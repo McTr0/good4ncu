@@ -32,10 +32,12 @@ class _ProfilePageState extends State<ProfilePage> {
       final profile = await _apiService.getUserProfile();
       if (mounted) setState(() { _profile = profile; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() {
-        _loading = false;
-        _error = l.profileLoadFailed;
-      });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = l.profileLoadFailed;
+        });
+      }
     }
   }
 
@@ -118,7 +120,7 @@ class _ProfilePageState extends State<ProfilePage> {
           const SizedBox(height: AppTheme.sp16),
           CircleAvatar(
             radius: 52,
-            backgroundColor: AppTheme.primary.withOpacity(0.15),
+            backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
             child: Text(
               username.isNotEmpty ? username[0].toUpperCase() : '?',
               style: const TextStyle(
@@ -156,7 +158,7 @@ class _ProfilePageState extends State<ProfilePage> {
               leading: Container(
                 padding: const EdgeInsets.all(10),
                 decoration: BoxDecoration(
-                  color: AppTheme.primary.withOpacity(0.1),
+                  color: AppTheme.primary.withValues(alpha: 0.1),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: const Icon(Icons.language, color: AppTheme.primary),
@@ -311,7 +313,7 @@ class _MenuCard extends StatelessWidget {
         leading: Container(
           padding: const EdgeInsets.all(10),
           decoration: BoxDecoration(
-            color: AppTheme.primary.withOpacity(0.1),
+            color: AppTheme.primary.withValues(alpha: 0.1),
             borderRadius: BorderRadius.circular(10),
           ),
           child: Icon(icon, color: AppTheme.primary),

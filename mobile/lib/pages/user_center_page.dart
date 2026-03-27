@@ -185,7 +185,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
                                 item['status'] ?? 'active',
                                 style: const TextStyle(fontSize: 11),
                               ),
-                              backgroundColor: AppTheme.success.withOpacity(0.1),
+                              backgroundColor: AppTheme.success.withValues(alpha: 0.1),
                             ),
                           ),
                         )),

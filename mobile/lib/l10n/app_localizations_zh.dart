@@ -475,4 +475,13 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get noOrders => '暂无订单';
+
+  @override
+  String get buyerInitiatedNegotiation => '买家发起议价';
+
+  @override
+  String get cannotContactSeller => '无法联系卖家：缺少卖家信息';
+
+  @override
+  String get itemAlreadyPurchased => '哎呀，该商品太火爆，已经被别人抢先一步啦！';
 }

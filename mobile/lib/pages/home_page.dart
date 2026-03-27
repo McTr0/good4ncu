@@ -169,7 +169,7 @@ class _HomePageState extends State<HomePage> {
                   label: Text(_getCategoryName(context, cat)),
                   selected: selected,
                   onSelected: (_) => _onCategorySelected(cat == 'allCategories' ? 'allCategories' : cat),
-                  selectedColor: AppTheme.primary.withOpacity(0.15),
+                  selectedColor: AppTheme.primary.withValues(alpha: 0.15),
                   checkmarkColor: AppTheme.primary,
                   labelStyle: TextStyle(
                     color: selected ? AppTheme.primary : null,
