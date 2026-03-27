@@ -214,10 +214,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/admin/users/{id}/impersonate",
             post(admin::impersonate_user),
         )
-        .route(
-            "/api/admin/users/{id}/role",
-            post(admin::update_user_role),
-        )
+        .route("/api/admin/users/{id}/role", post(admin::update_user_role))
         .route(
             "/api/admin/orders/{id}/status",
             post(admin::update_order_status),

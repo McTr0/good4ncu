@@ -528,7 +528,9 @@ pub async fn update_user_role(
 
     let valid_roles = ["buyer", "seller"];
     if !valid_roles.contains(&payload.role.as_str()) {
-        return Err(ApiError::BadRequest("Invalid role: must be 'buyer' or 'seller'".to_string()));
+        return Err(ApiError::BadRequest(
+            "Invalid role: must be 'buyer' or 'seller'".to_string(),
+        ));
     }
 
     let updated = sqlx::query("UPDATE users SET role = $1 WHERE id = $2 RETURNING id")
