@@ -407,6 +407,7 @@ class _CreateListingPageState extends State<CreateListingPage> {
             ),
             const SizedBox(height: AppTheme.sp16),
             DropdownButtonFormField<String>(
+              // ignore: deprecated_member_use
               value: _category,
               decoration: InputDecoration(labelText: '${l.category} *'),
               items: _categoryKeys

@@ -397,7 +397,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: AppTheme.error),
+                          SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error),
                         );
                       }
                     }
@@ -788,7 +788,7 @@ class _UsersTabState extends State<_UsersTab> {
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: AppTheme.error),
+                            SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error),
                           );
                         }
                       }
@@ -835,7 +835,7 @@ class _UsersTabState extends State<_UsersTab> {
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: AppTheme.error),
+                            SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error),
                           );
                         }
                       }
