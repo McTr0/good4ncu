@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../services/api_service.dart';
 import '../l10n/app_localizations.dart';
+import '../theme/app_theme.dart';
 
 class AdminPage extends StatefulWidget {
   const AdminPage({super.key});
@@ -31,13 +32,9 @@ class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMix
     return Scaffold(
       appBar: AppBar(
         title: Text(l.adminConsole),
-        backgroundColor: Colors.deepPurple,
-        foregroundColor: Colors.white,
         bottom: TabBar(
           controller: _tabController,
-          labelColor: Colors.white,
-          unselectedLabelColor: Colors.white70,
-          indicatorColor: Colors.amber,
+          indicatorColor: AppTheme.primary.withValues(alpha: 0.8),
           tabs: [
             Tab(icon: const Icon(Icons.dashboard), text: l.adminStatsTab),
             Tab(icon: const Icon(Icons.inventory), text: l.adminListingsTab),
@@ -106,21 +103,21 @@ class _StatsTabState extends State<_StatsTab> {
     return RefreshIndicator(
       onRefresh: _load,
       child: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTheme.sp16),
         children: [
           Row(children: [
             _StatCard(
               title: l.adminTotalListings,
               value: '${_stats!['total_listings']}',
               icon: Icons.inventory_2,
-              color: Colors.blue,
+              color: AppTheme.info,
             ),
             const SizedBox(width: 12),
             _StatCard(
               title: l.adminActive,
               value: '${_stats!['active_listings']}',
               icon: Icons.check_circle,
-              color: Colors.green,
+              color: AppTheme.success,
             ),
           ]),
           const SizedBox(height: 12),
@@ -129,14 +126,14 @@ class _StatsTabState extends State<_StatsTab> {
               title: l.adminUsers,
               value: '${_stats!['total_users']}',
               icon: Icons.people,
-              color: Colors.orange,
+              color: AppTheme.warning,
             ),
             const SizedBox(width: 12),
             _StatCard(
               title: l.adminOrders,
               value: '${_stats!['total_orders']}',
               icon: Icons.shopping_cart,
-              color: Colors.purple,
+              color: AppTheme.shipped,
             ),
           ]),
           const SizedBox(height: 24),
@@ -150,7 +147,7 @@ class _StatsTabState extends State<_StatsTab> {
           Text(l.category, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
           const SizedBox(height: 8),
           ...categories.map((c) => ListTile(
-            leading: const Icon(Icons.category),
+            leading: const Icon(Icons.category, color: AppTheme.primary),
             title: Text(c['category'] ?? 'Unknown'),
             trailing: Chip(label: Text('${c['count']}')),
           )),
@@ -174,14 +171,14 @@ class _StatsTabState extends State<_StatsTab> {
           LineChartBarData(
             spots: _listingTrend.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(),
             isCurved: true,
-            color: Colors.blue,
+            color: AppTheme.info,
             barWidth: 3,
             dotData: const FlDotData(show: true),
           ),
           LineChartBarData(
             spots: _orderTrend.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(),
             isCurved: true,
-            color: Colors.purple,
+            color: AppTheme.shipped,
             barWidth: 3,
             dotData: const FlDotData(show: true),
           ),
@@ -204,13 +201,13 @@ class _StatCard extends StatelessWidget {
     return Expanded(
       child: Card(
         child: Padding(
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppTheme.sp16),
           child: Column(
             children: [
               Icon(icon, size: 32, color: color),
               const SizedBox(height: 8),
               Text(value, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: color)),
-              Text(title, style: const TextStyle(fontSize: 12, color: Colors.grey)),
+              Text(title, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
             ],
           ),
         ),
@@ -322,11 +319,12 @@ class _ListingsTabState extends State<_ListingsTab> {
           }
           final item = listings[i] as Map<String, dynamic>;
           final isTakedown = item['status'] == 'takedown';
+          final isActive = item['status'] == 'active';
           return ListTile(
             leading: CircleAvatar(
-              backgroundColor: item['status'] == 'active' ? Colors.green : Colors.grey,
+              backgroundColor: isActive ? AppTheme.success : AppTheme.textSecondary,
               child: Icon(
-                item['status'] == 'active' ? Icons.check : Icons.archive,
+                isActive ? Icons.check : Icons.archive,
                 color: Colors.white,
                 size: 18,
               ),
@@ -334,8 +332,8 @@ class _ListingsTabState extends State<_ListingsTab> {
             title: Text(item['title'] ?? ''),
             subtitle: Text('${item['category']} · ¥${item['suggested_price_cny'] ?? 0} · ${item['status']}'),
             trailing: isTakedown
-                ? Chip(label: Text(l.adminTakedown, style: const TextStyle(color: Colors.white)), backgroundColor: Colors.red)
-                : const Icon(Icons.chevron_right),
+                ? Chip(label: Text(l.adminTakedown, style: const TextStyle(color: Colors.white)), backgroundColor: AppTheme.error)
+                : const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
             onTap: isTakedown ? null : () => _showListingDetail(context, item),
           );
         },
@@ -348,7 +346,7 @@ class _ListingsTabState extends State<_ListingsTab> {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTheme.sp16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -362,7 +360,7 @@ class _ListingsTabState extends State<_ListingsTab> {
             Text('${l.conditionLabel}: ${item['condition_score'] ?? 0}'),
             Text('${l.status}: ${item['status']}'),
             Text('Owner ID: ${item['owner_id']}'),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppTheme.sp16),
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
@@ -379,7 +377,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                         ),
                         FilledButton(
                           onPressed: () => Navigator.pop(dialogCtx, true),
-                          style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                          style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
                           child: Text(l.adminTakedown),
                         ),
                       ],
@@ -392,25 +390,25 @@ class _ListingsTabState extends State<_ListingsTab> {
                       await ApiService().takedownListing(item['id'] as String);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(l.adminTakedownSuccess), backgroundColor: Colors.green),
+                          SnackBar(content: Text(l.adminTakedownSuccess), backgroundColor: AppTheme.success),
                         );
                       }
                       _load();
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: Colors.red),
+                          SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: AppTheme.error),
                         );
                       }
                     }
                   }
                 },
-                style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
                 icon: const Icon(Icons.archive),
                 label: Text(l.adminTakedown),
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppTheme.sp8),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(
@@ -465,11 +463,11 @@ class _OrdersTabState extends State<_OrdersTab> {
 
   Color _statusColor(String? s) {
     return switch (s) {
-      'paid' => Colors.blue,
-      'shipped' => Colors.orange,
-      'confirmed' || 'completed' => Colors.green,
-      'cancelled' => Colors.red,
-      _ => Colors.grey,
+      'paid' => AppTheme.info,
+      'shipped' => AppTheme.shipped,
+      'confirmed' || 'completed' => AppTheme.success,
+      'cancelled' => AppTheme.error,
+      _ => AppTheme.textSecondary,
     };
   }
 
@@ -497,7 +495,7 @@ class _OrdersTabState extends State<_OrdersTab> {
             ),
             title: Text('Order #${(item['id'] ?? '').toString().substring(0, (item['id'] ?? '').toString().length.clamp(0, 8))}'),
             subtitle: Text('${item['status'] ?? 'unknown'} · ¥${item['final_price'] ?? 0}'),
-            trailing: const Icon(Icons.chevron_right),
+            trailing: const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
             onTap: () => _showOrderDetail(context, item),
           );
         },
@@ -517,7 +515,7 @@ class _OrdersTabState extends State<_OrdersTab> {
         expand: false,
         builder: (_, scrollController) => ListView(
           controller: scrollController,
-          padding: const EdgeInsets.all(16),
+          padding: const EdgeInsets.all(AppTheme.sp16),
           children: [
             Text('Order #${item['id']}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
             const Divider(),
@@ -657,13 +655,13 @@ class _UsersTabState extends State<_UsersTab> {
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.all(12),
+          padding: const EdgeInsets.all(AppTheme.sp12),
           child: TextField(
             controller: _searchController,
             decoration: InputDecoration(
               hintText: l.adminSearchUsersPlaceholder,
               prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(8)),
+              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTheme.radiusSm)),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.clear),
                 onPressed: () {
@@ -697,9 +695,10 @@ class _UsersTabState extends State<_UsersTab> {
                                   );
                                 }
                                 final u = _users![i];
+                                final isBanned = u['status'] == 'banned';
                                 return ListTile(
                                   leading: CircleAvatar(
-                                    backgroundColor: u['status'] == 'banned' ? Colors.red : Colors.deepPurple,
+                                    backgroundColor: isBanned ? AppTheme.error : AppTheme.primary,
                                     child: Text(
                                       (u['username'] ?? '?')[0].toUpperCase(),
                                       style: const TextStyle(color: Colors.white),
@@ -723,7 +722,7 @@ class _UsersTabState extends State<_UsersTab> {
     showModalBottomSheet(
       context: context,
       builder: (ctx) => Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.all(AppTheme.sp16),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
@@ -731,7 +730,7 @@ class _UsersTabState extends State<_UsersTab> {
             Row(children: [
               CircleAvatar(
                 radius: 28,
-                backgroundColor: isBanned ? Colors.red : Colors.deepPurple,
+                backgroundColor: isBanned ? AppTheme.error : AppTheme.primary,
                 child: Text(
                   (u['username'] ?? '?')[0].toUpperCase(),
                   style: const TextStyle(color: Colors.white, fontSize: 24),
@@ -751,7 +750,7 @@ class _UsersTabState extends State<_UsersTab> {
             Text('${l.myListings}: ${u['listing_count'] ?? 0}'),
             Text('Joined: ${u['created_at'] ?? 'N/A'}'),
             Text('Role: ${u['role'] ?? 'user'}'),
-            const SizedBox(height: 16),
+            const SizedBox(height: AppTheme.sp16),
             if (!isBanned)
               SizedBox(
                 width: double.infinity,
@@ -769,7 +768,7 @@ class _UsersTabState extends State<_UsersTab> {
                           ),
                           FilledButton(
                             onPressed: () => Navigator.pop(dialogCtx, true),
-                            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                            style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
                             child: Text(l.adminBan),
                           ),
                         ],
@@ -782,20 +781,20 @@ class _UsersTabState extends State<_UsersTab> {
                         await ApiService().banUser(u['id'] ?? u['user_id']);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l.adminBanSuccess), backgroundColor: Colors.green),
+                            SnackBar(content: Text(l.adminBanSuccess), backgroundColor: AppTheme.success),
                           );
                         }
                         _search('', reset: true);
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: Colors.red),
+                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: AppTheme.error),
                           );
                         }
                       }
                     }
                   },
-                  style: FilledButton.styleFrom(backgroundColor: Colors.red),
+                  style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
                   icon: const Icon(Icons.block),
                   label: Text(l.adminBan),
                 ),
@@ -829,25 +828,25 @@ class _UsersTabState extends State<_UsersTab> {
                         await ApiService().unbanUser(u['id'] ?? u['user_id']);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l.adminUnbanSuccess), backgroundColor: Colors.green),
+                            SnackBar(content: Text(l.adminUnbanSuccess), backgroundColor: AppTheme.success),
                           );
                         }
                         _search('', reset: true);
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: Colors.red),
+                            SnackBar(content: Text('${l.operationFailed(e.toString())}'), backgroundColor: AppTheme.error),
                           );
                         }
                       }
                     }
                   },
-                  style: FilledButton.styleFrom(backgroundColor: Colors.green),
+                  style: FilledButton.styleFrom(backgroundColor: AppTheme.success),
                   icon: const Icon(Icons.check_circle),
                   label: Text(l.adminUnban),
                 ),
               ),
-            const SizedBox(height: 8),
+            const SizedBox(height: AppTheme.sp8),
             SizedBox(
               width: double.infinity,
               child: OutlinedButton.icon(

@@ -49,6 +49,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get categoryLabel => 'Category';
 
   @override
+  String get chinese => 'Chinese (Simplified)';
+
+  @override
   String get chat => 'Chat';
 
   @override
@@ -129,6 +132,9 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get electronics => 'Electronics';
+
+  @override
+  String get english => 'English';
 
   @override
   String get enterValidCounterAmount =>
@@ -246,6 +252,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get profile => 'Profile';
 
   @override
+  String get profileLoadFailed => 'Failed to load profile';
+
+  @override
   String get profileTab => 'Profile';
 
   @override
@@ -334,6 +343,10 @@ class AppLocalizationsEn extends AppLocalizations {
   String get tradeProtection => 'Trade protection';
 
   @override
+  String get tradeProtectionSubtitle =>
+      'Platform escrow + 7-day delivery confirmation';
+
+  @override
   String get typeMessage => 'Type a message...';
 
   @override
@@ -347,6 +360,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get adminConsole => 'Admin Console';
+
+  @override
+  String get adminConsoleSubtitle => 'System overview & management';
+
+  @override
+  String get adminOnly => 'Admin only';
 
   @override
   String get adminStatsTab => 'Stats';
@@ -374,6 +393,21 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get adminTrend7Days => 'Trend (7 days)';
+
+  @override
+  String get changeRole => 'Change Role';
+
+  @override
+  String get markShipped => 'Mark Shipped';
+
+  @override
+  String get markCompleted => 'Mark Completed';
+
+  @override
+  String get orderStatusUpdated => 'Order status updated';
+
+  @override
+  String get userRoleUpdated => 'User role updated';
 
   @override
   String get adminTakedown => 'Takedown';

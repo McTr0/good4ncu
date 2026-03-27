@@ -26,12 +26,16 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadProfile() async {
+    final l = AppLocalizations.of(context)!;
     setState(() { _loading = true; _error = null; });
     try {
       final profile = await _apiService.getUserProfile();
       if (mounted) setState(() { _profile = profile; _loading = false; });
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = '个人资料加载失败'; });
+      if (mounted) setState(() {
+        _loading = false;
+        _error = l.profileLoadFailed;
+      });
     }
   }
 
@@ -182,8 +186,8 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           _MenuCard(
             icon: Icons.verified_user_outlined,
-            title: '交易保障',
-            subtitle: '平台托管 + 7天确认收货',
+            title: l.tradeProtection,
+            subtitle: l.tradeProtectionSubtitle,
             onTap: () => context.push('/trust'),
           ),
           _MenuCard(
@@ -198,13 +202,13 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           _MenuCard(
             icon: Icons.admin_panel_settings_outlined,
-            title: 'Admin Console',
-            subtitle: 'System overview & management',
+            title: l.adminConsole,
+            subtitle: l.adminConsoleSubtitle,
             onTap: () {
               final isAdmin = _profile?['role'] == 'admin';
               if (!isAdmin) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  const SnackBar(content: Text('仅管理员可用'), backgroundColor: Colors.orange),
+                  SnackBar(content: Text(l.adminOnly), backgroundColor: Colors.orange),
                 );
                 return;
               }
@@ -247,27 +251,29 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   String _getLanguageSubtitle(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     final locale = context.localeNotifier().locale;
-    return locale.languageCode == 'zh' ? '简体中文' : 'English';
+    return locale.languageCode == 'zh' ? l.chinese : l.english;
   }
 
   void _showLanguageDialog(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: Text(AppLocalizations.of(ctx)!.language),
+        title: Text(l.language),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
             ListTile(
-              title: const Text('English'),
+              title: Text(l.english),
               onTap: () {
                 ctx.localeNotifier().setLocale(const Locale('en'));
                 Navigator.pop(ctx);
               },
             ),
             ListTile(
-              title: const Text('简体中文'),
+              title: Text(l.chinese),
               onTap: () {
                 ctx.localeNotifier().setLocale(const Locale('zh'));
                 Navigator.pop(ctx);

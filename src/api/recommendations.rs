@@ -98,7 +98,7 @@ pub async fn get_similar_listings(
                 brand: row.get("brand"),
                 condition_score: row.get("condition_score"),
                 suggested_price_cny: crate::utils::cents_to_yuan(
-                    row.get::<i32, _>("suggested_price_cny") as i64,
+                    row.get::<i64, _>("suggested_price_cny"),
                 ),
                 status: row.get("status"),
                 defect_hint,
@@ -145,7 +145,7 @@ pub async fn get_recommendation_feed(
                 brand: row.get("brand"),
                 condition_score: row.get("condition_score"),
                 suggested_price_cny: crate::utils::cents_to_yuan(
-                    row.get::<i32, _>("suggested_price_cny") as i64,
+                    row.get::<i64, _>("suggested_price_cny"),
                 ),
                 status: row.get("status"),
                 defect_hint,

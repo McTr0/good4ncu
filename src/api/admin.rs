@@ -217,7 +217,7 @@ pub async fn get_admin_listings(
             category: row.get("category"),
             brand: row.get("brand"),
             condition_score: row.get("condition_score"),
-            suggested_price_cny: row.get::<i32, _>("suggested_price_cny") as f64 / 100.0,
+            suggested_price_cny: row.get::<i64, _>("suggested_price_cny") as f64 / 100.0,
             description: row.try_get("description").ok(),
             status: row.get("status"),
             owner_id: row.get("owner_id"),
@@ -470,4 +470,84 @@ pub async fn impersonate_user(
         "status": status,
         "message": "已以该用户身份登录"
     })))
+}
+
+/// POST /api/admin/orders/:order_id/status - admin force-sets order status
+#[derive(Deserialize)]
+pub struct UpdateOrderStatusRequest {
+    pub status: String,
+}
+
+pub async fn update_order_status(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+    Json(payload): Json<UpdateOrderStatusRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
+
+    let valid_statuses = ["pending", "paid", "shipped", "completed", "cancelled"];
+    if !valid_statuses.contains(&payload.status.as_str()) {
+        return Err(ApiError::BadRequest("Invalid status value".to_string()));
+    }
+
+    let updated = sqlx::query("UPDATE orders SET status = $1 WHERE id = $2 RETURNING id")
+        .bind(&payload.status)
+        .bind(&order_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if updated.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    tracing::info!(
+        admin_id = %_admin_id,
+        order_id = %order_id,
+        new_status = %payload.status,
+        "Admin updated order status"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "订单状态已更新" })))
+}
+
+/// POST /api/admin/users/:user_id/role - admin changes user role
+#[derive(Deserialize)]
+pub struct UpdateRoleRequest {
+    pub role: String,
+}
+
+pub async fn update_user_role(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(user_id): Path<String>,
+    Json(payload): Json<UpdateRoleRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+
+    let valid_roles = ["buyer", "seller"];
+    if !valid_roles.contains(&payload.role.as_str()) {
+        return Err(ApiError::BadRequest("Invalid role: must be 'buyer' or 'seller'".to_string()));
+    }
+
+    let updated = sqlx::query("UPDATE users SET role = $1 WHERE id = $2 RETURNING id")
+        .bind(&payload.role)
+        .bind(&user_id)
+        .fetch_optional(&state.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if updated.is_none() {
+        return Err(ApiError::NotFound);
+    }
+
+    tracing::info!(
+        admin_id = %admin_id,
+        target_user_id = %user_id,
+        new_role = %payload.role,
+        "Admin changed user role"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "用户角色已更新" })))
 }

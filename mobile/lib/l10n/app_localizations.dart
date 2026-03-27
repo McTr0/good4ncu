@@ -176,6 +176,12 @@ abstract class AppLocalizations {
   /// **'Category'**
   String get categoryLabel;
 
+  /// No description provided for @chinese.
+  ///
+  /// In en, this message translates to:
+  /// **'Chinese (Simplified)'**
+  String get chinese;
+
   /// No description provided for @chat.
   ///
   /// In en, this message translates to:
@@ -331,6 +337,12 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Electronics'**
   String get electronics;
+
+  /// No description provided for @english.
+  ///
+  /// In en, this message translates to:
+  /// **'English'**
+  String get english;
 
   /// No description provided for @enterValidCounterAmount.
   ///
@@ -548,6 +560,12 @@ abstract class AppLocalizations {
   /// **'Profile'**
   String get profile;
 
+  /// No description provided for @profileLoadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Failed to load profile'**
+  String get profileLoadFailed;
+
   /// No description provided for @profileTab.
   ///
   /// In en, this message translates to:
@@ -710,6 +728,12 @@ abstract class AppLocalizations {
   /// **'Trade protection'**
   String get tradeProtection;
 
+  /// No description provided for @tradeProtectionSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Platform escrow + 7-day delivery confirmation'**
+  String get tradeProtectionSubtitle;
+
   /// No description provided for @typeMessage.
   ///
   /// In en, this message translates to:
@@ -739,6 +763,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Admin Console'**
   String get adminConsole;
+
+  /// No description provided for @adminConsoleSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'System overview & management'**
+  String get adminConsoleSubtitle;
+
+  /// No description provided for @adminOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Admin only'**
+  String get adminOnly;
 
   /// No description provided for @adminStatsTab.
   ///
@@ -793,6 +829,36 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Trend (7 days)'**
   String get adminTrend7Days;
+
+  /// No description provided for @changeRole.
+  ///
+  /// In en, this message translates to:
+  /// **'Change Role'**
+  String get changeRole;
+
+  /// No description provided for @markShipped.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark Shipped'**
+  String get markShipped;
+
+  /// No description provided for @markCompleted.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark Completed'**
+  String get markCompleted;
+
+  /// No description provided for @orderStatusUpdated.
+  ///
+  /// In en, this message translates to:
+  /// **'Order status updated'**
+  String get orderStatusUpdated;
+
+  /// No description provided for @userRoleUpdated.
+  ///
+  /// In en, this message translates to:
+  /// **'User role updated'**
+  String get userRoleUpdated;
 
   /// No description provided for @adminTakedown.
   ///

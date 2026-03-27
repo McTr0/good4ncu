@@ -48,6 +48,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get categoryLabel => '分类';
 
   @override
+  String get chinese => '简体中文';
+
+  @override
   String get chat => '聊天';
 
   @override
@@ -126,6 +129,9 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get electronics => '电子产品';
+
+  @override
+  String get english => 'English';
 
   @override
   String get enterValidCounterAmount => '请输入有效的还价金额';
@@ -242,6 +248,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get profile => '个人信息';
 
   @override
+  String get profileLoadFailed => '个人资料加载失败';
+
+  @override
   String get profileTab => '我的';
 
   @override
@@ -329,6 +338,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get tradeProtection => '交易保障';
 
   @override
+  String get tradeProtectionSubtitle => '平台托管 + 7天确认收货';
+
+  @override
   String get typeMessage => '输入消息...';
 
   @override
@@ -342,6 +354,12 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get adminConsole => '管理后台';
+
+  @override
+  String get adminConsoleSubtitle => '系统概览与管理';
+
+  @override
+  String get adminOnly => '仅管理员可用';
 
   @override
   String get adminStatsTab => '统计';
@@ -369,6 +387,21 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get adminTrend7Days => '趋势 (7日)';
+
+  @override
+  String get changeRole => '修改角色';
+
+  @override
+  String get markShipped => '标记已发货';
+
+  @override
+  String get markCompleted => '标记已完成';
+
+  @override
+  String get orderStatusUpdated => '订单状态已更新';
+
+  @override
+  String get userRoleUpdated => '用户角色已更新';
 
   @override
   String get adminTakedown => '强制下架 (Takedown)';

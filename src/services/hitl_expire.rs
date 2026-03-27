@@ -64,7 +64,7 @@ async fn expire_pending(
         let listing_id: String = row.get("listing_id");
         let buyer_id: String = row.get("buyer_id");
         let seller_id: String = row.get("seller_id");
-        let _proposed_price: i64 = row.get::<i32, _>("proposed_price") as i64;
+        let _proposed_price: i64 = row.get::<i64, _>("proposed_price");
 
         // Update status to expired.
         let update_result = sqlx::query(

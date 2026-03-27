@@ -72,7 +72,7 @@ pub async fn list_negotiations(
             listing_id: row.get("listing_id"),
             buyer_id: row.get("buyer_id"),
             seller_id: row.get("seller_id"),
-            proposed_price: crate::utils::cents_to_yuan(row.get::<i32, _>("proposed_price") as i64),
+            proposed_price: crate::utils::cents_to_yuan(row.get::<i64, _>("proposed_price")),
             reason: row.get("reason"),
             status: row.get("status"),
             counter_price: row
@@ -174,7 +174,7 @@ pub async fn respond_negotiation(
         .fetch_one(&state.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    let proposed_price: i64 = hitl_row.get::<i32, _>("proposed_price") as i64;
+    let proposed_price: i64 = hitl_row.get::<i64, _>("proposed_price") as i64;
 
     // Notify the buyer about the seller's decision
     let (notif_title, notif_body): (String, String) = match new_status {

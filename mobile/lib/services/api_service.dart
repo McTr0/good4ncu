@@ -449,6 +449,26 @@ class ApiService {
     _handleResponse(response, (_) => null);
   }
 
+  Future<void> updateAdminOrderStatus(String orderId, String status) async {
+    final headers = await _authHeaders();
+    final response = await _post(
+      Uri.parse('$baseUrl/api/admin/orders/$orderId/status'),
+      headers,
+      jsonEncode({'status': status}),
+    );
+    _handleResponse(response, (_) => null);
+  }
+
+  Future<void> updateUserRole(String userId, String role) async {
+    final headers = await _authHeaders();
+    final response = await _post(
+      Uri.parse('$baseUrl/api/admin/users/$userId/role'),
+      headers,
+      jsonEncode({'role': role}),
+    );
+    _handleResponse(response, (_) => null);
+  }
+
   Future<void> takedownListing(String listingId) async {
     final headers = await _authHeaders();
     final response = await _post(

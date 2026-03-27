@@ -92,7 +92,7 @@ pub async fn get_watchlist(
                 category: row.get("category"),
                 brand: row.get("brand"),
                 condition_score: row.get("condition_score"),
-                suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
+                suggested_price_cny: cents_to_yuan(row.get::<i64, _>("suggested_price_cny")),
                 status: row.get("status"),
                 owner_id: row.get("owner_id"),
                 created_at,
