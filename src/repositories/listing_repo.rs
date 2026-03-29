@@ -419,6 +419,23 @@ impl ListingRepository for PostgresListingRepository {
 
         Ok(row.get(0))
     }
+
+    async fn get_category_stats(&self) -> Result<Vec<(String, i64)>, ApiError> {
+        let rows = sqlx::query(
+            "SELECT COALESCE(category, 'Other') as category, COUNT(*) as cnt \
+             FROM inventory GROUP BY category ORDER BY cnt DESC LIMIT 50",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        let stats = rows
+            .iter()
+            .map(|r| (r.get("category"), r.get(1))) // 1 is cnt
+            .collect();
+
+        Ok(stats)
+    }
 }
 
 #[cfg(test)]

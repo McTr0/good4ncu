@@ -103,6 +103,9 @@ pub trait ListingRepository: Send + Sync {
 
     /// Get total count of listings.
     async fn count(&self, status: Option<&str>) -> Result<i64, ApiError>;
+
+    /// Get distribution of listings across categories (admin stats).
+    async fn get_category_stats(&self) -> Result<Vec<(String, i64)>, ApiError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -307,11 +310,6 @@ pub trait ChatRepository: Send + Sync {
         rejector_id: &str,
     ) -> Result<(), ApiError>;
 
-    /// Get a connection by ID.
-    async fn get_connection(
-        &self,
-        connection_id: &str,
-    ) -> Result<Option<ConversationSummary>, ApiError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,4 +353,80 @@ pub trait AuthRepository: Send + Sync {
 
     /// Revoke all refresh tokens for a user.
     async fn revoke_all_user_tokens(&self, user_id: &str) -> Result<(), ApiError>;
+}
+
+// ---------------------------------------------------------------------------
+// Order Repository
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct Order {
+    pub id: String,
+    pub listing_id: String,
+    pub buyer_id: String,
+    pub seller_id: String,
+    pub final_price: i64,
+    pub status: String,
+    pub cancellation_reason: Option<String>,
+    pub paid_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub shipped_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub cancelled_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)]
+pub struct OrderSummary {
+    pub id: String,
+    pub listing_id: String,
+    pub listing_title: String,
+    pub buyer_id: String,
+    pub buyer_username: String,
+    pub seller_id: String,
+    pub seller_username: String,
+    pub final_price: i64,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[allow(dead_code, async_fn_in_trait)]
+pub trait OrderRepository: Send + Sync {
+    /// Create a new order (caller must handle listing status update).
+    async fn create(
+        &self,
+        id: &str,
+        listing_id: &str,
+        buyer_id: &str,
+        seller_id: &str,
+        final_price: i64,
+    ) -> Result<(), ApiError>;
+
+    /// Find an order by ID.
+    async fn find_by_id(&self, id: &str) -> Result<Option<Order>, ApiError>;
+
+    /// Find an order with buyer/seller/listing details.
+    async fn find_with_details(&self, id: &str) -> Result<Option<OrderSummary>, ApiError>;
+
+    /// List orders with filters.
+    async fn list_orders(
+        &self,
+        user_id: Option<&str>,
+        role: Option<&str>, // "buyer" | "seller"
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<OrderSummary>, i64), ApiError>;
+
+    /// Update order status and related timestamps.
+    async fn update_status(
+        &self,
+        order_id: &str,
+        new_status: &str,
+        timestamp_field: &str,
+        cancellation_reason: Option<&str>,
+    ) -> Result<bool, ApiError>;
+
+    /// Count orders.
+    async fn count(&self) -> Result<i64, ApiError>;
 }
