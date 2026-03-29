@@ -31,7 +31,9 @@ class _FakeNotificationService extends NotificationService {
   Future<http.Response> post(
     Uri url,
     Map<String, String> headers,
-    String body,
+    String body, {
+    bool allowAuthRetry = true,
+  }
   ) async {
     postUris.add(url);
     if (url.path.endsWith('/read-all')) {

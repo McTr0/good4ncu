@@ -17,15 +17,37 @@ import '../pages/settings_page.dart';
 import '../pages/watchlist_page.dart';
 import '../pages/notifications_page.dart';
 import '../services/base_service.dart';
+import '../services/user_service.dart';
+import '../services/admin_role_cache.dart';
 import '../pages/trust_page.dart';
 import '../services/token_storage.dart';
 import '../services/ws_service.dart';
+import '../components/floating_agent_bubble.dart';
+import '../providers/agent_chat_notifier.dart';
+import 'package:provider/provider.dart';
 
 final GlobalKey<NavigatorState> _rootNavigatorKey = BaseService.navigatorKey;
 
-Future<bool> _isLoggedIn() async {
+Future<bool> getLoginStatus() async {
   final token = await TokenStorage.instance.getAccessToken();
   return token != null && token.isNotEmpty;
+}
+
+Future<bool> _isAdmin() async {
+  try {
+    final cached = await AdminRoleCache.instance.getCachedForCurrentToken();
+    if (cached != null) {
+      return cached;
+    }
+
+    final profile = await UserService().getUserProfile();
+    final isAdmin = profile['role'] == 'admin';
+    await AdminRoleCache.instance.saveForCurrentToken(isAdmin);
+    return isAdmin;
+  } catch (_) {
+    AdminRoleCache.instance.invalidate();
+    return false;
+  }
 }
 
 final GoRouter appRouter = GoRouter(
@@ -33,22 +55,23 @@ final GoRouter appRouter = GoRouter(
   initialLocation: '/',
   redirect: (context, state) async {
     try {
-      final loggedIn = await _isLoggedIn();
+      final loggedIn = await getLoginStatus();
       final onAuthRoute = state.matchedLocation == '/login';
       if (!loggedIn && !onAuthRoute) {
         return '/login';
       }
       if (loggedIn && onAuthRoute) {
-        // Connect global WS singleton on successful login redirect.
         WsService.instance.connect();
         return '/';
       }
-      // On initial load when already logged in, ensure WS is connected.
       if (loggedIn) {
         WsService.instance.connect();
       }
+      if (state.matchedLocation == '/admin') {
+        final admin = await _isAdmin();
+        if (!admin) return '/';
+      }
     } catch (e) {
-      // If auth check fails, redirect to login
       if (state.matchedLocation != '/login') {
         return '/login';
       }
@@ -71,6 +94,38 @@ final GoRouter appRouter = GoRouter(
       path: '/notifications',
       builder: (context, state) => const NotificationsPage(),
     ),
+
+    // Detail routes (Hide bottom bar)
+    GoRoute(
+      path: '/listing/:id',
+      builder: (context, state) {
+        final id = state.pathParameters['id']!;
+        return ListingDetailPage(listingId: id);
+      },
+    ),
+    GoRoute(
+      path: '/orders/:id',
+      builder: (context, state) {
+        final id = state.pathParameters['id']!;
+        return OrderDetailPage(orderId: id);
+      },
+    ),
+    GoRoute(
+      path: '/chat/:conversationId',
+      builder: (context, state) {
+        final id = state.pathParameters['conversationId']!;
+        final extra = state.extra as Map<String, dynamic>?;
+        final otherUserId = extra?['otherUserId'] as String? ?? '';
+        final otherUsername = extra?['otherUsername'] as String? ?? '';
+        return UserChatPage(
+          conversationId: id,
+          otherUserId: otherUserId,
+          otherUsername: otherUsername,
+        );
+      },
+    ),
+
+    // Tab routes (Show bottom bar)
     ShellRoute(
       builder: (context, state, child) => _ShellScaffold(child: child),
       routes: [
@@ -80,11 +135,9 @@ final GoRouter appRouter = GoRouter(
               const NoTransitionPage(child: HomePage()),
         ),
         GoRoute(
-          path: '/listing/:id',
-          pageBuilder: (context, state) {
-            final id = state.pathParameters['id']!;
-            return NoTransitionPage(child: ListingDetailPage(listingId: id));
-          },
+          path: '/conversations',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ConversationListPage()),
         ),
         GoRoute(
           path: '/create',
@@ -92,14 +145,14 @@ final GoRouter appRouter = GoRouter(
               const NoTransitionPage(child: CreateListingPage()),
         ),
         GoRoute(
-          path: '/my-listings',
-          pageBuilder: (context, state) =>
-              const NoTransitionPage(child: MyListingsPage()),
-        ),
-        GoRoute(
           path: '/profile',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: ProfilePage()),
+        ),
+        GoRoute(
+          path: '/my-listings',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: MyListingsPage()),
         ),
         GoRoute(
           path: '/orders',
@@ -107,37 +160,9 @@ final GoRouter appRouter = GoRouter(
               const NoTransitionPage(child: MyOrdersPage()),
         ),
         GoRoute(
-          path: '/orders/:id',
-          pageBuilder: (context, state) {
-            final id = state.pathParameters['id']!;
-            return NoTransitionPage(child: OrderDetailPage(orderId: id));
-          },
-        ),
-        GoRoute(
           path: '/chat',
           pageBuilder: (context, state) =>
               const NoTransitionPage(child: ChatPage()),
-        ),
-        GoRoute(
-          path: '/conversations',
-          pageBuilder: (context, state) =>
-              const NoTransitionPage(child: ConversationListPage()),
-        ),
-        GoRoute(
-          path: '/chat/:conversationId',
-          pageBuilder: (context, state) {
-            final id = state.pathParameters['conversationId']!;
-            final extra = state.extra as Map<String, dynamic>?;
-            final otherUserId = extra?['otherUserId'] as String? ?? '';
-            final otherUsername = extra?['otherUsername'] as String? ?? '';
-            return NoTransitionPage(
-              child: UserChatPage(
-                conversationId: id,
-                otherUserId: otherUserId,
-                otherUsername: otherUsername,
-              ),
-            );
-          },
         ),
       ],
     ),
@@ -155,61 +180,100 @@ class _ShellScaffold extends StatefulWidget {
 class _ShellScaffoldState extends State<_ShellScaffold> {
   int _currentIndex = 0;
 
-  static const _routes = [
-    '/',
-    '/conversations',
-    '/create',
-    '/my-listings',
-    '/profile',
-  ];
+  static const _routes = ['/', '/conversations', '/create', '/profile'];
+
+  bool _isLoggedInStatus = false;
+  late final AgentChatNotifier _agentChatNotifier;
+
+  @override
+  void initState() {
+    super.initState();
+    _agentChatNotifier = AgentChatNotifier();
+    _checkLoginStatus();
+  }
+
+  @override
+  void dispose() {
+    _agentChatNotifier.dispose();
+    super.dispose();
+  }
+
+  Future<void> _checkLoginStatus() async {
+    final loggedIn = await getLoginStatus();
+    if (mounted) {
+      setState(() => _isLoggedInStatus = loggedIn);
+    }
+  }
+
+  int _tabIndexForLocation(String location) {
+    switch (location) {
+      case '/':
+        return 0;
+      case '/conversations':
+      case '/chat':
+        return 1;
+      case '/create':
+        return 2;
+      case '/profile':
+      case '/my-listings':
+      case '/orders':
+        return 3;
+      default:
+        return _currentIndex;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
     if (l == null) {
-      return const SizedBox.shrink(); // Guard against early context without localization
+      return const SizedBox.shrink();
     }
     final location = GoRouterState.of(context).matchedLocation;
-    final idx = _routes.indexOf(location);
-    if (idx >= 0) {
-      _currentIndex = idx;
+    final nextIndex = _tabIndexForLocation(location);
+    if (_currentIndex != nextIndex) {
+      _currentIndex = nextIndex;
     }
 
-    return Scaffold(
-      body: widget.child,
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: _currentIndex,
-        onDestinationSelected: (i) {
-          setState(() => _currentIndex = i);
-          context.go(_routes[i]);
-        },
-        destinations: [
-          NavigationDestination(
-            icon: const Icon(Icons.home_outlined),
-            selectedIcon: const Icon(Icons.home),
-            label: l.homeTab,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.chat_bubble_outline),
-            selectedIcon: const Icon(Icons.chat_bubble),
-            label: l.messagesTab,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.add_circle_outline),
-            selectedIcon: const Icon(Icons.add_circle),
-            label: l.publishTab,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.inventory_2_outlined),
-            selectedIcon: const Icon(Icons.inventory_2),
-            label: l.myListingsTab,
-          ),
-          NavigationDestination(
-            icon: const Icon(Icons.person_outline),
-            selectedIcon: const Icon(Icons.person),
-            label: l.profileTab,
-          ),
-        ],
+    return ChangeNotifierProvider<AgentChatNotifier>.value(
+      value: _agentChatNotifier,
+      child: Scaffold(
+        body: Stack(
+          fit: StackFit.expand,
+          children: [
+            widget.child,
+            FloatingAgentBubble(isLoggedIn: _isLoggedInStatus),
+          ],
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: _currentIndex,
+          onDestinationSelected: (i) {
+            setState(() => _currentIndex = i);
+            context.go(_routes[i]);
+          },
+          destinations: [
+            NavigationDestination(
+              icon: const Icon(Icons.home_outlined),
+              selectedIcon: const Icon(Icons.home),
+              label: l.homeTab,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.chat_bubble_outline),
+              selectedIcon: const Icon(Icons.chat_bubble),
+              label: l.messagesTab,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.add_circle_outline),
+              selectedIcon: const Icon(Icons.add_circle),
+              label: l.publishTab,
+            ),
+            NavigationDestination(
+              icon: const Icon(Icons.person_outline),
+              selectedIcon: const Icon(Icons.person),
+              label: l.profileTab,
+            ),
+          ],
+        ),
       ),
     );
   }

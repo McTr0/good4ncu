@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../utils/platform_utils.dart';
@@ -8,22 +9,24 @@ import 'token_storage.dart';
 class SseToken {
   final String token;
   final String conversationId;
-  final String? hitlRequestId;
-  final String? eventType;
+
+  /// True when this is a complete message (e.g. greeting) rather than a streaming token.
+  /// Complete messages should be finalized immediately without waiting for [DONE].
+  final bool isComplete;
+  final String? error;
 
   SseToken({
     required this.token,
     required this.conversationId,
-    this.hitlRequestId,
-    this.eventType,
+    this.isComplete = false,
+    this.error,
   });
 
   factory SseToken.fromJson(Map<String, dynamic> json) {
     return SseToken(
       token: json['token'] ?? '',
       conversationId: json['conversation_id'] ?? '',
-      hitlRequestId: json['hitl_request_id'],
-      eventType: json['event_type'],
+      isComplete: json['is_complete'] as bool? ?? false,
     );
   }
 }
@@ -31,15 +34,18 @@ class SseToken {
 /// Server-Sent Events stream consumer.
 ///
 /// Connects to `GET /api/chat/stream` with JWT auth.
-/// Each SSE `data:` line is parsed as JSON and emitted via `StreamController`.
+/// Each SSE `data:` line is parsed as JSON and emitted via StreamController.
 class SseService {
   static String get _baseUrl => getApiBaseUrl();
+  static const int _maxPendingChars = 65536;
 
   http.Client? _client;
   StreamController<SseToken>? _controller;
+  StreamSubscription<String>? _streamSubscription;
   bool _isConnected = false;
+  int _activeConnectionId = 0;
 
-  /// Stream of parsed SSE token events. Emits one token per LLM word/phrase.
+  /// Stream of parsed SSE token events.
   Stream<SseToken> get stream => _controller?.stream ?? const Stream.empty();
 
   bool get isConnected => _isConnected;
@@ -52,19 +58,19 @@ class SseService {
     String? imageBase64,
     String? audioBase64,
   }) async {
-    // Disconnect any existing connection first.
     await disconnect();
+    final connectionId = _activeConnectionId;
 
     final token = await TokenStorage.instance.getAccessToken();
     if (token == null) {
       throw Exception('SSE: No JWT token — not authenticated');
     }
 
-    _client = http.Client();
-    _controller = StreamController<SseToken>.broadcast();
+    final client = http.Client();
+    _client = client;
+    // Single-subscription stream preserves events that arrive before UI listener attaches.
+    _controller = StreamController<SseToken>();
 
-    // Build query params for GET /api/chat/stream.
-    // JWT is sent via Authorization header.
     final queryParams = <String, String>{'message': message};
     if (conversationId != null) queryParams['conversation_id'] = conversationId;
     if (listingId != null) queryParams['listing_id'] = listingId;
@@ -80,124 +86,219 @@ class SseService {
     request.headers['Cache-Control'] = 'no-cache';
     request.headers['Authorization'] = 'Bearer $token';
 
-    // Start the request — this is a streaming response, not a regular HTTP call.
-    // `send()` returns a Future<StreamedResponse> once headers are received.
-    final streamedResponse = await _client!.send(request);
+    final streamedResponse = await client.send(request);
+
+    if (connectionId != _activeConnectionId) {
+      client.close();
+      return;
+    }
 
     if (streamedResponse.statusCode != 200) {
-      await _controller?.close();
+      await _closeController(connectionId: connectionId);
       throw Exception('SSE connection failed: ${streamedResponse.statusCode}');
     }
 
     _isConnected = true;
+    var pendingSseText = '';
 
-    // Read the streamed body as bytes and parse SSE data lines.
-    // SSE format: "data: {...}\n\n" — we accumulate a buffer and emit
-    // on each `\n\n` (double newline = end of event).
-    final byteStream = streamedResponse.stream;
-    final buffer = <int>[];
-
-    byteStream.listen(
-      (chunk) {
-        buffer.addAll(chunk);
-        _processBuffer(buffer);
-      },
-      onError: (error) {
-        _isConnected = false;
-        _controller?.addError(error);
-      },
-      onDone: () {
-        _isConnected = false;
-        _controller?.close();
-      },
-      cancelOnError: false,
-    );
+    _streamSubscription = streamedResponse.stream
+        .transform(utf8.decoder)
+        .listen(
+          (decodedChunk) {
+            if (connectionId != _activeConnectionId) {
+              return;
+            }
+            pendingSseText = _appendDecodedText(
+              connectionId: connectionId,
+              decodedChunk: decodedChunk,
+              pendingText: pendingSseText,
+            );
+          },
+          onError: (error) {
+            if (connectionId != _activeConnectionId) {
+              return;
+            }
+            _isConnected = false;
+            _streamSubscription = null;
+            _emitError(connectionId, error);
+            unawaited(_closeController(connectionId: connectionId));
+          },
+          onDone: () {
+            if (connectionId != _activeConnectionId) {
+              return;
+            }
+            _isConnected = false;
+            _streamSubscription = null;
+            unawaited(_closeController(connectionId: connectionId));
+          },
+          cancelOnError: false,
+        );
   }
 
-  /// Process the buffer, extracting complete SSE events.
-  void _processBuffer(List<int> buffer) {
-    final raw = String.fromCharCodes(buffer);
-    final lines = raw.split('\n');
-    int consumeCount = 0;
+  void _emitToken(int connectionId, SseToken token) {
+    if (connectionId != _activeConnectionId) {
+      return;
+    }
+    final controller = _controller;
+    if (controller == null || controller.isClosed) {
+      return;
+    }
+    try {
+      controller.add(token);
+    } catch (_) {
+      // Ignore stale emissions racing with disconnect.
+    }
+  }
+
+  void _emitError(int connectionId, Object error) {
+    if (connectionId != _activeConnectionId) {
+      return;
+    }
+    final controller = _controller;
+    if (controller == null || controller.isClosed) {
+      return;
+    }
+    try {
+      controller.addError(error);
+    } catch (_) {
+      // Ignore stale emissions racing with disconnect.
+    }
+  }
+
+  Future<void> _closeController({int? connectionId}) async {
+    if (connectionId != null && connectionId != _activeConnectionId) {
+      return;
+    }
+    final controller = _controller;
+    _controller = null;
+    if (controller == null || controller.isClosed) {
+      return;
+    }
+    await controller.close();
+  }
+
+  String _appendDecodedText({
+    required int connectionId,
+    required String decodedChunk,
+    required String pendingText,
+  }) {
+    if (connectionId != _activeConnectionId) {
+      return pendingText;
+    }
+    if (decodedChunk.isEmpty) {
+      return pendingText;
+    }
+
+    final normalized = decodedChunk
+        .replaceAll('\r\n', '\n')
+        .replaceAll('\r', '\n');
+    var updatedPendingText = pendingText + normalized;
+
+    while (true) {
+      final separatorIndex = updatedPendingText.indexOf('\n\n');
+      if (separatorIndex < 0) {
+        break;
+      }
+
+      final eventBlock = updatedPendingText.substring(0, separatorIndex);
+      updatedPendingText = updatedPendingText.substring(separatorIndex + 2);
+      _processSseEventBlock(connectionId, eventBlock);
+    }
+
+    // Keep memory bounded if server sends malformed chunks without separators.
+    if (updatedPendingText.length > _maxPendingChars) {
+      updatedPendingText = updatedPendingText.substring(
+        updatedPendingText.length - _maxPendingChars,
+      );
+    }
+
+    return updatedPendingText;
+  }
+
+  void _processSseEventBlock(int connectionId, String eventBlock) {
+    if (eventBlock.trim().isEmpty) {
+      return;
+    }
+
+    final lines = eventBlock.split('\n');
+    final dataLines = <String>[];
 
     for (final line in lines) {
-      consumeCount += line.length + 1; // +1 for newline
-      if (line.startsWith('data:')) {
-        final jsonStr = line.substring(5).trim();
-        if (jsonStr.isEmpty) continue;
-        try {
-          // SSE events are separated by blank lines (double newline).
-          // We emit on each `data:` line; the caller can handle grouping.
-          final decoded = _decodeSseData(jsonStr);
-          if (decoded != null) {
-            _controller?.add(decoded);
-          }
-        } catch (e) {
-          debugPrint('SSE parse error: $e — raw: $jsonStr');
-        }
+      final trimmed = line.trimRight();
+      if (trimmed.startsWith('data:')) {
+        dataLines.add(trimmed.substring(5).trimLeft());
       }
     }
 
-    // Keep unprocessed bytes in buffer (shouldn't happen with line split, but safety first)
-    if (consumeCount < buffer.length) {
-      buffer.removeRange(0, consumeCount);
-    } else {
-      buffer.clear();
+    if (dataLines.isEmpty) {
+      return;
+    }
+
+    final payload = dataLines.join('\n').trim();
+    if (payload.isEmpty) {
+      return;
+    }
+
+    final decoded = _decodeSseData(payload);
+    if (decoded != null) {
+      _emitToken(connectionId, decoded);
     }
   }
 
-  /// Decode a single SSE data field. Handles JSON with optional `event_type` field.
+  /// Decode a single SSE data field using proper JSON parsing.
+  /// Handles:
+  /// - Streaming tokens: `{"token": "...", "conversation_id": "..."}`
+  /// - Complete messages (greeting): `{"content": "...", "is_complete": true}`
+  /// - Error events: `{"error": "..."}`
   SseToken? _decodeSseData(String jsonStr) {
-    // SSE data can contain JSON object or a plain string.
-    if (jsonStr.startsWith('{')) {
-      // Parse JSON fields directly without full parser.
-      try {
-        return SseToken(
-          token: _extractJsonField(jsonStr, 'token') ?? '',
-          conversationId: _extractJsonField(jsonStr, 'conversation_id') ?? '',
-          hitlRequestId: _extractJsonField(jsonStr, 'hitl_request_id'),
-          eventType: _extractJsonField(jsonStr, 'event_type'),
-        );
-      } catch (_) {
-        return null;
-      }
-    }
-    // Plain string data — wrap as token
-    return SseToken(token: jsonStr, conversationId: '');
-  }
+    if (jsonStr.isEmpty) return null;
+    try {
+      final decoded = jsonDecode(jsonStr) as Map<String, dynamic>;
 
-  /// Extract a field from a compact JSON string without full parser.
-  String? _extractJsonField(String json, String field) {
-    final pattern = '"$field":"';
-    final idx = json.indexOf(pattern);
-    if (idx == -1) {
-      // Try without quotes (numeric or boolean)
-      final pat2 = '"$field":';
-      final idx2 = json.indexOf(pat2);
-      if (idx2 == -1) return null;
-      final start = idx2 + pat2.length;
-      if (start >= json.length) return null;
-      if (json[start] == '"') {
-        // String value — find closing quote
-        final end = json.indexOf('"', start + 1);
-        if (end == -1) return null;
-        return json.substring(start + 1, end);
+      // Handle error events from backend.
+      final error = decoded['error'] as String?;
+      if (error != null) {
+        return SseToken(
+          token: '',
+          conversationId: decoded['conversation_id'] as String? ?? '',
+          isComplete: true,
+          error: error,
+        );
       }
+
+      // Complete message — greeting or direct response sent as a single event.
+      // Backend sends `content` field (not `token`) for these.
+      final content = decoded['content'] as String?;
+      if (content != null && content.isNotEmpty) {
+        return SseToken(
+          token: content,
+          conversationId: decoded['conversation_id'] as String? ?? '',
+          isComplete: true, // Finalize immediately — no [DONE] will follow.
+        );
+      }
+
+      // Streaming token.
+      final token = decoded['token'] as String?;
+      if (token != null && token.isNotEmpty) {
+        return SseToken.fromJson(decoded);
+      }
+
+      return null;
+    } catch (e) {
+      debugPrint('SSE JSON parse error: $e — raw: $jsonStr');
       return null;
     }
-    final start = idx + pattern.length;
-    final end = json.indexOf('"', start);
-    if (end == -1) return null;
-    return json.substring(start, end);
   }
 
   /// Disconnect and clean up. Idempotent.
   Future<void> disconnect() async {
+    _activeConnectionId += 1;
     _isConnected = false;
+    await _streamSubscription?.cancel();
+    _streamSubscription = null;
     _client?.close();
     _client = null;
-    await _controller?.close();
-    _controller = null;
+    await _closeController();
   }
 
   void dispose() {

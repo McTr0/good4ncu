@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:http/http.dart' as http;
 import '../utils/platform_utils.dart';
+import 'admin_role_cache.dart';
 import 'token_storage.dart';
 import 'ws_service.dart';
 
@@ -47,6 +48,7 @@ class BaseService {
   static final GlobalKey<NavigatorState> navigatorKey =
       GlobalKey<NavigatorState>();
   static final http.Client _sharedClient = http.Client();
+  static Future<bool>? _refreshInFlight;
 
   String get baseUrl => getApiBaseUrl();
 
@@ -102,6 +104,7 @@ class BaseService {
   }
 
   Future<void> _clearAuthAndRedirect() async {
+    AdminRoleCache.instance.invalidate();
     await _tokenStorage.clearTokens();
     await WsService.instance.disconnect();
     final context = navigatorKey.currentContext;
@@ -110,66 +113,238 @@ class BaseService {
     }
   }
 
+  bool _canAttemptRefresh(Uri url, Map<String, String> headers) {
+    if (!headers.containsKey('Authorization')) {
+      return false;
+    }
+
+    final path = url.path;
+    return path != '/api/auth/refresh' &&
+        path != '/api/auth/login' &&
+        path != '/api/auth/register';
+  }
+
+  Future<bool> _refreshAccessTokenSingleFlight() async {
+    final existing = _refreshInFlight;
+    if (existing != null) {
+      return existing;
+    }
+
+    final future = _performRefresh();
+    _refreshInFlight = future;
+    try {
+      return await future;
+    } finally {
+      if (identical(_refreshInFlight, future)) {
+        _refreshInFlight = null;
+      }
+    }
+  }
+
+  Future<bool> _performRefresh() async {
+    final refreshToken = await _tokenStorage.getRefreshToken();
+    if (refreshToken == null || refreshToken.isEmpty) {
+      return false;
+    }
+
+    final response = await _client
+        .post(
+          Uri.parse('$baseUrl/api/auth/refresh'),
+          headers: const {'Content-Type': 'application/json'},
+          body: jsonEncode({'refresh_token': refreshToken}),
+        )
+        .timeout(
+          const Duration(seconds: 15),
+          onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+        );
+
+    if (response.statusCode != 200) {
+      return false;
+    }
+
+    final dynamic data;
+    try {
+      data = jsonDecode(response.body);
+    } catch (_) {
+      return false;
+    }
+
+    final token = (data['token'] ?? '').toString();
+    if (token.isEmpty) {
+      return false;
+    }
+    await _tokenStorage.setAccessToken(token);
+    AdminRoleCache.instance.invalidate();
+
+    final nextRefreshToken = data['refresh_token']?.toString();
+    if (nextRefreshToken != null && nextRefreshToken.isNotEmpty) {
+      await _tokenStorage.setRefreshToken(nextRefreshToken);
+    }
+
+    return true;
+  }
+
+  Future<Map<String, String>> _headersAfterRefresh(
+    Map<String, String> original,
+  ) async {
+    final token = await _tokenStorage.getAccessToken();
+    final updated = Map<String, String>.from(original);
+    if (token != null && token.isNotEmpty) {
+      updated['Authorization'] = 'Bearer $token';
+    }
+    return updated;
+  }
+
   @protected
   Future<http.Response> get(Uri url, Map<String, String> headers) async {
-    return _client
+    final response = await _client
         .get(url, headers: headers)
         .timeout(
           const Duration(seconds: 15),
           onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
         );
+
+    if (response.statusCode == 401 && _canAttemptRefresh(url, headers)) {
+      final refreshed = await _refreshAccessTokenSingleFlight();
+      if (refreshed) {
+        final retryHeaders = await _headersAfterRefresh(headers);
+        return _client
+            .get(url, headers: retryHeaders)
+            .timeout(
+              const Duration(seconds: 15),
+              onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+            );
+      }
+    }
+
+    return response;
   }
 
   @protected
   Future<http.Response> post(
     Uri url,
     Map<String, String> headers,
-    String body,
-  ) async {
-    return _client
+    String body, {
+    bool allowAuthRetry = true,
+  }) async {
+    final response = await _client
         .post(url, headers: headers, body: body)
         .timeout(
           const Duration(seconds: 30),
           onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
         );
+
+    if (allowAuthRetry &&
+        response.statusCode == 401 &&
+        _canAttemptRefresh(url, headers)) {
+      final refreshed = await _refreshAccessTokenSingleFlight();
+      if (refreshed) {
+        final retryHeaders = await _headersAfterRefresh(headers);
+        return _client
+            .post(url, headers: retryHeaders, body: body)
+            .timeout(
+              const Duration(seconds: 30),
+              onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+            );
+      }
+    }
+
+    return response;
   }
 
   @protected
   Future<http.Response> put(
     Uri url,
     Map<String, String> headers,
-    String body,
-  ) async {
-    return _client
+    String body, {
+    bool allowAuthRetry = true,
+  }) async {
+    final response = await _client
         .put(url, headers: headers, body: body)
         .timeout(
           const Duration(seconds: 15),
           onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
         );
+
+    if (allowAuthRetry &&
+        response.statusCode == 401 &&
+        _canAttemptRefresh(url, headers)) {
+      final refreshed = await _refreshAccessTokenSingleFlight();
+      if (refreshed) {
+        final retryHeaders = await _headersAfterRefresh(headers);
+        return _client
+            .put(url, headers: retryHeaders, body: body)
+            .timeout(
+              const Duration(seconds: 15),
+              onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+            );
+      }
+    }
+
+    return response;
   }
 
   @protected
   Future<http.Response> patch(
     Uri url,
     Map<String, String> headers,
-    String body,
-  ) async {
-    return _client
+    String body, {
+    bool allowAuthRetry = true,
+  }) async {
+    final response = await _client
         .patch(url, headers: headers, body: body)
         .timeout(
           const Duration(seconds: 15),
           onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
         );
+
+    if (allowAuthRetry &&
+        response.statusCode == 401 &&
+        _canAttemptRefresh(url, headers)) {
+      final refreshed = await _refreshAccessTokenSingleFlight();
+      if (refreshed) {
+        final retryHeaders = await _headersAfterRefresh(headers);
+        return _client
+            .patch(url, headers: retryHeaders, body: body)
+            .timeout(
+              const Duration(seconds: 15),
+              onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+            );
+      }
+    }
+
+    return response;
   }
 
   @protected
-  Future<http.Response> delete(Uri url, Map<String, String> headers) async {
-    return _client
+  Future<http.Response> delete(
+    Uri url,
+    Map<String, String> headers, {
+    bool allowAuthRetry = true,
+  }) async {
+    final response = await _client
         .delete(url, headers: headers)
         .timeout(
           const Duration(seconds: 15),
           onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
         );
+
+    if (allowAuthRetry &&
+        response.statusCode == 401 &&
+        _canAttemptRefresh(url, headers)) {
+      final refreshed = await _refreshAccessTokenSingleFlight();
+      if (refreshed) {
+        final retryHeaders = await _headersAfterRefresh(headers);
+        return _client
+            .delete(url, headers: retryHeaders)
+            .timeout(
+              const Duration(seconds: 15),
+              onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
+            );
+      }
+    }
+
+    return response;
   }
 
   // Token storage helpers (used by AuthService and ApiService)

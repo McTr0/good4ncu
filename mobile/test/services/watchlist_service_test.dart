@@ -31,14 +31,20 @@ class _FakeWatchlistService extends WatchlistService {
   Future<http.Response> post(
     Uri url,
     Map<String, String> headers,
-    String body,
+    String body, {
+    bool allowAuthRetry = true,
+  }
   ) async {
     lastPostUri = url;
     return postResponse;
   }
 
   @override
-  Future<http.Response> delete(Uri url, Map<String, String> headers) async {
+  Future<http.Response> delete(
+    Uri url,
+    Map<String, String> headers, {
+    bool allowAuthRetry = true,
+  }) async {
     lastDeleteUri = url;
     return deleteResponse;
   }
