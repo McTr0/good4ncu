@@ -772,4 +772,78 @@ mod tests {
         assert_eq!(user_id, "test-user");
         assert_eq!(role, "admin");
     }
+
+    #[test]
+    fn test_extract_user_id_with_fallback_accepts_old_secret_token() {
+        let current_secret = "current_secret_1234567890123456789012";
+        let old_secret = "old_secret_12345678901234567890123456";
+        let token = generate_access_token("legacy-user", "user", old_secret, 3600).unwrap();
+
+        let extracted =
+            extract_user_id_from_token_str_with_fallback(&token, current_secret, Some(old_secret));
+
+        assert!(extracted.is_ok());
+        assert_eq!(extracted.unwrap(), "legacy-user");
+    }
+
+    #[test]
+    fn test_extract_user_id_with_fallback_rejects_without_old_secret() {
+        let current_secret = "current_secret_1234567890123456789012";
+        let old_secret = "old_secret_12345678901234567890123456";
+        let token = generate_access_token("legacy-user", "user", old_secret, 3600).unwrap();
+
+        let extracted = extract_user_id_from_token_str_with_fallback(&token, current_secret, None);
+
+        assert!(extracted.is_err());
+    }
+
+    #[test]
+    fn test_extract_user_id_with_fallback_rejects_malformed_token() {
+        let result = extract_user_id_from_token_str_with_fallback(
+            "not.a.valid.jwt",
+            "current_secret_1234567890123456789012",
+            Some("old_secret_12345678901234567890123456"),
+        );
+
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .contains("Invalid token (primary+fallback)"));
+    }
+
+    #[test]
+    fn test_extract_user_id_and_role_with_fallback_accepts_old_secret_token() {
+        let current_secret = "current_secret_1234567890123456789012";
+        let old_secret = "old_secret_12345678901234567890123456";
+        let token = generate_access_token("legacy-admin", "admin", old_secret, 3600).unwrap();
+
+        let extracted = extract_user_id_and_role_from_token_str_with_fallback(
+            &token,
+            current_secret,
+            Some(old_secret),
+        )
+        .unwrap();
+
+        assert_eq!(extracted.0, "legacy-admin");
+        assert_eq!(extracted.1, "admin");
+    }
+
+    #[test]
+    fn test_extract_user_id_from_header_with_fallback_accepts_old_secret_token() {
+        let current_secret = "current_secret_1234567890123456789012";
+        let old_secret = "old_secret_12345678901234567890123456";
+        let token = generate_access_token("legacy-user", "user", old_secret, 3600).unwrap();
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", token).parse().unwrap(),
+        );
+
+        let extracted =
+            extract_user_id_from_token_with_fallback(&headers, current_secret, Some(old_secret));
+
+        assert!(extracted.is_ok());
+        assert_eq!(extracted.unwrap(), "legacy-user");
+    }
 }

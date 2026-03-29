@@ -19,9 +19,15 @@ pub async fn admin_middleware(mut request: Request, next: Next) -> Response {
 /// Extract and validate admin role from Authorization header.
 /// Returns Ok(admin_id) if admin, Err(ApiError::Forbidden) otherwise.
 #[allow(dead_code)]
-pub fn require_admin(headers: &HeaderMap, jwt_secret: &str) -> Result<String, ApiError> {
+pub fn require_admin(
+    headers: &HeaderMap,
+    jwt_secret: &str,
+    jwt_secret_old: Option<&str>,
+) -> Result<String, ApiError> {
     let (user_id, role) = crate::api::auth::extract_user_id_and_role_from_token_with_fallback(
-        headers, jwt_secret, None,
+        headers,
+        jwt_secret,
+        jwt_secret_old,
     )
     .map_err(|_| ApiError::Unauthorized)?;
 

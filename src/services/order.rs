@@ -288,6 +288,9 @@ impl OrderService {
             OrderStatus::Pending => return Ok(false),
         };
 
+        let mut tx = self.db.begin().await.map_err(OrderError::Db)?;
+
+        // Update order status
         let updated = if let Some(reason) = cancellation_reason {
             sqlx::query(&format!(
                 "UPDATE orders SET status = $1, {} = NOW(), cancellation_reason = $2 WHERE id = $3 AND status = $4",
@@ -297,7 +300,7 @@ impl OrderService {
             .bind(reason)
             .bind(order_id)
             .bind(expected_current)
-            .execute(&self.db)
+            .execute(&mut *tx)
             .await
         } else {
             sqlx::query(&format!(
@@ -307,12 +310,34 @@ impl OrderService {
             .bind(new_status)
             .bind(order_id)
             .bind(expected_current)
-            .execute(&self.db)
+            .execute(&mut *tx)
             .await
         }
         .map_err(OrderError::Db)?;
 
-        Ok(updated.rows_affected() > 0)
+        if updated.rows_affected() == 0 {
+            tx.rollback().await.map_err(OrderError::Db)?;
+            return Ok(false);
+        }
+
+        // If cancelled, relist the associated item
+        if next == OrderStatus::Cancelled {
+            sqlx::query(
+                r#"
+                UPDATE inventory 
+                SET status = 'active' 
+                WHERE id = (SELECT listing_id FROM orders WHERE id = $1)
+                AND status = 'sold'
+                "#,
+            )
+            .bind(order_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(OrderError::Db)?;
+        }
+
+        tx.commit().await.map_err(OrderError::Db)?;
+        Ok(true)
     }
 
     /// Verify user is buyer or seller of the order.

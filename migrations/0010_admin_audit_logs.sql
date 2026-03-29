@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS admin_audit_logs (
 );
 
 -- Index for fast lookup by admin or target
-CREATE INDEX idx_admin_audit_admin_id ON admin_audit_logs(admin_id);
-CREATE INDEX idx_admin_audit_target_id ON admin_audit_logs(target_id);
-CREATE INDEX idx_admin_audit_action ON admin_audit_logs(action);
-CREATE INDEX idx_admin_audit_created_at ON admin_audit_logs(created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_admin_id ON admin_audit_logs(admin_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_target_id ON admin_audit_logs(target_id);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_logs(action);
+CREATE INDEX IF NOT EXISTS idx_admin_audit_created_at ON admin_audit_logs(created_at DESC);

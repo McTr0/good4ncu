@@ -18,7 +18,11 @@ pub async fn get_admin_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<AdminStats>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let _admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     let total_listings = state.listing_repo.count(None).await?;
     let active_listings = state.listing_repo.count(Some("active")).await?;
@@ -90,7 +94,11 @@ pub async fn get_admin_users(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminUsersResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let _admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     let users = sqlx::query(
         r#"
@@ -153,7 +161,11 @@ pub async fn get_admin_listings(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminListingsResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let _admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     let listings = sqlx::query(
         "SELECT id, title, category, brand, condition_score, suggested_price_cny, description, status, owner_id, created_at FROM inventory ORDER BY created_at DESC LIMIT $1 OFFSET $2"
@@ -216,7 +228,11 @@ pub async fn get_admin_orders(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminOrdersResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let _admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     let (items, total) = state
         .infra
@@ -271,7 +287,11 @@ pub async fn ban_user(
     headers: HeaderMap,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     // Use repository to ban user (it handles check for non-existence)
     state.user_repo.ban_user(&target_user_id).await?;
@@ -305,7 +325,11 @@ pub async fn unban_user(
     headers: HeaderMap,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     state.user_repo.unban_user(&target_user_id).await?;
 
@@ -324,7 +348,11 @@ pub async fn takedown_listing(
     headers: HeaderMap,
     Path(listing_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     // Fetch listing to get owner_id for repo.delete
     let listing = state
@@ -368,7 +396,11 @@ pub async fn impersonate_user(
     headers: HeaderMap,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     // Use repository to fetch user info
     let user = state
@@ -436,7 +468,11 @@ pub async fn update_order_status(
     Path(order_id): Path<String>,
     Json(payload): Json<UpdateOrderStatusRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     // Use repository for direct update
     let timestamp_field = match payload.status.as_str() {
@@ -447,10 +483,42 @@ pub async fn update_order_status(
         _ => "created_at", // Fallback
     };
 
-    state
-        .order_repo
-        .update_status(&order_id, &payload.status, timestamp_field, None)
-        .await?;
+    let mut tx = state
+        .infra
+        .db
+        .begin()
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    sqlx::query(&format!(
+        "UPDATE orders SET status = $1, {} = NOW() WHERE id = $2",
+        timestamp_field
+    ))
+    .bind(&payload.status)
+    .bind(&order_id)
+    .execute(&mut *tx)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    // If cancelled, relist the associated item
+    if payload.status == "cancelled" {
+        sqlx::query(
+            r#"
+            UPDATE inventory 
+            SET status = 'active' 
+            WHERE id = (SELECT listing_id FROM orders WHERE id = $1)
+            AND status = 'sold'
+            "#,
+        )
+        .bind(&order_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    }
+
+    tx.commit()
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     // Log audit trail
     let _ = state
@@ -490,7 +558,11 @@ pub async fn update_user_role(
     Path(user_id): Path<String>,
     Json(payload): Json<UpdateRoleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     let valid_roles = ["buyer", "seller", "admin"]; // Support adding admins too
     if !valid_roles.contains(&payload.role.as_str()) {
@@ -543,7 +615,11 @@ pub async fn get_admin_audit_logs(
     headers: HeaderMap,
     Query(query): Query<AdminAuditLogsQuery>,
 ) -> Result<Json<AdminAuditLogsResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+    let _admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
 
     let limit = query.limit.unwrap_or(50);
     let offset = query.offset.unwrap_or(0);
