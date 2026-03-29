@@ -183,14 +183,17 @@ impl ChatRepository for PostgresChatRepository {
         conversation_id: &str,
         reader_id: &str,
     ) -> Result<(), ApiError> {
-        // Single UPDATE — no N+1 loop.
+        let mut tx: sqlx::Transaction<'_, sqlx::Postgres> = sqlx::Acquire::begin(&self.pool)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
         sqlx::query(
             "UPDATE chat_messages SET read_at = NOW() \
              WHERE conversation_id = $1 AND receiver = $2 AND read_at IS NULL",
         )
         .bind(conversation_id)
         .bind(reader_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -199,9 +202,13 @@ impl ChatRepository for PostgresChatRepository {
         )
         .bind(conversation_id)
         .bind(reader_id)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        tx.commit()
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("Commit error: {}", e)))?;
 
         Ok(())
     }
@@ -299,38 +306,5 @@ impl ChatRepository for PostgresChatRepository {
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
         Ok(())
-    }
-
-    async fn get_connection(
-        &self,
-        connection_id: &str,
-    ) -> Result<Option<ConversationSummary>, ApiError> {
-        let row = sqlx::query(
-            r#"
-            SELECT cc.id, cc.requester_id, cc.receiver_id, cc.status, cc.established_at, cc.created_at, cc.unread_count,
-                   CASE WHEN cc.requester_id = 'requester' THEN cc.receiver_id ELSE cc.requester_id END as other_user_id,
-                   false as is_receiver
-            FROM chat_connections cc WHERE cc.id = $1
-            "#,
-        )
-        .bind(connection_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-        Ok(row.map(|r| {
-            let established_at: Option<chrono::DateTime<Utc>> = r.get("established_at");
-            ConversationSummary {
-                id: r.get("id"),
-                requester_id: r.get("requester_id"),
-                other_user_id: r.get("other_user_id"),
-                other_username: None,
-                status: r.get("status"),
-                established_at: established_at.map(|dt| dt.to_rfc3339()),
-                created_at: r.get::<chrono::DateTime<Utc>, _>("created_at").to_rfc3339(),
-                unread_count: r.get("unread_count"),
-                is_receiver: r.get("is_receiver"),
-            }
-        }))
     }
 }

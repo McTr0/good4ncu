@@ -314,6 +314,24 @@ abstract class AppLocalizations {
   /// **'Are you sure you want to delete this listing?'**
   String get deleteConfirm;
 
+  /// No description provided for @removeFavoriteConfirm.
+  ///
+  /// In en, this message translates to:
+  /// **'Remove this item from favorites?'**
+  String get removeFavoriteConfirm;
+
+  /// No description provided for @favoriteRemoved.
+  ///
+  /// In en, this message translates to:
+  /// **'Removed from favorites'**
+  String get favoriteRemoved;
+
+  /// No description provided for @undo.
+  ///
+  /// In en, this message translates to:
+  /// **'Undo'**
+  String get undo;
+
   /// No description provided for @description.
   ///
   /// In en, this message translates to:
@@ -535,6 +553,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'All'**
   String get allOrders;
+
+  /// No description provided for @allNotifications.
+  ///
+  /// In en, this message translates to:
+  /// **'All'**
+  String get allNotifications;
+
+  /// No description provided for @unreadOnly.
+  ///
+  /// In en, this message translates to:
+  /// **'Unread'**
+  String get unreadOnly;
 
   /// No description provided for @buyerOrders.
   ///

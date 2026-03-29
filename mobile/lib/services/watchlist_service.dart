@@ -27,10 +27,7 @@ class WatchlistService extends BaseService {
     final headers = await authHeaders();
     final uri = _apiUri(
       ['api', 'watchlist'],
-      queryParameters: {
-        'limit': '$limit',
-        'offset': '$offset',
-      },
+      queryParameters: {'limit': '$limit', 'offset': '$offset'},
     );
     final response = await get(uri, headers);
     return handleResponse(
@@ -43,7 +40,11 @@ class WatchlistService extends BaseService {
   /// POST /api/watchlist/{listingId}
   Future<void> addToWatchlist(String listingId) async {
     final headers = await authHeaders();
-    final response = await post(_apiUri(['api', 'watchlist', listingId]), headers, '{}');
+    final response = await post(
+      _apiUri(['api', 'watchlist', listingId]),
+      headers,
+      '{}',
+    );
     handleResponse(response, (_) {});
   }
 
@@ -51,7 +52,10 @@ class WatchlistService extends BaseService {
   /// DELETE /api/watchlist/{listingId}
   Future<void> removeFromWatchlist(String listingId) async {
     final headers = await authHeaders();
-    final response = await delete(_apiUri(['api', 'watchlist', listingId]), headers);
+    final response = await delete(
+      _apiUri(['api', 'watchlist', listingId]),
+      headers,
+    );
     handleResponse(response, (_) {});
   }
 
@@ -59,7 +63,10 @@ class WatchlistService extends BaseService {
   /// GET /api/watchlist/{listingId}
   Future<bool> isWatched(String listingId) async {
     final headers = await authHeaders();
-    final response = await get(_apiUri(['api', 'watchlist', listingId]), headers);
+    final response = await get(
+      _apiUri(['api', 'watchlist', listingId]),
+      headers,
+    );
     final data = handleResponse(response, (d) => d as Map<String, dynamic>);
     return data['watched'] ?? false;
   }

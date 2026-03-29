@@ -309,7 +309,6 @@ pub trait ChatRepository: Send + Sync {
         connection_id: &str,
         rejector_id: &str,
     ) -> Result<(), ApiError>;
-
 }
 
 // ---------------------------------------------------------------------------
@@ -325,7 +324,12 @@ pub trait AuthRepository: Send + Sync {
     async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, ApiError>;
 
     /// Create a new user account.
-    async fn create_user(&self, username: &str, email: Option<&str>, password_hash: &str) -> Result<String, ApiError>;
+    async fn create_user(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        password_hash: &str,
+    ) -> Result<String, ApiError>;
 
     /// Store a refresh token hash.
     async fn store_refresh_token(

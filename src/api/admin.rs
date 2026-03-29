@@ -11,7 +11,7 @@ use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::middleware::admin::require_admin;
 
-use crate::repositories::traits::{ListingRepository, UserRepository, OrderRepository};
+use crate::repositories::traits::{ListingRepository, OrderRepository, UserRepository};
 
 /// GET /api/admin/stats - admin marketplace statistics (requires admin role)
 pub async fn get_admin_stats(
@@ -26,7 +26,7 @@ pub async fn get_admin_stats(
     let total_orders = state.order_repo.count().await?;
 
     // We don't have a direct count_admins in user_repo yet, but we can search for them
-    // or better: add count_by_role to UserRepository. 
+    // or better: add count_by_role to UserRepository.
     // For now, let's keep the raw query for the complex bit if repo doesn't serve it.
     // Actually, I'll use repo.search_users_with_listing_count with a filter if possible? No.
     // I'll stick to repo for simple counts.
@@ -39,10 +39,7 @@ pub async fn get_admin_stats(
 
     let categories: Vec<CategoryCount> = cat_stats
         .into_iter()
-        .map(|(category, count)| CategoryCount {
-            category,
-            count,
-        })
+        .map(|(category, count)| CategoryCount { category, count })
         .collect();
 
     Ok(Json(AdminStats {
@@ -280,14 +277,18 @@ pub async fn ban_user(
     state.user_repo.ban_user(&target_user_id).await?;
 
     // Log audit trail
-    let _ = state.infra.admin_service.log_action(
-        &admin_id,
-        "ban_user",
-        Some(&target_user_id),
-        Some("active"),
-        Some("banned"),
-        None,
-    ).await;
+    let _ = state
+        .infra
+        .admin_service
+        .log_action(
+            &admin_id,
+            "ban_user",
+            Some(&target_user_id),
+            Some("active"),
+            Some("banned"),
+            None,
+        )
+        .await;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -326,20 +327,30 @@ pub async fn takedown_listing(
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     // Fetch listing to get owner_id for repo.delete
-    let listing = state.listing_repo.find_by_id(&listing_id).await?
+    let listing = state
+        .listing_repo
+        .find_by_id(&listing_id)
+        .await?
         .ok_or(ApiError::NotFound)?;
 
-    state.listing_repo.delete(&listing_id, &listing.owner_id).await?;
+    state
+        .listing_repo
+        .delete(&listing_id, &listing.owner_id)
+        .await?;
 
     // Log audit trail
-    let _ = state.infra.admin_service.log_action(
-        &admin_id,
-        "takedown_listing",
-        Some(&listing_id),
-        Some(&listing.status),
-        Some("deleted"),
-        None,
-    ).await;
+    let _ = state
+        .infra
+        .admin_service
+        .log_action(
+            &admin_id,
+            "takedown_listing",
+            Some(&listing_id),
+            Some(&listing.status),
+            Some("deleted"),
+            None,
+        )
+        .await;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -360,7 +371,10 @@ pub async fn impersonate_user(
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     // Use repository to fetch user info
-    let user = state.user_repo.find_by_id(&target_user_id).await?
+    let user = state
+        .user_repo
+        .find_by_id(&target_user_id)
+        .await?
         .ok_or(ApiError::NotFound)?;
 
     // Admins cannot impersonate other admins (security boundary)
@@ -378,14 +392,18 @@ pub async fn impersonate_user(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to generate token: {}", e)))?;
 
     // Log audit trail (sensitive action!)
-    let _ = state.infra.admin_service.log_action(
-        &admin_id,
-        "impersonate",
-        Some(&user.id),
-        None,
-        None,
-        Some(&format!("Impersonating user {}", user.username)),
-    ).await;
+    let _ = state
+        .infra
+        .admin_service
+        .log_action(
+            &admin_id,
+            "impersonate",
+            Some(&user.id),
+            None,
+            None,
+            Some(&format!("Impersonating user {}", user.username)),
+        )
+        .await;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -429,17 +447,24 @@ pub async fn update_order_status(
         _ => "created_at", // Fallback
     };
 
-    state.order_repo.update_status(&order_id, &payload.status, timestamp_field, None).await?;
+    state
+        .order_repo
+        .update_status(&order_id, &payload.status, timestamp_field, None)
+        .await?;
 
     // Log audit trail
-    let _ = state.infra.admin_service.log_action(
-        &admin_id,
-        "update_order_status",
-        Some(&order_id),
-        None, // We could fetch current status if needed
-        Some(&payload.status),
-        None,
-    ).await;
+    let _ = state
+        .infra
+        .admin_service
+        .log_action(
+            &admin_id,
+            "update_order_status",
+            Some(&order_id),
+            None, // We could fetch current status if needed
+            Some(&payload.status),
+            None,
+        )
+        .await;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -448,7 +473,9 @@ pub async fn update_order_status(
         "Admin force-updated order status"
     );
 
-    Ok(Json(serde_json::json!({ "message": "订单状态已更新", "status": payload.status })))
+    Ok(Json(
+        serde_json::json!({ "message": "订单状态已更新", "status": payload.status }),
+    ))
 }
 
 /// POST /api/admin/users/:user_id/role - admin changes user role
@@ -475,14 +502,18 @@ pub async fn update_user_role(
     state.user_repo.update_role(&user_id, &payload.role).await?;
 
     // Log audit trail
-    let _ = state.infra.admin_service.log_action(
-        &admin_id,
-        "update_role",
-        Some(&user_id),
-        None,
-        Some(&payload.role),
-        None,
-    ).await;
+    let _ = state
+        .infra
+        .admin_service
+        .log_action(
+            &admin_id,
+            "update_role",
+            Some(&user_id),
+            None,
+            Some(&payload.role),
+            None,
+        )
+        .await;
 
     tracing::info!(
         admin_id = %admin_id,

@@ -6,6 +6,10 @@ import '../models/models.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
 
+enum NotificationFilter { all, unread }
+
+enum NotificationsLoadResult { success, failed, superseded }
+
 class NotificationsPage extends StatefulWidget {
   final NotificationService? notificationService;
 
@@ -29,6 +33,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   int _offset = 0;
   int _unreadCount = 0;
   int _activeRequestId = 0;
+  NotificationFilter _filter = NotificationFilter.all;
 
   @override
   void initState() {
@@ -39,7 +44,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
 
   bool get _hasMore => _items.length < _total;
 
-  Future<void> _load({bool reset = false, int? requestOffset}) async {
+  Future<NotificationsLoadResult> _load({
+    bool reset = false,
+    int? requestOffset,
+    bool clearOnReset = true,
+  }) async {
     final effectiveOffset = reset ? 0 : (requestOffset ?? _offset);
     final requestId = ++_activeRequestId;
 
@@ -48,6 +57,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
         _loading = true;
         _error = null;
         _paginationError = null;
+        if (clearOnReset) {
+          _items = [];
+          _total = 0;
+          _offset = 0;
+        }
       });
     }
 
@@ -55,9 +69,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
       final response = await _notificationService.getNotifications(
         limit: _limit,
         offset: effectiveOffset,
-        includeRead: true,
+        includeRead: _filter == NotificationFilter.all,
       );
-      if (!mounted || requestId != _activeRequestId) return;
+      if (!mounted || requestId != _activeRequestId) {
+        return NotificationsLoadResult.superseded;
+      }
 
       setState(() {
         if (reset) {
@@ -72,8 +88,11 @@ class _NotificationsPageState extends State<NotificationsPage> {
         _loadingMore = false;
         _paginationError = null;
       });
+      return NotificationsLoadResult.success;
     } catch (e) {
-      if (!mounted || requestId != _activeRequestId) return;
+      if (!mounted || requestId != _activeRequestId) {
+        return NotificationsLoadResult.superseded;
+      }
       setState(() {
         if (reset) {
           _error = e.toString();
@@ -83,6 +102,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
         _loading = false;
         _loadingMore = false;
       });
+      return NotificationsLoadResult.failed;
     }
   }
 
@@ -118,9 +138,16 @@ class _NotificationsPageState extends State<NotificationsPage> {
       if (!mounted) return;
 
       setState(() {
-        _items = _items
-            .map((n) => n.id == item.id ? n.copyWith(isRead: true) : n)
-            .toList();
+        if (_filter == NotificationFilter.unread) {
+          _items = _items.where((n) => n.id != item.id).toList();
+          if (_total > 0) {
+            _total -= 1;
+          }
+        } else {
+          _items = _items
+              .map((n) => n.id == item.id ? n.copyWith(isRead: true) : n)
+              .toList();
+        }
         if (_unreadCount > 0) {
           _unreadCount -= 1;
         }
@@ -144,7 +171,12 @@ class _NotificationsPageState extends State<NotificationsPage> {
       if (!mounted) return;
 
       setState(() {
-        _items = _items.map((n) => n.copyWith(isRead: true)).toList();
+        if (_filter == NotificationFilter.unread) {
+          _items = [];
+          _total = 0;
+        } else {
+          _items = _items.map((n) => n.copyWith(isRead: true)).toList();
+        }
         _unreadCount = 0;
       });
 
@@ -184,6 +216,39 @@ class _NotificationsPageState extends State<NotificationsPage> {
     return Icons.notifications_none;
   }
 
+  Future<void> _toggleFilter() async {
+    if (_loading) return;
+
+    final previousFilter = _filter;
+    final previousItems = List<AppNotification>.from(_items);
+    final previousTotal = _total;
+    final previousOffset = _offset;
+    final previousUnreadCount = _unreadCount;
+    final previousError = _error;
+    final previousPaginationError = _paginationError;
+    final nextFilter = previousFilter == NotificationFilter.all
+        ? NotificationFilter.unread
+        : NotificationFilter.all;
+
+    setState(() {
+      _filter = nextFilter;
+    });
+    final result = await _load(reset: true, clearOnReset: false);
+    if (result == NotificationsLoadResult.failed && mounted) {
+      setState(() {
+        _filter = previousFilter;
+        _items = previousItems;
+        _total = previousTotal;
+        _offset = previousOffset;
+        _unreadCount = previousUnreadCount;
+        _error = previousError;
+        _paginationError = previousPaginationError;
+        _loading = false;
+        _loadingMore = false;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
@@ -192,6 +257,20 @@ class _NotificationsPageState extends State<NotificationsPage> {
       appBar: AppBar(
         title: Text(l.notificationsCenter),
         actions: [
+          TextButton.icon(
+            onPressed: _toggleFilter,
+            icon: Icon(
+              _filter == NotificationFilter.all
+                  ? Icons.mark_email_unread_outlined
+                  : Icons.inbox_outlined,
+              size: 18,
+            ),
+            label: Text(
+              _filter == NotificationFilter.all
+                  ? l.unreadOnly
+                  : l.allNotifications,
+            ),
+          ),
           TextButton.icon(
             onPressed: _unreadCount == 0 ? null : _markAllRead,
             icon: const Icon(Icons.done_all, size: 18),

@@ -551,12 +551,12 @@ mod tests {
     fn test_hitl_request_with_counter() {
         let request = HitlRequest {
             id: "req-xyz".to_string(),
-            proposed_price: 500_00,
+            proposed_price: 50_000,
             reason: "Counter needed".to_string(),
             status: "countered".to_string(),
-            counter_price: Some(450_00),
+            counter_price: Some(45_000),
         };
-        assert_eq!(request.counter_price, Some(450_00));
+        assert_eq!(request.counter_price, Some(45_000));
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"counter_price\":45000"));
     }

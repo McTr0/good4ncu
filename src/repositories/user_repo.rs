@@ -79,12 +79,14 @@ impl UserRepository for PostgresUserRepository {
     }
 
     async fn get_profile(&self, user_id: &str) -> Result<UserProfile, ApiError> {
-        let row = sqlx::query("SELECT username, email, avatar_url, role, created_at FROM users WHERE id = $1")
-            .bind(user_id)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-            .ok_or(ApiError::NotFound)?;
+        let row = sqlx::query(
+            "SELECT username, email, avatar_url, role, created_at FROM users WHERE id = $1",
+        )
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or(ApiError::NotFound)?;
 
         let username: String = row.get("username");
         let email: Option<String> = row.get("email");

@@ -304,7 +304,10 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/user/listings", get(user::get_user_listings))
         .route("/api/users/search", get(user::search_users))
         .route("/api/users/{id}", get(user::get_user_profile))
-        .route("/api/orders", get(orders::get_orders).post(orders::create_order))
+        .route(
+            "/api/orders",
+            get(orders::get_orders).post(orders::create_order),
+        )
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
         .route("/api/orders/{id}/confirm", post(orders::confirm_order))
@@ -353,8 +356,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/chat/connections", get(user_chat::list_connections))
         .route(
             "/api/chat/conversations/{id}/messages",
-            get(user_chat::get_connection_messages)
-                .post(user_chat::send_connection_message),
+            get(user_chat::get_connection_messages).post(user_chat::send_connection_message),
         )
         .route(
             "/api/chat/messages/{id}/read",

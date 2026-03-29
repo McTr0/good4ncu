@@ -221,7 +221,9 @@ pub async fn register(
             return Err(ApiError::BadRequest("邮箱不能为空".to_string()));
         }
         if !email.ends_with("@email.ncu.edu.cn") {
-            return Err(ApiError::BadRequest("必须使用 @email.ncu.edu.cn 邮箱注册".to_string()));
+            return Err(ApiError::BadRequest(
+                "必须使用 @email.ncu.edu.cn 邮箱注册".to_string(),
+            ));
         }
         if email.len() > 100 {
             return Err(ApiError::BadRequest("邮箱不能超过100个字符".to_string()));
@@ -602,6 +604,7 @@ mod tests {
         // The actual validation happens in the handler, but we can test the logic
         let req = AuthRequest {
             username: "testuser".to_string(),
+            email: None,
             password: "password123".to_string(),
         };
         assert_eq!(req.username.len(), 8);

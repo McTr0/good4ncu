@@ -93,7 +93,9 @@ pub async fn update_profile(
             return Err(ApiError::BadRequest("邮箱不能为空".to_string()));
         }
         if !email.ends_with("@email.ncu.edu.cn") {
-            return Err(ApiError::BadRequest("必须使用 @email.ncu.edu.cn 邮箱".to_string()));
+            return Err(ApiError::BadRequest(
+                "必须使用 @email.ncu.edu.cn 邮箱".to_string(),
+            ));
         }
         if email.len() > 100 {
             return Err(ApiError::BadRequest("邮箱不能超过100个字符".to_string()));
@@ -310,6 +312,8 @@ mod tests {
         let profile = UserProfile {
             user_id: "user-123".to_string(),
             username: "testuser".to_string(),
+            email: Some("test@email.ncu.edu.cn".to_string()),
+            avatar_url: None,
             role: "user".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         };

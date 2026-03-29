@@ -119,6 +119,15 @@ class AppLocalizationsZh extends AppLocalizations {
   String get deleteConfirm => '确定要删除这件商品吗？';
 
   @override
+  String get removeFavoriteConfirm => '确定要从收藏中移除该商品吗？';
+
+  @override
+  String get favoriteRemoved => '已从收藏中移除';
+
+  @override
+  String get undo => '撤销';
+
+  @override
   String get description => '描述';
 
   @override
@@ -232,6 +241,12 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get allOrders => '全部';
+
+  @override
+  String get allNotifications => '全部';
+
+  @override
+  String get unreadOnly => '未读';
 
   @override
   String get buyerOrders => '作为买家';

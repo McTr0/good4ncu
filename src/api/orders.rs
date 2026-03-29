@@ -9,6 +9,8 @@ use sqlx::Row;
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
+use crate::services::order::OrderError;
+use crate::utils::cents_to_yuan;
 
 #[derive(Deserialize)]
 pub struct OrderQuery {
@@ -29,7 +31,6 @@ pub struct OrderSummary {
     pub final_price_cny: f64,
     pub status: String,
     pub created_at: String,
-    pub role: String,
 }
 
 impl From<crate::services::order::OrderSummaryRow> for OrderSummary {
@@ -45,7 +46,6 @@ impl From<crate::services::order::OrderSummaryRow> for OrderSummary {
             final_price_cny: r.final_price as f64 / 100.0,
             status: r.status,
             created_at: r.created_at.to_rfc3339(),
-            role: r.role,
         }
     }
 }
@@ -77,8 +77,8 @@ pub struct OrderDetail {
     pub cancellation_reason: Option<String>,
 }
 
-impl From<crate::services::order::OrderRow> for OrderDetail {
-    fn from(r: crate::services::order::OrderRow) -> Self {
+impl From<crate::services::order::SqlxOrderRow> for OrderDetail {
+    fn from(r: crate::services::order::SqlxOrderRow) -> Self {
         Self {
             id: r.id,
             listing_id: r.listing_id,
@@ -194,7 +194,7 @@ pub async fn create_order(
                 ApiError::Internal(anyhow::anyhow!("Failed to fetch listing"))
             })?;
 
-    let (seller_id, _suggested_price): (String, i64) = match listing_row {
+    let (seller_id, suggested_price): (String, i64) = match listing_row {
         Some(row) => (row.get("owner_id"), row.get("suggested_price_cny")),
         None => return Err(ApiError::NotFound),
     };
@@ -205,7 +205,18 @@ pub async fn create_order(
         ));
     }
 
+    // Validate offered price is within ±50% of suggested price (same logic as LLM tools)
     let final_price_cents = (payload.offered_price_cny * 100.0).round() as i64;
+    const PRICE_TOLERANCE: f64 = 0.50;
+    let min_price = (suggested_price as f64 * (1.0 - PRICE_TOLERANCE)) as i64;
+    let max_price = (suggested_price as f64 * (1.0 + PRICE_TOLERANCE)) as i64;
+    if final_price_cents < min_price || final_price_cents > max_price {
+        return Err(ApiError::BadRequest(format!(
+            "Offered price must be within ±50% of suggested price ({} - {})",
+            cents_to_yuan(min_price),
+            cents_to_yuan(max_price)
+        )));
+    }
 
     let order_id = state
         .infra
@@ -219,7 +230,11 @@ pub async fn create_order(
         .await
         .map_err(|e| {
             tracing::error!("create_order error: {}", e);
-            ApiError::Internal(anyhow::anyhow!("Failed to create order"))
+            if matches!(e, OrderError::AlreadySold) {
+                ApiError::Conflict("此商品已经售出".to_string())
+            } else {
+                ApiError::Internal(anyhow::anyhow!("Failed to create order"))
+            }
         })?;
 
     Ok(Json(serde_json::json!({ "id": order_id })))

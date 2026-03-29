@@ -97,14 +97,18 @@ impl OrderRepository for PostgresOrderRepository {
             match role {
                 Some("buyer") => where_clause = format!("WHERE o.buyer_id = '{}'", uid),
                 Some("seller") => where_clause = format!("WHERE o.seller_id = '{}'", uid),
-                _ => where_clause = format!("WHERE (o.buyer_id = '{}' OR o.seller_id = '{}')", uid, uid),
+                _ => {
+                    where_clause =
+                        format!("WHERE (o.buyer_id = '{}' OR o.seller_id = '{}')", uid, uid)
+                }
             }
         }
 
-        let total: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM orders o {}", where_clause))
-            .fetch_one(&self.pool)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+        let total: i64 =
+            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM orders o {}", where_clause))
+                .fetch_one(&self.pool)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
         let rows = sqlx::query(&format!(
             r#"
@@ -174,7 +178,9 @@ impl OrderRepository for PostgresOrderRepository {
             .execute(&self.pool)
             .await;
 
-        let rows = db_result.map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?.rows_affected();
+        let rows = db_result
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+            .rows_affected();
         Ok(rows > 0)
     }
 

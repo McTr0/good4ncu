@@ -106,7 +106,7 @@ impl OrderService {
         }
 
         let order_id = uuid::Uuid::new_v4().to_string();
-        
+
         // Note: Using query instead of repo because we are inside a transaction
         // Future: Repo should support transactions
         sqlx::query(
@@ -167,28 +167,35 @@ impl OrderService {
     ) -> Result<(Vec<OrderSummaryRow>, i64), OrderError> {
         let (where_clause, total): (String, i64) = match role {
             Some("buyer") => {
-                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE buyer_id = $1")
-                    .bind(user_id)
-                    .fetch_one(&self.db)
-                    .await
-                    .map_err(OrderError::Db)?;
+                let count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE buyer_id = $1")
+                        .bind(user_id)
+                        .fetch_one(&self.db)
+                        .await
+                        .map_err(OrderError::Db)?;
                 ("WHERE o.buyer_id = $1".to_string(), count)
             }
             Some("seller") => {
-                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE seller_id = $1")
-                    .bind(user_id)
-                    .fetch_one(&self.db)
-                    .await
-                    .map_err(OrderError::Db)?;
+                let count: i64 =
+                    sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE seller_id = $1")
+                        .bind(user_id)
+                        .fetch_one(&self.db)
+                        .await
+                        .map_err(OrderError::Db)?;
                 ("WHERE o.seller_id = $1".to_string(), count)
             }
             _ => {
-                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE buyer_id = $1 OR seller_id = $1")
-                    .bind(user_id)
-                    .fetch_one(&self.db)
-                    .await
-                    .map_err(OrderError::Db)?;
-                ("WHERE (o.buyer_id = $1 OR o.seller_id = $1)".to_string(), count)
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM orders WHERE buyer_id = $1 OR seller_id = $1",
+                )
+                .bind(user_id)
+                .fetch_one(&self.db)
+                .await
+                .map_err(OrderError::Db)?;
+                (
+                    "WHERE (o.buyer_id = $1 OR o.seller_id = $1)".to_string(),
+                    count,
+                )
             }
         };
 
@@ -225,11 +232,10 @@ impl OrderService {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<OrderSummaryRow>, i64), OrderError> {
-        let total: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM orders")
-                .fetch_one(&self.db)
-                .await
-                .map_err(OrderError::Db)?;
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders")
+            .fetch_one(&self.db)
+            .await
+            .map_err(OrderError::Db)?;
 
         let rows = sqlx::query_as::<_, SqlxOrderSummaryRow>(
             r#"
@@ -263,16 +269,12 @@ impl OrderService {
         new_status: &str,
         cancellation_reason: Option<&str>,
     ) -> Result<bool, OrderError> {
-        let current =
-            OrderStatus::parse_status(expected_current).ok_or_else(|| {
-                OrderError::InvalidTransition(format!(
-                    "unknown current status: {expected_current}"
-                ))
-            })?;
-        let next = OrderStatus::parse_status(new_status)
-            .ok_or_else(|| {
-                OrderError::InvalidTransition(format!("unknown new status: {new_status}"))
-            })?;
+        let current = OrderStatus::parse_status(expected_current).ok_or_else(|| {
+            OrderError::InvalidTransition(format!("unknown current status: {expected_current}"))
+        })?;
+        let next = OrderStatus::parse_status(new_status).ok_or_else(|| {
+            OrderError::InvalidTransition(format!("unknown new status: {new_status}"))
+        })?;
 
         if !current.can_transition_to(&next) {
             return Ok(false);
@@ -319,12 +321,11 @@ impl OrderService {
         order_id: &str,
         user_id: &str,
     ) -> Result<bool, OrderError> {
-        let row =
-            sqlx::query("SELECT buyer_id, seller_id FROM orders WHERE id = $1")
-                .bind(order_id)
-                .fetch_optional(&self.db)
-                .await
-                .map_err(OrderError::Db)?;
+        let row = sqlx::query("SELECT buyer_id, seller_id FROM orders WHERE id = $1")
+            .bind(order_id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(OrderError::Db)?;
         match row {
             Some(r) => {
                 let buyer_id: String = r.get("buyer_id");
@@ -340,12 +341,11 @@ impl OrderService {
         &self,
         order_id: &str,
     ) -> Result<Option<(String, i64)>, OrderError> {
-        let row =
-            sqlx::query("SELECT status, final_price FROM orders WHERE id = $1")
-                .bind(order_id)
-                .fetch_optional(&self.db)
-                .await
-                .map_err(OrderError::Db)?;
+        let row = sqlx::query("SELECT status, final_price FROM orders WHERE id = $1")
+            .bind(order_id)
+            .fetch_optional(&self.db)
+            .await
+            .map_err(OrderError::Db)?;
         Ok(row.map(|r| {
             let status: String = r.get("status");
             let final_price: i64 = r.get("final_price");
@@ -353,7 +353,6 @@ impl OrderService {
         }))
     }
 }
-
 
 // sqlx row types — use FromRow derive + column name aliases
 #[derive(sqlx::FromRow)]

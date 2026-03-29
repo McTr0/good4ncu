@@ -651,11 +651,13 @@ impl Tool for DeleteListingTool {
 
         // Sync vector store: remove stale embedding so RAG won't surface deleted listings.
         // pgvector stores documents in the same 'documents' table, so we use SQL DELETE.
-        sqlx::query("DELETE FROM documents WHERE id = $1")
+        if let Err(e) = sqlx::query("DELETE FROM documents WHERE id = $1")
             .bind(&args.listing_id)
             .execute(&self.ctx.db_pool)
             .await
-            .ok(); // Fire-and-forget: vector cleanup failure is non-fatal
+        {
+            tracing::warn!("Failed to delete listing document from vector store: {}", e);
+        }
 
         Ok(format!("Successfully removed listing {}", args.listing_id))
     }

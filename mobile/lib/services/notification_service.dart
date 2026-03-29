@@ -57,7 +57,11 @@ class NotificationService extends BaseService {
   /// POST /api/notifications/read-all
   Future<int> markAllRead() async {
     final headers = await authHeaders();
-    final response = await post(_apiUri(['api', 'notifications', 'read-all']), headers, '{}');
+    final response = await post(
+      _apiUri(['api', 'notifications', 'read-all']),
+      headers,
+      '{}',
+    );
     final data = handleResponse(response, (d) => d as Map<String, dynamic>);
     return data['marked_count'] ?? 0;
   }

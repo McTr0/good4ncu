@@ -36,7 +36,12 @@ impl AuthRepository for PostgresAuthRepository {
         Ok(row)
     }
 
-    async fn create_user(&self, username: &str, email: Option<&str>, password_hash: &str) -> Result<String, ApiError> {
+    async fn create_user(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        password_hash: &str,
+    ) -> Result<String, ApiError> {
         let user_id = uuid::Uuid::new_v4().to_string();
         let result = if let Some(e) = email {
             sqlx::query(
@@ -67,7 +72,9 @@ impl AuthRepository for PostgresAuthRepository {
                 // PostgreSQL unique violation code = "23505"
                 if let sqlx::Error::Database(db_err) = &e {
                     if db_err.code().as_deref() == Some("23505") {
-                        return Err(ApiError::Conflict("用户名或邮箱已被使用，请换一个".to_string()));
+                        return Err(ApiError::Conflict(
+                            "用户名或邮箱已被使用，请换一个".to_string(),
+                        ));
                     }
                 }
                 Err(ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))

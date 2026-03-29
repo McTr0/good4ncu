@@ -1,0 +1,844 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:good4ncu_mobile/models/models.dart';
+
+void main() {
+  group('ConversationMessage', () {
+    test('fromJson parses all fields correctly', () {
+      final json = {
+        'id': '123',
+        'conversation_id': 'conv-456',
+        'sender': 'user-789',
+        'content': 'Hello, World!',
+        'image_base64': 'abc123',
+        'audio_base64': 'def456',
+        'sent_at': '2024-01-15T10:30:00Z',
+        'read_at': '2024-01-15T10:35:00Z',
+        'status': 'read',
+        'edited_at': '2024-01-15T10:40:00Z',
+      };
+
+      final message = ConversationMessage.fromJson(json);
+
+      expect(message.id, '123');
+      expect(message.conversationId, 'conv-456');
+      expect(message.senderId, 'user-789');
+      expect(message.content, 'Hello, World!');
+      expect(message.imageBase64, 'abc123');
+      expect(message.audioBase64, 'def456');
+      expect(message.sentAt, DateTime.parse('2024-01-15T10:30:00Z'));
+      expect(message.readAt, DateTime.parse('2024-01-15T10:35:00Z'));
+      expect(message.status, 'read');
+      expect(message.editedAt, DateTime.parse('2024-01-15T10:40:00Z'));
+    });
+
+    test('fromJson handles missing optional fields', () {
+      final json = {
+        'id': '123',
+        'conversation_id': 'conv-456',
+        'sender': 'user-789',
+        'content': 'Hello!',
+        'sent_at': '2024-01-15T10:30:00Z',
+      };
+
+      final message = ConversationMessage.fromJson(json);
+
+      expect(message.id, '123');
+      expect(message.conversationId, 'conv-456');
+      expect(message.senderId, 'user-789');
+      expect(message.content, 'Hello!');
+      expect(message.imageBase64, isNull);
+      expect(message.audioBase64, isNull);
+      expect(message.readAt, isNull);
+      expect(message.status, 'sent'); // default
+      expect(message.editedAt, isNull);
+    });
+
+    test('fromJson falls back to timestamp field when sent_at is missing', () {
+      final json = {
+        'id': '123',
+        'conversation_id': 'conv-456',
+        'sender': 'user-789',
+        'content': 'Hello!',
+        'timestamp': '2024-01-15T10:30:00Z',
+      };
+
+      final message = ConversationMessage.fromJson(json);
+
+      expect(message.sentAt, DateTime.parse('2024-01-15T10:30:00Z'));
+    });
+
+    test('fromJson handles image_data as alternative to image_base64', () {
+      final json = {
+        'id': '123',
+        'conversation_id': 'conv-456',
+        'sender': 'user-789',
+        'content': 'Image message',
+        'image_data': 'img-data-123',
+        'sent_at': '2024-01-15T10:30:00Z',
+      };
+
+      final message = ConversationMessage.fromJson(json);
+
+      expect(message.imageBase64, 'img-data-123');
+    });
+
+    test('fromJson handles audio_data as alternative to audio_base64', () {
+      final json = {
+        'id': '123',
+        'conversation_id': 'conv-456',
+        'sender': 'user-789',
+        'content': 'Audio message',
+        'audio_data': 'audio-data-123',
+        'sent_at': '2024-01-15T10:30:00Z',
+      };
+
+      final message = ConversationMessage.fromJson(json);
+
+      expect(message.audioBase64, 'audio-data-123');
+    });
+
+    test('copyWith preserves unchanged fields', () {
+      final original = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Original content',
+        imageBase64: 'img',
+        audioBase64: 'aud',
+        sentAt: DateTime.parse('2024-01-15T10:30:00Z'),
+        readAt: DateTime.parse('2024-01-15T10:35:00Z'),
+        status: 'read',
+        editedAt: DateTime.parse('2024-01-15T10:40:00Z'),
+      );
+
+      final modified = original.copyWith(content: 'Modified content');
+
+      expect(modified.id, '123');
+      expect(modified.conversationId, 'conv-456');
+      expect(modified.senderId, 'user-789');
+      expect(modified.content, 'Modified content');
+      expect(modified.imageBase64, 'img');
+      expect(modified.audioBase64, 'aud');
+      expect(modified.sentAt, DateTime.parse('2024-01-15T10:30:00Z'));
+      expect(modified.readAt, DateTime.parse('2024-01-15T10:35:00Z'));
+      expect(modified.status, 'read');
+      expect(modified.editedAt, DateTime.parse('2024-01-15T10:40:00Z'));
+    });
+
+    test('copyWith with null optional fields', () {
+      final original = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Original content',
+        imageBase64: 'img',
+        audioBase64: 'aud',
+        sentAt: DateTime.parse('2024-01-15T10:30:00Z'),
+      );
+
+      // Note: copyWith uses ?? which means we can't set optional fields to null
+      // This is expected behavior for immutable patterns
+      final modified = original.copyWith(content: 'Modified');
+
+      expect(modified.imageBase64, 'img');
+      expect(modified.audioBase64, 'aud');
+    });
+
+    test('canEdit returns true within 15 minutes', () {
+      final recentMessage = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Recent message',
+        sentAt: DateTime.now().subtract(const Duration(minutes: 5)),
+      );
+
+      expect(recentMessage.canEdit, isTrue);
+    });
+
+    test('canEdit returns false after 15 minutes', () {
+      final oldMessage = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Old message',
+        sentAt: DateTime.now().subtract(const Duration(minutes: 20)),
+      );
+
+      expect(oldMessage.canEdit, isFalse);
+    });
+
+    test('canEdit returns false when editedAt is set', () {
+      final editedMessage = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Edited message',
+        sentAt: DateTime.now().subtract(const Duration(minutes: 5)),
+        editedAt: DateTime.now(),
+      );
+
+      expect(editedMessage.canEdit, isFalse);
+    });
+
+    test('tombstone state when deletedAt (editedAt) is set', () {
+      final tombstoneMessage = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'This message was deleted',
+        sentAt: DateTime.now().subtract(const Duration(hours: 1)),
+        editedAt: DateTime.now(),
+      );
+
+      // editedAt being non-null signals tombstone/deleted state
+      expect(tombstoneMessage.editedAt, isNotNull);
+      expect(tombstoneMessage.canEdit, isFalse);
+    });
+
+    test('isRead returns true when readAt is set', () {
+      final readMessage = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Read message',
+        sentAt: DateTime.now(),
+        readAt: DateTime.now(),
+      );
+
+      expect(readMessage.isRead, isTrue);
+    });
+
+    test('isRead returns false when readAt is null', () {
+      final unreadMessage = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Unread message',
+        sentAt: DateTime.now(),
+      );
+
+      expect(unreadMessage.isRead, isFalse);
+    });
+
+    test('isFrom returns true for matching userId', () {
+      final message = ConversationMessage(
+        id: '123',
+        conversationId: 'conv-456',
+        senderId: 'user-789',
+        content: 'Test message',
+        sentAt: DateTime.now(),
+      );
+
+      expect(message.isFrom('user-789'), isTrue);
+      expect(message.isFrom('user-999'), isFalse);
+    });
+  });
+
+  group('Listing', () {
+    test('fromJson parses all fields correctly', () {
+      final json = {
+        'id': 'listing-123',
+        'title': 'iPhone 14 Pro',
+        'category': 'Electronics',
+        'brand': 'Apple',
+        'condition_score': 9,
+        'suggested_price_cny': 5999.00,
+        'description': 'Almost new',
+        'status': 'active',
+        'thumbnail_hint': 'iphone.jpg',
+        'defects': ['Scratch on back'],
+        'owner_id': 'user-456',
+        'owner_username': 'johndoe',
+        'created_at': '2024-01-15T10:00:00Z',
+      };
+
+      final listing = Listing.fromJson(json);
+
+      expect(listing.id, 'listing-123');
+      expect(listing.title, 'iPhone 14 Pro');
+      expect(listing.category, 'Electronics');
+      expect(listing.brand, 'Apple');
+      expect(listing.conditionScore, 9);
+      expect(listing.suggestedPriceCny, 5999.00);
+      expect(listing.description, 'Almost new');
+      expect(listing.status, 'active');
+      expect(listing.thumbnailHint, 'iphone.jpg');
+      expect(listing.defects, ['Scratch on back']);
+      expect(listing.ownerId, 'user-456');
+      expect(listing.ownerUsername, 'johndoe');
+      expect(listing.createdAt, '2024-01-15T10:00:00Z');
+    });
+
+    test('fromJson handles missing optional fields', () {
+      final json = {
+        'id': 'listing-123',
+        'title': 'iPhone 14 Pro',
+        'category': 'Electronics',
+        'brand': 'Apple',
+        'condition_score': 9,
+        'suggested_price_cny': 5999.00,
+        'status': 'active',
+      };
+
+      final listing = Listing.fromJson(json);
+
+      expect(listing.id, 'listing-123');
+      expect(listing.description, isNull);
+      expect(listing.thumbnailHint, isNull);
+      expect(listing.defects, isNull);
+      expect(listing.ownerId, isNull);
+      expect(listing.ownerUsername, isNull);
+      expect(listing.createdAt, isNull);
+    });
+
+    test('fromJson handles integer price', () {
+      final json = {
+        'id': 'listing-123',
+        'title': 'Item',
+        'category': 'Cat',
+        'brand': 'Brand',
+        'condition_score': 5,
+        'suggested_price_cny': 100,
+        'status': 'active',
+      };
+
+      final listing = Listing.fromJson(json);
+
+      expect(listing.suggestedPriceCny, 100.0);
+    });
+
+    test('conditionLabel returns correct Chinese labels', () {
+      expect(
+        Listing.fromJson({
+          'id': '1',
+          'title': 't',
+          'category': 'c',
+          'brand': 'b',
+          'condition_score': 9,
+          'suggested_price_cny': 0,
+          'status': 's',
+        }).conditionLabel,
+        '几乎全新',
+      );
+      expect(
+        Listing.fromJson({
+          'id': '1',
+          'title': 't',
+          'category': 'c',
+          'brand': 'b',
+          'condition_score': 7,
+          'suggested_price_cny': 0,
+          'status': 's',
+        }).conditionLabel,
+        '较好',
+      );
+      expect(
+        Listing.fromJson({
+          'id': '1',
+          'title': 't',
+          'category': 'c',
+          'brand': 'b',
+          'condition_score': 5,
+          'suggested_price_cny': 0,
+          'status': 's',
+        }).conditionLabel,
+        '一般',
+      );
+      expect(
+        Listing.fromJson({
+          'id': '1',
+          'title': 't',
+          'category': 'c',
+          'brand': 'b',
+          'condition_score': 3,
+          'suggested_price_cny': 0,
+          'status': 's',
+        }).conditionLabel,
+        '较差',
+      );
+    });
+
+    test('roundtrip: fromJson -> to logic -> equivalent', () {
+      final original = {
+        'id': 'listing-123',
+        'title': 'Test Item',
+        'category': 'Test Category',
+        'brand': 'Test Brand',
+        'condition_score': 8,
+        'suggested_price_cny': 2999.50,
+        'description': 'Test description',
+        'status': 'active',
+        'thumbnail_hint': 'test.jpg',
+        'defects': ['None'],
+        'owner_id': 'user-123',
+        'owner_username': 'testuser',
+        'created_at': '2024-01-15T10:00:00Z',
+      };
+
+      final listing = Listing.fromJson(original);
+
+      expect(listing.id, original['id']);
+      expect(listing.title, original['title']);
+      expect(listing.category, original['category']);
+      expect(listing.brand, original['brand']);
+      expect(listing.conditionScore, original['condition_score']);
+      expect(listing.suggestedPriceCny, original['suggested_price_cny']);
+      expect(listing.description, original['description']);
+      expect(listing.status, original['status']);
+      expect(listing.thumbnailHint, original['thumbnail_hint']);
+      expect(listing.defects, original['defects']);
+      expect(listing.ownerId, original['owner_id']);
+      expect(listing.ownerUsername, original['owner_username']);
+      expect(listing.createdAt, original['created_at']);
+    });
+  });
+
+  group('Conversation', () {
+    test('fromJson parses all fields correctly', () {
+      final json = {
+        'id': 'conv-123',
+        'requester_id': 'user-001',
+        'other_user_id': 'user-002',
+        'other_username': 'alice',
+        'status': 'connected',
+        'last_message': 'Hello!',
+        'last_message_at': '2024-01-15T10:30:00Z',
+        'unread_count': 5,
+        'is_receiver': false,
+      };
+
+      final conversation = Conversation.fromJson(json);
+
+      expect(conversation.id, 'conv-123');
+      expect(conversation.requesterId, 'user-001');
+      expect(conversation.otherUserId, 'user-002');
+      expect(conversation.otherUsername, 'alice');
+      expect(conversation.status, 'connected');
+      expect(conversation.lastMessage, 'Hello!');
+      expect(
+        conversation.lastMessageAt,
+        DateTime.parse('2024-01-15T10:30:00Z'),
+      );
+      expect(conversation.unreadCount, 5);
+      expect(conversation.isReceiver, false);
+    });
+
+    test('canRespond is true only for pending incoming requests', () {
+      final pendingAsReceiver = Conversation(
+        id: '1',
+        requesterId: 'user-001',
+        otherUserId: 'user-002',
+        otherUsername: 'bob',
+        status: 'pending',
+        isReceiver: true,
+      );
+      expect(pendingAsReceiver.canRespond, isTrue);
+
+      final pendingAsRequester = Conversation(
+        id: '2',
+        requesterId: 'user-001',
+        otherUserId: 'user-002',
+        otherUsername: 'bob',
+        status: 'pending',
+        isReceiver: false,
+      );
+      expect(pendingAsRequester.canRespond, isFalse);
+
+      final connectedConversation = Conversation(
+        id: '3',
+        requesterId: 'user-001',
+        otherUserId: 'user-002',
+        otherUsername: 'bob',
+        status: 'connected',
+        isReceiver: true,
+      );
+      expect(connectedConversation.canRespond, isFalse);
+    });
+
+    test('connectionStatus returns correct type', () {
+      expect(
+        Conversation(
+          id: '1',
+          requesterId: 'a',
+          otherUserId: 'b',
+          otherUsername: 'x',
+          status: 'pending',
+        ).connectionStatus,
+        ConnectionStatusType.pending,
+      );
+      expect(
+        Conversation(
+          id: '1',
+          requesterId: 'a',
+          otherUserId: 'b',
+          otherUsername: 'x',
+          status: 'connected',
+        ).connectionStatus,
+        ConnectionStatusType.online,
+      );
+      expect(
+        Conversation(
+          id: '1',
+          requesterId: 'a',
+          otherUserId: 'b',
+          otherUsername: 'x',
+          status: 'established',
+        ).connectionStatus,
+        ConnectionStatusType.online,
+      );
+      expect(
+        Conversation(
+          id: '1',
+          requesterId: 'a',
+          otherUserId: 'b',
+          otherUsername: 'x',
+          status: 'rejected',
+        ).connectionStatus,
+        ConnectionStatusType.offline,
+      );
+    });
+  });
+
+  group('ChatMessage', () {
+    test('copyWith preserves unchanged fields', () {
+      final original = ChatMessage(
+        sender: 'user-1',
+        content: 'Hello',
+        imageBase64: 'img',
+        audioBase64: 'aud',
+        timestamp: DateTime.parse('2024-01-15T10:00:00Z'),
+        isPartial: false,
+      );
+
+      final modified = original.copyWith(content: 'Hi there');
+
+      expect(modified.sender, 'user-1');
+      expect(modified.content, 'Hi there');
+      expect(modified.imageBase64, 'img');
+      expect(modified.audioBase64, 'aud');
+      expect(modified.timestamp, DateTime.parse('2024-01-15T10:00:00Z'));
+      expect(modified.isPartial, false);
+    });
+
+    test('toJson produces correct output', () {
+      final message = ChatMessage(
+        sender: 'user-1',
+        content: 'Test message',
+        imageBase64: 'abc',
+        audioBase64: 'def',
+        timestamp: DateTime.now(),
+      );
+
+      final json = message.toJson();
+
+      expect(json['message'], 'Test message');
+      expect(json['image'], 'abc');
+      expect(json['audio'], 'def');
+    });
+
+    test('toJson handles null optional fields', () {
+      final message = ChatMessage(
+        sender: 'user-1',
+        content: 'Test message',
+        timestamp: DateTime.now(),
+      );
+
+      final json = message.toJson();
+
+      expect(json['message'], 'Test message');
+      expect(json['image'], isNull);
+      expect(json['audio'], isNull);
+    });
+  });
+
+  group('Order', () {
+    test('fromJson parses all fields correctly', () {
+      final json = {
+        'id': 'order-123',
+        'listing_id': 'listing-456',
+        'listing_title': 'iPhone 14',
+        'buyer_id': 'buyer-001',
+        'seller_id': 'seller-002',
+        'buyer_username': 'buyer_john',
+        'seller_username': 'seller_jane',
+        'final_price_cny': 5999.00,
+        'status': 'completed',
+        'created_at': '2024-01-15T10:00:00Z',
+        'role': 'buyer',
+      };
+
+      final order = Order.fromJson(json);
+
+      expect(order.id, 'order-123');
+      expect(order.listingId, 'listing-456');
+      expect(order.listingTitle, 'iPhone 14');
+      expect(order.buyerId, 'buyer-001');
+      expect(order.sellerId, 'seller-002');
+      expect(order.buyerUsername, 'buyer_john');
+      expect(order.sellerUsername, 'seller_jane');
+      expect(order.finalPriceCny, 5999.00);
+      expect(order.status, 'completed');
+      expect(order.createdAt, '2024-01-15T10:00:00Z');
+      expect(order.role, 'buyer');
+    });
+
+    test('statusLabel returns correct Chinese labels', () {
+      final testCases = [
+        ('pending', '待支付'),
+        ('paid', '已支付'),
+        ('shipped', '已发货'),
+        ('completed', '已完成'),
+        ('cancelled', '已取消'),
+        ('unknown', 'unknown'),
+      ];
+
+      for (final (status, expectedLabel) in testCases) {
+        expect(
+          Order.fromJson({
+            'id': '1',
+            'listing_id': 'l',
+            'listing_title': 't',
+            'buyer_id': 'b',
+            'seller_id': 's',
+            'buyer_username': 'bu',
+            'seller_username': 'su',
+            'final_price_cny': 0,
+            'status': status,
+            'created_at': '2024-01-15T10:00:00Z',
+            'role': 'buyer',
+          }).statusLabel,
+          expectedLabel,
+        );
+      }
+    });
+  });
+
+  group('HitlRequest', () {
+    test('fromJson parses all fields correctly', () {
+      final json = {
+        'id': 'hitl-123',
+        'listing_id': 'listing-456',
+        'buyer_id': 'buyer-001',
+        'seller_id': 'seller-002',
+        'proposed_price': 5500.00,
+        'reason': 'Negotiating price',
+        'status': 'countered',
+        'counter_price': 5700.00,
+        'created_at': '2024-01-15T10:00:00Z',
+        'expires_at': '2024-01-16T10:00:00Z',
+      };
+
+      final request = HitlRequest.fromJson(json);
+
+      expect(request.id, 'hitl-123');
+      expect(request.listingId, 'listing-456');
+      expect(request.buyerId, 'buyer-001');
+      expect(request.sellerId, 'seller-002');
+      expect(request.proposedPrice, 5500.00);
+      expect(request.reason, 'Negotiating price');
+      expect(request.status, 'countered');
+      expect(request.counterPrice, 5700.00);
+      expect(request.createdAt, '2024-01-15T10:00:00Z');
+      expect(request.expiresAt, '2024-01-16T10:00:00Z');
+    });
+
+    test('isPending returns correct value', () {
+      expect(
+        HitlRequest.fromJson({
+          'id': '1',
+          'listing_id': 'l',
+          'buyer_id': 'b',
+          'seller_id': 's',
+          'proposed_price': 100,
+          'reason': 'r',
+          'status': 'pending',
+          'created_at': '2024-01-15T10:00:00Z',
+        }).isPending,
+        isTrue,
+      );
+      expect(
+        HitlRequest.fromJson({
+          'id': '1',
+          'listing_id': 'l',
+          'buyer_id': 'b',
+          'seller_id': 's',
+          'proposed_price': 100,
+          'reason': 'r',
+          'status': 'approved',
+          'created_at': '2024-01-15T10:00:00Z',
+        }).isPending,
+        isFalse,
+      );
+    });
+  });
+
+  group('ListingsResponse', () {
+    test('fromJson parses items correctly', () {
+      final json = {
+        'items': [
+          {
+            'id': '1',
+            'title': 'Item 1',
+            'category': 'Cat',
+            'brand': 'B',
+            'condition_score': 5,
+            'suggested_price_cny': 100,
+            'status': 'a',
+          },
+          {
+            'id': '2',
+            'title': 'Item 2',
+            'category': 'Cat',
+            'brand': 'B',
+            'condition_score': 7,
+            'suggested_price_cny': 200,
+            'status': 'a',
+          },
+        ],
+        'total': 50,
+        'limit': 20,
+        'offset': 0,
+      };
+
+      final response = ListingsResponse.fromJson(json);
+
+      expect(response.items.length, 2);
+      expect(response.items[0].id, '1');
+      expect(response.items[1].id, '2');
+      expect(response.total, 50);
+      expect(response.limit, 20);
+      expect(response.offset, 0);
+    });
+
+    test('fromJson handles empty items', () {
+      final json = {'items': [], 'total': 0, 'limit': 20, 'offset': 0};
+
+      final response = ListingsResponse.fromJson(json);
+
+      expect(response.items, isEmpty);
+      expect(response.total, 0);
+    });
+  });
+
+  group('WatchlistResponse', () {
+    test('fromJson parses watchlist envelope and item fields', () {
+      final json = {
+        'items': [
+          {
+            'listing_id': 'listing-1',
+            'title': 'MacBook Air',
+            'category': 'electronics',
+            'brand': 'Apple',
+            'condition_score': 8,
+            'suggested_price_cny': 5999.0,
+            'status': 'active',
+            'owner_id': 'owner-1',
+            'created_at': '2026-03-01T08:00:00Z',
+          },
+        ],
+        'total': 1,
+        'limit': 20,
+        'offset': 0,
+      };
+
+      final response = WatchlistResponse.fromJson(json);
+
+      expect(response.total, 1);
+      expect(response.limit, 20);
+      expect(response.offset, 0);
+      expect(response.items.length, 1);
+
+      final item = response.items.first;
+      expect(item.listingId, 'listing-1');
+      expect(item.title, 'MacBook Air');
+      expect(item.category, 'electronics');
+      expect(item.brand, 'Apple');
+      expect(item.conditionScore, 8);
+      expect(item.suggestedPriceCny, 5999.0);
+      expect(item.status, 'active');
+      expect(item.ownerId, 'owner-1');
+      expect(item.createdAt, '2026-03-01T08:00:00Z');
+    });
+
+    test('fromJson handles missing optional fields safely', () {
+      final json = {
+        'items': [
+          {
+            'listing_id': 'listing-1',
+            'title': 'Item',
+            'category': 'other',
+            'condition_score': 6,
+            'suggested_price_cny': 100.0,
+            'status': 'active',
+            'owner_id': 'owner-1',
+            'created_at': '2026-03-01T08:00:00Z',
+          },
+        ],
+      };
+
+      final response = WatchlistResponse.fromJson(json);
+      expect(response.items.first.brand, '');
+      expect(response.total, 0);
+      expect(response.limit, 20);
+      expect(response.offset, 0);
+    });
+  });
+
+  group('NotificationsResponse', () {
+    test('fromJson parses notifications envelope and unread count', () {
+      final json = {
+        'items': [
+          {
+            'id': 'n1',
+            'event_type': 'new_message',
+            'title': 'New message',
+            'body': 'You have a new message',
+            'related_order_id': null,
+            'related_listing_id': 'listing-1',
+            'is_read': false,
+            'created_at': '2026-03-01T09:00:00Z',
+          },
+        ],
+        'total': 1,
+        'unread_count': 1,
+        'limit': 20,
+        'offset': 0,
+      };
+
+      final response = NotificationsResponse.fromJson(json);
+
+      expect(response.total, 1);
+      expect(response.unreadCount, 1);
+      expect(response.items.length, 1);
+
+      final item = response.items.first;
+      expect(item.id, 'n1');
+      expect(item.eventType, 'new_message');
+      expect(item.title, 'New message');
+      expect(item.body, 'You have a new message');
+      expect(item.relatedListingId, 'listing-1');
+      expect(item.isRead, isFalse);
+      expect(item.createdAt, '2026-03-01T09:00:00Z');
+    });
+
+    test('fromJson applies defaults for missing fields', () {
+      final json = {
+        'items': [
+          {'id': 'n2'},
+        ],
+      };
+
+      final response = NotificationsResponse.fromJson(json);
+      final item = response.items.first;
+
+      expect(item.eventType, '');
+      expect(item.title, '');
+      expect(item.body, '');
+      expect(item.isRead, isFalse);
+      expect(response.unreadCount, 0);
+      expect(response.limit, 20);
+      expect(response.offset, 0);
+    });
+  });
+}

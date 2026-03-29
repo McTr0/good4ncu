@@ -122,6 +122,15 @@ class AppLocalizationsEn extends AppLocalizations {
   String get deleteConfirm => 'Are you sure you want to delete this listing?';
 
   @override
+  String get removeFavoriteConfirm => 'Remove this item from favorites?';
+
+  @override
+  String get favoriteRemoved => 'Removed from favorites';
+
+  @override
+  String get undo => 'Undo';
+
+  @override
   String get description => 'Description';
 
   @override
@@ -236,6 +245,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get allOrders => 'All';
+
+  @override
+  String get allNotifications => 'All';
+
+  @override
+  String get unreadOnly => 'Unread';
 
   @override
   String get buyerOrders => 'As Buyer';

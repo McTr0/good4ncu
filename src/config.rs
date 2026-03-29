@@ -97,12 +97,18 @@ impl fmt::Debug for AppConfig {
             .field("server_host", &self.server_host)
             .field("server_port", &self.server_port)
             .field("event_bus_capacity", &self.event_bus_capacity)
-            .field("hitl_expire_scan_interval_secs", &self.hitl_expire_scan_interval_secs)
+            .field(
+                "hitl_expire_scan_interval_secs",
+                &self.hitl_expire_scan_interval_secs,
+            )
             .field("hitl_expire_timeout_hours", &self.hitl_expire_timeout_hours)
             .field("moka_cache_max_capacity", &self.moka_cache_max_capacity)
             .field("access_token_ttl_secs", &self.access_token_ttl_secs)
             .field("refresh_token_ttl_secs", &self.refresh_token_ttl_secs)
-            .field("conversation_history_limit", &self.conversation_history_limit)
+            .field(
+                "conversation_history_limit",
+                &self.conversation_history_limit,
+            )
             .field("max_keyword_len", &self.max_keyword_len)
             .field("price_tolerance", &self.price_tolerance)
             .field("categories", &self.categories)
@@ -163,9 +169,7 @@ impl AppConfig {
         }
 
         if llm_provider == "minimax" && gemini_api_key.is_none() {
-            panic!(
-                "GEMINI_API_KEY must be set when LLM_PROVIDER=minimax (used for embeddings)"
-            );
+            panic!("GEMINI_API_KEY must be set when LLM_PROVIDER=minimax (used for embeddings)");
         }
 
         let jwt_secret =
@@ -210,7 +214,8 @@ impl AppConfig {
 
         // Rate limit: env > file > default (fail-fast on invalid env value)
         let rate_limit_max_requests: u64 = if let Ok(v) = std::env::var("RATE_LIMIT_MAX_REQUESTS") {
-            v.parse().expect("RATE_LIMIT_MAX_REQUESTS must be a valid u64")
+            v.parse()
+                .expect("RATE_LIMIT_MAX_REQUESTS must be a valid u64")
         } else {
             file.as_ref()
                 .and_then(|f| f.rate_limit.max_requests)
@@ -218,7 +223,8 @@ impl AppConfig {
         };
 
         let rate_limit_window_secs: u64 = if let Ok(v) = std::env::var("RATE_LIMIT_WINDOW_SECS") {
-            v.parse().expect("RATE_LIMIT_WINDOW_SECS must be a valid u64")
+            v.parse()
+                .expect("RATE_LIMIT_WINDOW_SECS must be a valid u64")
         } else {
             file.as_ref()
                 .and_then(|f| f.rate_limit.window_secs)
@@ -231,10 +237,7 @@ impl AppConfig {
             .and_then(|f| f.server.host.clone())
             .unwrap_or_else(|| "127.0.0.1".into());
 
-        let server_port = file
-            .as_ref()
-            .and_then(|f| f.server.port)
-            .unwrap_or(3000);
+        let server_port = file.as_ref().and_then(|f| f.server.port).unwrap_or(3000);
 
         let event_bus_capacity = file
             .as_ref()
@@ -284,7 +287,12 @@ impl AppConfig {
         let categories = file
             .as_ref()
             .and_then(|f| f.marketplace.categories.clone())
-            .unwrap_or_else(|| DEFAULT_CATEGORIES.iter().map(|s| (*s).to_string()).collect());
+            .unwrap_or_else(|| {
+                DEFAULT_CATEGORIES
+                    .iter()
+                    .map(|s| (*s).to_string())
+                    .collect()
+            });
 
         Arc::new(Self {
             gemini_api_key: gemini_api_key.unwrap_or_default(),
@@ -350,8 +358,7 @@ mod tests {
     #[test]
     fn test_cors_origins_parsing() {
         let origins = "https://example.com,https://app.example.com, http://localhost:3000";
-        let parsed: Vec<String> =
-            origins.split(',').map(|v| v.trim().to_string()).collect();
+        let parsed: Vec<String> = origins.split(',').map(|v| v.trim().to_string()).collect();
         assert_eq!(parsed.len(), 3);
     }
 

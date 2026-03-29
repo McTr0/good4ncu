@@ -180,7 +180,9 @@ static CONFIG_FILE_PATH: OnceLock<Option<String>> = OnceLock::new();
 
 /// Returns the config file path from the CONFIG_FILE env var, or None for default.
 pub fn config_file_env() -> Option<String> {
-    CONFIG_FILE_PATH.get_or_init(|| std::env::var("CONFIG_FILE").ok()).clone()
+    CONFIG_FILE_PATH
+        .get_or_init(|| std::env::var("CONFIG_FILE").ok())
+        .clone()
 }
 
 /// Default config file search paths (checked in order).

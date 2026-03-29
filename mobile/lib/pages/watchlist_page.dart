@@ -99,8 +99,13 @@ class _WatchlistPageState extends State<WatchlistPage> {
   }
 
   Future<void> _removeFromWatchlist(WatchlistItem item) async {
+    if (!mounted) return;
+
     final l = AppLocalizations.of(context)!;
     final messenger = ScaffoldMessenger.of(context);
+    final removedIndex = _items.indexWhere(
+      (it) => it.listingId == item.listingId,
+    );
 
     try {
       await _watchlistService.removeFromWatchlist(item.listingId);
@@ -111,11 +116,80 @@ class _WatchlistPageState extends State<WatchlistPage> {
           _total -= 1;
         }
       });
+
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(l.favoriteRemoved),
+          action: SnackBarAction(
+            label: l.undo,
+            onPressed: () {
+              if (!mounted) return;
+              _restoreRemovedItem(item, removedIndex);
+            },
+          ),
+        ),
+      );
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(
         SnackBar(content: Text(l.operationFailed(e.toString()))),
       );
+    }
+  }
+
+  Future<void> _restoreRemovedItem(WatchlistItem item, int removedIndex) async {
+    if (!mounted) return;
+
+    final l = AppLocalizations.of(context)!;
+    final messenger = ScaffoldMessenger.of(context);
+
+    try {
+      await _watchlistService.addToWatchlist(item.listingId);
+      if (!mounted) return;
+
+      setState(() {
+        final exists = _items.any((it) => it.listingId == item.listingId);
+        if (!exists) {
+          final targetIndex = removedIndex < 0
+              ? _items.length
+              : removedIndex.clamp(0, _items.length);
+          _items.insert(targetIndex, item);
+          _total += 1;
+        }
+      });
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(content: Text(l.operationFailed(e.toString()))),
+      );
+    }
+  }
+
+  Future<void> _confirmAndRemoveFromWatchlist(WatchlistItem item) async {
+    final l = AppLocalizations.of(context)!;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(l.delete),
+        content: Text(l.removeFavoriteConfirm),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: Text(l.cancel),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text(l.delete),
+          ),
+        ],
+      ),
+    );
+
+    if (!mounted) return;
+
+    if (confirmed == true) {
+      await _removeFromWatchlist(item);
     }
   }
 
@@ -225,7 +299,7 @@ class _WatchlistPageState extends State<WatchlistPage> {
             item: item,
             formattedDate: _formatDate(item.createdAt),
             onTap: () => context.push('/listing/${item.listingId}'),
-            onRemove: () => _removeFromWatchlist(item),
+            onRemove: () => _confirmAndRemoveFromWatchlist(item),
           );
         },
       ),

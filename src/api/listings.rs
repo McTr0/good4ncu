@@ -518,6 +518,7 @@ Be honest about defects. If you cannot identify the item, return category="other
     let response = client
         .post(&url)
         .json(&request_body)
+        .timeout(std::time::Duration::from_secs(30))
         .send()
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to call Gemini: {}", e)))?;
