@@ -1,0 +1,358 @@
+//! Repository trait definitions for dependency inversion.
+//!
+//! Each domain has a trait defining its data access operations.
+//! Concrete implementations (e.g., PostgresRepository) implement these traits.
+
+// ---------------------------------------------------------------------------
+// Re-exports for convenience
+// ---------------------------------------------------------------------------
+pub use crate::api::error::ApiError;
+
+// ---------------------------------------------------------------------------
+// Listing Repository
+// ---------------------------------------------------------------------------
+
+/// A listing item returned from the marketplace.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct Listing {
+    pub id: String,
+    pub title: String,
+    pub category: String,
+    pub brand: Option<String>,
+    pub condition_score: i32,
+    pub suggested_price_cny: i32,
+    pub defects: Option<String>,
+    pub description: Option<String>,
+    pub owner_id: String,
+    pub status: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct CreateListingInput {
+    pub title: String,
+    pub category: String,
+    pub brand: Option<String>,
+    pub condition_score: i32,
+    pub suggested_price_cny: f64,
+    pub defects: Vec<String>,
+    pub description: String,
+    pub owner_id: String,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct UpdateListingInput {
+    pub title: Option<String>,
+    pub category: Option<String>,
+    pub brand: Option<String>,
+    pub condition_score: Option<i32>,
+    pub suggested_price_cny: Option<f64>,
+    pub defects: Option<Vec<String>>,
+    pub description: Option<String>,
+    pub status: Option<String>,
+}
+
+#[allow(dead_code, async_fn_in_trait)]
+pub trait ListingRepository: Send + Sync {
+    /// Find listings with optional filters.
+    #[allow(clippy::too_many_arguments)]
+    async fn find_listings(
+        &self,
+        category: Option<&str>,
+        categories: Option<&str>, // comma-separated
+        search: Option<&str>,
+        min_price_cny: Option<f64>,
+        max_price_cny: Option<f64>,
+        sort: &str, // "newest" | "price_asc" | "price_desc" | "condition_desc"
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<Listing>, i64), ApiError>;
+
+    /// Find a single listing by ID.
+    async fn find_by_id(&self, id: &str) -> Result<Option<Listing>, ApiError>;
+
+    /// Find a single listing by ID, joining with owner username in a single query.
+    /// Returns (listing, owner_username) to avoid N+1 query pattern.
+    async fn find_by_id_with_owner(
+        &self,
+        id: &str,
+    ) -> Result<Option<(Listing, Option<String>)>, ApiError>;
+
+    /// Create a new listing.
+    async fn create(&self, input: CreateListingInput) -> Result<String, ApiError>;
+
+    /// Update an existing listing (checks ownership).
+    async fn update(
+        &self,
+        id: &str,
+        owner_id: &str,
+        input: UpdateListingInput,
+    ) -> Result<(), ApiError>;
+
+    /// Delete a listing (soft delete by setting status to 'deleted').
+    async fn delete(&self, id: &str, owner_id: &str) -> Result<(), ApiError>;
+
+    /// Relist a sold/deleted item.
+    async fn relist(&self, id: &str, owner_id: &str) -> Result<(), ApiError>;
+
+    /// Mark a listing as sold.
+    async fn mark_sold(&self, id: &str, owner_id: &str) -> Result<(), ApiError>;
+
+    /// Get total count of listings.
+    async fn count(&self, status: Option<&str>) -> Result<i64, ApiError>;
+}
+
+// ---------------------------------------------------------------------------
+// User Repository
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct User {
+    pub id: String,
+    pub username: String,
+    pub email: Option<String>,
+    pub password_hash: String,
+    pub role: String,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)]
+pub struct UserProfile {
+    pub user_id: String,
+    pub username: String,
+    pub email: Option<String>,
+    pub avatar_url: Option<String>,
+    pub role: String,
+    pub created_at: String,
+}
+
+#[allow(dead_code, async_fn_in_trait)]
+pub trait UserRepository: Send + Sync {
+    /// Find a user by ID.
+    async fn find_by_id(&self, id: &str) -> Result<Option<User>, ApiError>;
+
+    /// Find a user by username.
+    async fn find_by_username(&self, username: &str) -> Result<Option<User>, ApiError>;
+
+    /// Find a user by email.
+    async fn find_by_email(&self, email: &str) -> Result<Option<User>, ApiError>;
+
+    /// Create a new user. Returns user_id on success.
+    async fn create(
+        &self,
+        username: &str,
+        email: Option<&str>,
+        password_hash: &str,
+        role: &str,
+    ) -> Result<String, ApiError>;
+
+    /// Get user profile (public info only).
+    async fn get_profile(&self, user_id: &str) -> Result<UserProfile, ApiError>;
+
+    /// Get paginated listings by user.
+    async fn get_user_listings(
+        &self,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+        status_filter: &str,
+    ) -> Result<(Vec<Listing>, i64), ApiError>;
+
+    /// Search users by username prefix.
+    async fn search_users(&self, query: &str, limit: i64) -> Result<Vec<UserProfile>, ApiError>;
+
+    /// Search users with their active listing counts (JOIN with inventory).
+    async fn search_users_with_listing_count(
+        &self,
+        query: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<(UserProfile, i64)>, i64), ApiError>;
+
+    /// Ban a user.
+    async fn ban_user(&self, user_id: &str) -> Result<(), ApiError>;
+
+    /// Unban a user.
+    async fn unban_user(&self, user_id: &str) -> Result<(), ApiError>;
+
+    /// Update user role.
+    async fn update_role(&self, user_id: &str, role: &str) -> Result<(), ApiError>;
+
+    /// Update username. Returns error if new_username already taken.
+    async fn update_username(&self, user_id: &str, new_username: &str) -> Result<(), ApiError>;
+
+    /// Update avatar URL for a user.
+    async fn update_avatar(&self, user_id: &str, avatar_url: &str) -> Result<(), ApiError>;
+
+    /// Update email for a user. Returns error if new_email already taken.
+    async fn update_email(&self, user_id: &str, new_email: &str) -> Result<(), ApiError>;
+
+    /// Count all users.
+    async fn count_users(&self) -> Result<i64, ApiError>;
+}
+
+// ---------------------------------------------------------------------------
+// Chat Repository
+// ---------------------------------------------------------------------------
+
+/// Summary of a conversation for the conversation list.
+#[derive(Debug, Clone, serde::Serialize)]
+#[allow(dead_code)]
+pub struct ConversationSummary {
+    pub id: String,
+    pub requester_id: String,
+    pub other_user_id: String,
+    pub other_username: Option<String>,
+    pub status: String,
+    pub established_at: Option<String>,
+    pub created_at: String,
+    pub unread_count: i32,
+    pub is_receiver: bool,
+}
+
+/// A chat message.
+#[derive(Debug, Clone, serde::Serialize, sqlx::FromRow)]
+#[allow(dead_code)]
+pub struct ChatMessage {
+    pub id: String,
+    pub conversation_id: String,
+    pub sender: String,
+    pub receiver: Option<String>,
+    pub content: String,
+    pub is_agent: bool,
+    pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[allow(dead_code, async_fn_in_trait)]
+pub trait ChatRepository: Send + Sync {
+    /// Log a message to a conversation.
+    #[allow(clippy::too_many_arguments)]
+    async fn log_message(
+        &self,
+        conversation_id: &str,
+        listing_id: &str,
+        sender: &str,
+        receiver: Option<&str>,
+        is_agent: bool,
+        content: &str,
+        image_data: Option<&str>,
+        audio_data: Option<&str>,
+    ) -> Result<(), ApiError>;
+
+    /// Get conversation history (up to CONVERSATION_HISTORY_LIMIT entries).
+    async fn get_conversation_history(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Vec<crate::services::chat::ChatHistoryEntry>, ApiError>;
+
+    /// List all conversations for a user.
+    async fn list_conversations(
+        &self,
+        user_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<ConversationSummary>, i64), ApiError>;
+
+    /// Get messages for a conversation (paginated).
+    async fn get_conversation_messages(
+        &self,
+        conversation_id: &str,
+        before: Option<i64>,
+        limit: i64,
+    ) -> Result<(Vec<ChatMessage>, i64), ApiError>;
+
+    /// Mark all messages in a conversation as read.
+    async fn mark_conversation_read(
+        &self,
+        conversation_id: &str,
+        reader_id: &str,
+    ) -> Result<(), ApiError>;
+
+    /// Edit a message (sender only, within 15 min).
+    async fn edit_message(
+        &self,
+        message_id: &str,
+        sender_id: &str,
+        new_content: &str,
+    ) -> Result<(), ApiError>;
+
+    /// Mark a message as read.
+    async fn mark_message_read(&self, message_id: &str, reader_id: &str) -> Result<(), ApiError>;
+
+    /// Request a new chat connection.
+    async fn request_connection(
+        &self,
+        requester_id: &str,
+        receiver_id: &str,
+        listing_id: &str,
+    ) -> Result<String, ApiError>;
+
+    /// Accept a connection request.
+    async fn accept_connection(
+        &self,
+        connection_id: &str,
+        acceptor_id: &str,
+    ) -> Result<(), ApiError>;
+
+    /// Reject a connection request.
+    async fn reject_connection(
+        &self,
+        connection_id: &str,
+        rejector_id: &str,
+    ) -> Result<(), ApiError>;
+
+    /// Get a connection by ID.
+    async fn get_connection(
+        &self,
+        connection_id: &str,
+    ) -> Result<Option<ConversationSummary>, ApiError>;
+}
+
+// ---------------------------------------------------------------------------
+// Auth Repository
+// ---------------------------------------------------------------------------
+
+#[allow(dead_code, async_fn_in_trait)]
+pub trait AuthRepository: Send + Sync {
+    /// Find user by username for login.
+    async fn find_user_by_username(&self, username: &str) -> Result<Option<User>, ApiError>;
+
+    /// Find user by email for login.
+    async fn find_user_by_email(&self, email: &str) -> Result<Option<User>, ApiError>;
+
+    /// Create a new user account.
+    async fn create_user(&self, username: &str, email: Option<&str>, password_hash: &str) -> Result<String, ApiError>;
+
+    /// Store a refresh token hash.
+    async fn store_refresh_token(
+        &self,
+        user_id: &str,
+        token_hash: &str,
+        expires_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<(), ApiError>;
+
+    /// Find a refresh token record.
+    async fn find_refresh_token(
+        &self,
+        token_hash: &str,
+    ) -> Result<
+        Option<(
+            String,
+            Option<chrono::DateTime<chrono::Utc>>,
+            chrono::DateTime<chrono::Utc>,
+        )>,
+        ApiError,
+    >;
+
+    /// Revoke a refresh token.
+    async fn revoke_refresh_token(&self, token_hash: &str) -> Result<(), ApiError>;
+
+    /// Revoke all refresh tokens for a user.
+    async fn revoke_all_user_tokens(&self, user_id: &str) -> Result<(), ApiError>;
+}
