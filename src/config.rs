@@ -335,10 +335,45 @@ mod tests {
 
     #[test]
     fn test_debug_redacts_secrets() {
-        let config = AppConfig::load_with_file(None);
+        let config = AppConfig {
+            gemini_api_key: "gemini-secret".to_string(),
+            minimax_api_key: Some("minimax-secret".to_string()),
+            minimax_api_base_url: None,
+            jwt_secret: "jwt-secret-that-is-at-least-32-characters".to_string(),
+            database_url: "postgres://user:pass@localhost/db".to_string(),
+            oss_access_key_id: Some("oss-key-id".to_string()),
+            oss_access_key_secret: Some("oss-key-secret".to_string()),
+            llm_provider: "gemini".to_string(),
+            vector_dim: 768,
+            cors_origins: vec![],
+            oss_endpoint: "https://oss-cn-beijing.aliyuncs.com".to_string(),
+            oss_bucket: "good4ncu".to_string(),
+            oss_role_arn: None,
+            redis_url: None,
+            rate_limit_max_requests: 100,
+            rate_limit_window_secs: 60,
+            server_host: "127.0.0.1".to_string(),
+            server_port: 3000,
+            event_bus_capacity: 2048,
+            hitl_expire_scan_interval_secs: 600,
+            hitl_expire_timeout_hours: 48,
+            moka_cache_max_capacity: 100_000,
+            access_token_ttl_secs: 86_400,
+            refresh_token_ttl_secs: 604_800,
+            conversation_history_limit: 10,
+            max_keyword_len: 200,
+            price_tolerance: 0.5,
+            categories: DEFAULT_CATEGORIES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect(),
+            blocked_keywords: vec![],
+        };
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("[REDACTED]"));
-        assert!(!debug_str.contains("secret-key-123"));
+        assert!(!debug_str.contains("gemini-secret"));
+        assert!(!debug_str.contains("minimax-secret"));
+        assert!(!debug_str.contains("jwt-secret-that-is-at-least-32-characters"));
     }
 
     #[test]
@@ -364,9 +399,12 @@ mod tests {
 
     #[test]
     fn test_categories_default() {
-        let config = AppConfig::load_with_file(None);
-        assert_eq!(config.categories.len(), 6);
-        assert!(config.categories.contains(&"electronics".to_string()));
+        let categories: Vec<String> = DEFAULT_CATEGORIES
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        assert_eq!(categories.len(), 6);
+        assert!(categories.contains(&"electronics".to_string()));
     }
 
     #[test]

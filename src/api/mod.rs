@@ -78,17 +78,25 @@ pub async fn rate_limit_middleware(
         return next.run(request).await;
     }
 
-    // Extract peer address from TCP socket — cannot be spoofed by clients.
     let peer_addr = request
         .extensions()
         .get::<SocketAddr>()
         .copied()
         .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
 
+    let rate_limit_key = if path == "/api/chat" || path == "/api/chat/stream" {
+        match auth::extract_user_id_from_token(request.headers(), &state.secrets.jwt_secret) {
+            Ok(user_id) => format!("uid:{user_id}"),
+            Err(_) => format!("ip:{}", peer_addr.ip()),
+        }
+    } else {
+        format!("ip:{}", peer_addr.ip())
+    };
+
     if !state
         .infra
         .rate_limit
-        .check_rate_limit(&peer_addr.to_string())
+        .check_rate_limit(&rate_limit_key)
         .await
     {
         state.infra.metrics.record_rate_limit_rejected();
