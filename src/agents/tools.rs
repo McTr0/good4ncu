@@ -1,13 +1,16 @@
 use crate::services::BusinessEvent;
 use crate::utils::cents_to_yuan;
+use async_trait::async_trait;
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::PgPool;
+use sqlx::{Acquire, PgConnection, PgPool};
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
+use tokio::task::spawn_blocking;
 
 // ---------------------------------------------------------------------------
 // Shared context for all tools
@@ -23,6 +26,22 @@ pub type EmbedFn = Arc<
         + Sync,
 >;
 
+/// EmbedUpdater enables atomic re-embedding of listing content within a DB transaction.
+///
+/// The `embed_and_update` method is called from INSIDE a `spawn_blocking` closure
+/// in `UpdateListingTool.call()`, where the `!Send` PgConnection can safely be used.
+/// Using `#[async_trait(?Send)]` on the impl allows the async HTTP call to generate
+/// a `!Send` future without conflicting with the `Tool::call()` `Send` bound.
+#[async_trait(?Send)]
+pub trait EmbedUpdater: Send + Sync {
+    async fn embed_and_update(
+        &self,
+        content: String,
+        listing_id: String,
+        conn: &mut PgConnection,
+    ) -> Result<(), ToolError>;
+}
+
 /// Shared dependencies injected into every marketplace tool.
 #[derive(Clone)]
 pub struct ToolContext {
@@ -31,6 +50,10 @@ pub struct ToolContext {
     /// Callback to embed and insert a listing into the vector store.
     /// This encapsulates the provider-specific embedding model type.
     pub embed_and_insert: EmbedFn,
+    /// Re-embed and update a listing's vector document within a DB transaction.
+    /// Called from spawn_blocking in UpdateListingTool so the !Send PgConnection
+    /// is safe to use without affecting the Tool::call() Send bound.
+    pub embed_updater: Arc<dyn EmbedUpdater>,
     pub event_tx: mpsc::Sender<BusinessEvent>,
     pub current_user_id: Option<String>,
     /// Notification service for sending in-app alerts (e.g., negotiation requests).
@@ -261,6 +284,16 @@ struct InventoryRow {
     suggested_price_cny: i64,
 }
 
+/// Lightweight row for fetching existing listing data before re-embedding.
+#[derive(sqlx::FromRow)]
+struct ExistingListingRow {
+    title: String,
+    category: String,
+    brand: String,
+    condition_score: i64,
+    description: String,
+}
+
 // ---------------------------------------------------------------------------
 // 3. GetListingDetailsTool
 // ---------------------------------------------------------------------------
@@ -400,41 +433,161 @@ impl Tool for UpdateListingTool {
             return Ok("No fields to update were provided.".to_string());
         }
 
-        let mut qb = sqlx::QueryBuilder::new("UPDATE inventory SET ");
-        let mut sep = qb.separated(", ");
+        let needs_reembedding = args.new_title.is_some() || args.new_description.is_some();
 
-        if let Some(price) = args.new_price {
-            sep.push("suggested_price_cny = ");
-            sep.push_bind_unseparated(price);
-        }
-        if let Some(ref title) = args.new_title {
-            sep.push("title = ");
-            sep.push_bind_unseparated(title);
-        }
-        if let Some(ref desc) = args.new_description {
-            sep.push("description = ");
-            sep.push_bind_unseparated(desc);
-        }
-
-        qb.push(" WHERE id = ");
-        qb.push_bind(&args.listing_id);
-        qb.push(" AND owner_id = ");
-        qb.push_bind(&owner_id);
-        qb.push(" AND status = 'active'");
-
-        let result = qb
-            .build()
-            .execute(&self.ctx.db_pool)
+        // If title or description changed, we must re-embed atomically within the same transaction.
+        // The spawn_blocking + block_on pattern lets us use the async EmbedUpdater
+        // (whose future is !Send due to PgConnection borrow) without violating Tool::call()'s Send bound.
+        if needs_reembedding {
+            // First fetch the current listing so we can build accurate content for re-embedding.
+            let existing = sqlx::query_as::<_, ExistingListingRow>(
+                "SELECT title, category, brand, condition_score, description \
+                 FROM inventory WHERE id = $1 AND owner_id = $2 AND status = 'active'",
+            )
+            .bind(&args.listing_id)
+            .bind(&owner_id)
+            .fetch_optional(&self.ctx.db_pool)
             .await
-            .map_err(|e| ToolError(format!("Update error: {}", e)))?;
+            .map_err(|e| ToolError(format!("Fetch listing error: {}", e)))?;
 
-        if result.rows_affected() == 0 {
-            Ok(format!(
-                "No active listing found with ID: {} (or you don't own it)",
-                args.listing_id
-            ))
+            let (title, category, brand, condition_score, description) = match existing {
+                Some(row) => (
+                    row.title,
+                    row.category,
+                    row.brand,
+                    row.condition_score,
+                    row.description,
+                ),
+                None => {
+                    return Ok(format!(
+                        "No active listing found with ID: {} (or you don't own it)",
+                        args.listing_id
+                    ));
+                }
+            };
+
+            // Apply updates to the fetched fields for accurate content_to_embed
+            let final_title = args.new_title.as_deref().unwrap_or(&title);
+            let final_description = args.new_description.as_deref().unwrap_or(&description);
+
+            let content_to_embed = format!(
+                "Title: {}\nCategory: {}\nBrand: {}\nCondition: {}/10\nDescription: {}",
+                final_title, category, brand, condition_score, final_description
+            );
+
+            let db_pool = self.ctx.db_pool.clone();
+            let embed_updater = self.ctx.embed_updater.clone();
+            let listing_id = args.listing_id.clone();
+            let owner_id_clone = owner_id.clone();
+            let new_price = args.new_price;
+            let new_title = args.new_title.clone();
+            let new_description = args.new_description.clone();
+
+            let update_result = spawn_blocking(move || {
+                let rt = Handle::current();
+                let result: Result<bool, ToolError> = rt.block_on(async move {
+                    let mut conn = db_pool
+                        .acquire()
+                        .await
+                        .map_err(|e| ToolError(format!("Pool acquire error: {}", e)))?;
+                    let mut tx: sqlx::Transaction<'_, sqlx::Postgres> = conn
+                        .begin()
+                        .await
+                        .map_err(|e| ToolError(format!("Transaction error: {}", e)))?;
+
+                    // Re-embed: same transaction so documents.id matches the listing_id
+                    // Note: &mut *tx is required because Transaction doesn't implement Executor,
+                    // but PoolConnection (what tx wraps) does.
+                    #[allow(clippy::explicit_auto_deref)]
+                    embed_updater
+                        .embed_and_update(content_to_embed, listing_id.clone(), &mut *tx)
+                        .await
+                        .map_err(|e| ToolError(format!("Re-embedding error: {}", e)))?;
+
+                    // Inventory UPDATE in the same transaction
+                    let mut qb = sqlx::QueryBuilder::new("UPDATE inventory SET ");
+                    let mut sep = qb.separated(", ");
+                    if let Some(price) = new_price {
+                        sep.push("suggested_price_cny = ");
+                        sep.push_bind_unseparated(price);
+                    }
+                    if let Some(ref title) = new_title {
+                        sep.push("title = ");
+                        sep.push_bind_unseparated(title);
+                    }
+                    if let Some(ref desc) = new_description {
+                        sep.push("description = ");
+                        sep.push_bind_unseparated(desc);
+                    }
+                    qb.push(" WHERE id = ");
+                    qb.push_bind(&listing_id);
+                    qb.push(" AND owner_id = ");
+                    qb.push_bind(&owner_id_clone);
+                    qb.push(" AND status = 'active'");
+
+                    #[allow(clippy::explicit_auto_deref)]
+                    let update_result = qb
+                        .build()
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(|e| ToolError(format!("Update error: {}", e)))?;
+
+                    if update_result.rows_affected() == 0 {
+                        tx.rollback()
+                            .await
+                            .map_err(|e| ToolError(format!("Rollback error: {}", e)))?;
+                        Ok(false)
+                    } else {
+                        tx.commit()
+                            .await
+                            .map_err(|e| ToolError(format!("Commit error: {}", e)))?;
+                        Ok(true)
+                    }
+                });
+                result
+            })
+            .await
+            .map_err(|e| ToolError(format!("Spawn error: {}", e)))??;
+
+            if update_result {
+                Ok(format!(
+                    "Successfully updated listing {} (re-embedded)",
+                    args.listing_id
+                ))
+            } else {
+                Ok(format!(
+                    "No active listing found with ID: {} (or you don't own it)",
+                    args.listing_id
+                ))
+            }
         } else {
-            Ok(format!("Successfully updated listing {}", args.listing_id))
+            // Price-only update — no re-embedding needed; keep it simple
+            let mut qb = sqlx::QueryBuilder::new("UPDATE inventory SET ");
+            let mut sep = qb.separated(", ");
+            if let Some(price) = args.new_price {
+                sep.push("suggested_price_cny = ");
+                sep.push_bind_unseparated(price);
+            }
+            qb.push(" WHERE id = ");
+            qb.push_bind(&args.listing_id);
+            qb.push(" AND owner_id = ");
+            qb.push_bind(&owner_id);
+            qb.push(" AND status = 'active'");
+
+            let result = qb
+                .build()
+                .execute(&self.ctx.db_pool)
+                .await
+                .map_err(|e| ToolError(format!("Update error: {}", e)))?;
+
+            if result.rows_affected() == 0 {
+                Ok(format!(
+                    "No active listing found with ID: {} (or you don't own it)",
+                    args.listing_id
+                ))
+            } else {
+                Ok(format!("Successfully updated listing {}", args.listing_id))
+            }
         }
     }
 }

@@ -3,7 +3,7 @@ use super::{
     PREAMBLE,
 };
 use crate::agents::models::Document;
-use crate::agents::tools::{EmbedFn, ToolContext, ToolError};
+use crate::agents::tools::{EmbedFn, EmbedUpdater, ToolContext, ToolError};
 use crate::services::BusinessEvent;
 use async_trait::async_trait;
 use futures::Stream;
@@ -16,7 +16,7 @@ use rig::providers::gemini;
 use rig::streaming::{StreamedAssistantContent, StreamingCompletion};
 use rig::vector_store::InsertDocuments;
 use rig_postgres::PostgresVectorStore;
-use sqlx::PgPool;
+use sqlx::{PgConnection, PgPool};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
@@ -43,19 +43,15 @@ impl GeminiProvider {
         })
     }
 
-    /// Build the RAG index for dynamic_context and the embed function for tools.
-    ///
-    /// Two separate PostgresVectorStore instances are created:
-    /// - `rag_store`: passed to dynamic_context for RAG context retrieval
-    /// - `embed_fn`: captures db_pool and creates a FRESH store instance per call
-    ///   to insert embeddings; since both stores use the same DB connection,
-    ///   inserts ARE visible to the rag_store's queries.
+    /// Build the RAG index for dynamic_context, the embed function for tools, and the embed_updater
+    /// for atomic re-embedding within a transaction.
     pub fn build_vector_store(
         &self,
         db_pool: &PgPool,
     ) -> (
         PostgresVectorStore<gemini::embedding::EmbeddingModel>,
         EmbedFn,
+        Arc<dyn EmbedUpdater>,
     ) {
         let embedding_model = gemini::embedding::EmbeddingModel::new(
             self.client.clone(),
@@ -110,7 +106,68 @@ impl GeminiProvider {
             })
         });
 
-        (rag_store, embed_fn)
+        // embed_updater: for atomic re-embedding within a transaction (UpdateListingTool).
+        let client_for_updater = self.client.clone();
+        let dim_for_updater = self.embedding_dim;
+        let embed_updater: Arc<dyn EmbedUpdater> = Arc::new(GeminiEmbedUpdater {
+            client: client_for_updater,
+            embedding_dim: dim_for_updater,
+        });
+
+        (rag_store, embed_fn, embed_updater)
+    }
+}
+
+struct GeminiEmbedUpdater {
+    client: gemini::Client,
+    embedding_dim: usize,
+}
+
+#[async_trait(?Send)]
+impl EmbedUpdater for GeminiEmbedUpdater {
+    async fn embed_and_update(
+        &self,
+        content: String,
+        listing_id: String,
+        conn: &mut PgConnection,
+    ) -> Result<(), ToolError> {
+        let embedding_model = gemini::embedding::EmbeddingModel::new(
+            self.client.clone(),
+            gemini::EMBEDDING_001,
+            self.embedding_dim,
+        );
+        let document = Document {
+            id: listing_id.clone(),
+            content: content.clone(),
+        };
+        let embeddings = EmbeddingsBuilder::new(embedding_model)
+            .document(document)
+            .map_err(|e| ToolError(format!("Embedding builder error: {}", e)))?
+            .build()
+            .await
+            .map_err(|e| ToolError(format!("Embeddings API error: {}", e)))?;
+
+        // Extract the embedding vector (Vec<f64>) for SQL binding.
+        let embedding_vec: Vec<f64> = embeddings[0].1.first_ref().vec.clone();
+        let document_json = serde_json::json!({ "id": listing_id, "content": content });
+
+        sqlx::query(
+            "INSERT INTO documents (id, document, embedded_text, embedding) \
+             VALUES ($1, $2::jsonb, $3, $4) \
+             ON CONFLICT (id) DO UPDATE SET \
+               document = EXCLUDED.document, \
+               embedded_text = EXCLUDED.embedded_text, \
+               embedding = EXCLUDED.embedding",
+        )
+        .bind(&listing_id)
+        .bind(&document_json)
+        .bind(&content)
+        .bind(&embedding_vec)
+        .execute(conn)
+        .await
+        .map_err(|e| ToolError(format!("Vector DB error: {}", e)))?;
+
+        Ok(())
     }
 }
 
@@ -126,11 +183,12 @@ impl super::LlmProvider for GeminiProvider {
         event_tx: mpsc::Sender<BusinessEvent>,
         current_user_id: Option<String>,
     ) -> anyhow::Result<Box<dyn MarketplaceAgent>> {
-        let (rag_store, embed_fn) = self.build_vector_store(db_pool);
+        let (rag_store, embed_fn, embed_updater) = self.build_vector_store(db_pool);
 
         let ctx = ToolContext {
             db_pool: db_pool.clone(),
             embed_and_insert: embed_fn,
+            embed_updater,
             event_tx,
             current_user_id,
             notification: crate::services::notification::NotificationService::new(db_pool.clone()),
