@@ -135,8 +135,9 @@ impl ModerationService {
     /// Build a new ModerationService from app config.
     pub fn new(config: &AppConfig) -> Self {
         let phone_re = Regex::new(r"1[3-9]\d{9}").expect("valid phone regex");
-        // WeChat: "微信" or "微信号" followed by optional separator then ID (6-20 alphanum)
-        let wechat_re = Regex::new(r"微[信号]号?\s*[:：\s　]*[A-Za-z0-9_\-]{5,20}")
+        // WeChat: explicit "微信" or "微信号" followed by at least one separator then ID (5-20 alphanum).
+        // Separator is mandatory to avoid false positives on words like "微号" in product descriptions.
+        let wechat_re = Regex::new(r"(?:微 ?信|微 ?信 ?号)\s*[:：\s　]+[A-Za-z0-9_\-]{5,20}")
             .expect("valid wechat regex");
         // QQ: "QQ" or "QQ号" followed by optional separator then 5-12 digits
         let qq_re = Regex::new(r"QQ\s*号?\s*[:：\s　]*\d{5,12}").expect("valid qq regex");

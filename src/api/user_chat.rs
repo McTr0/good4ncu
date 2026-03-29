@@ -882,6 +882,14 @@ pub async fn edit_message(
     )
     .map_err(|_| ApiError::Unauthorized)?;
 
+    // Text content moderation — block prohibited content before any DB operation.
+    let mod_result = state.infra.moderation.check_text(&body.content);
+    if !mod_result.passed {
+        return Err(ApiError::ContentViolation(
+            mod_result.reason.unwrap_or_default(),
+        ));
+    }
+
     if body.content.is_empty() {
         return Err(ApiError::BadRequest("消息内容不能为空".to_string()));
     }

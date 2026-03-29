@@ -146,6 +146,15 @@ pub struct ModerationConfig {
     /// Blocked keyword list (loaded from env var BLOCKED_KEYWORDS, not file).
     #[serde(default)]
     pub blocked_keywords: Option<Vec<String>>,
+    /// Whether image moderation is enabled. Defaults to true.
+    #[serde(default)]
+    pub image_enabled: Option<bool>,
+    /// Alibaba IMAN API URL for image moderation.
+    #[serde(default)]
+    pub image_api_url: Option<String>,
+    /// Alibaba IMAN API key (secret — loaded from env, not file).
+    #[serde(default)]
+    pub image_api_key: Option<String>,
 }
 
 /// CORS configuration.

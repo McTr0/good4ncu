@@ -19,18 +19,24 @@ const MAX_RETRIES: i32 = 3;
 /// Spawn this as a background `tokio::spawn` task in `main.rs`.
 pub async fn run_moderation_worker(db: PgPool) {
     tracing::info!("Moderation worker started");
+    let mut backoff_secs = POLL_INTERVAL_SECS;
+    let max_backoff_secs = 60;
     loop {
         match process_pending_jobs(&db).await {
             Ok(count) => {
                 if count > 0 {
                     tracing::debug!(count, "moderation jobs processed");
                 }
+                // Reset backoff on success.
+                backoff_secs = POLL_INTERVAL_SECS;
             }
             Err(e) => {
-                tracing::error!(%e, "moderation worker error");
+                tracing::error!(%e, "moderation worker error, backing off");
+                // Exponential backoff on consecutive errors.
+                backoff_secs = (backoff_secs * 2).min(max_backoff_secs);
             }
         }
-        tokio::time::sleep(Duration::from_secs(POLL_INTERVAL_SECS)).await;
+        tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
     }
 }
 
@@ -75,19 +81,21 @@ async fn process_pending_jobs(db: &PgPool) -> anyhow::Result<i64> {
                     ("failed", Some(format!("审核服务错误: {}", e)))
                 } else {
                     // Increment retry count and put back to pending.
-                    sqlx::query(
+                    if let Err(e) = sqlx::query(
                         "UPDATE moderation_jobs SET status = 'pending', retry_count = retry_count + 1 WHERE id = $1",
                     )
                     .bind(&id)
                     .execute(db)
                     .await
-                    .ok();
+                    {
+                        tracing::error!(job_id = %id, %e, "failed to re-queue moderation job for retry");
+                    }
                     continue;
                 }
             }
         };
 
-        sqlx::query(
+        if let Err(e) = sqlx::query(
             r#"
             UPDATE moderation_jobs
             SET status = $1, reject_reason = $2, processed_at = CURRENT_TIMESTAMP
@@ -99,12 +107,14 @@ async fn process_pending_jobs(db: &PgPool) -> anyhow::Result<i64> {
         .bind(&id)
         .execute(db)
         .await
-        .ok();
+        {
+            tracing::error!(job_id = %id, %e, "failed to update moderation job final status");
+        }
 
         // Update per-resource moderation status.
-        update_resource_status(db, &resource_type, &resource_id, new_status)
-            .await
-            .ok();
+        if let Err(e) = update_resource_status(db, &resource_type, &resource_id, new_status).await {
+            tracing::error!(resource_type = %resource_type, resource_id = %resource_id, %e, "failed to update per-resource moderation status");
+        }
     }
 
     Ok(count)

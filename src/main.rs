@@ -113,7 +113,7 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
 
     // Content moderation worker: polls pending image moderation jobs.
-    let _moderation_worker_handle = tokio::spawn(
+    let moderation_worker_handle = tokio::spawn(
         services::moderation_worker::run_moderation_worker(db_pool.clone()),
     );
 
@@ -182,6 +182,7 @@ async fn main() -> Result<(), anyhow::Error> {
     event_loop_handle.abort();
     hitl_expire_handle.abort();
     order_worker_handle.abort();
+    moderation_worker_handle.abort();
 
     // Gracefully close the DB pool so Postgres can cleanly收回所有连接
     // and flush any pending transaction results in the buffer.

@@ -27,6 +27,9 @@ pub enum ApiError {
     #[error("请求过于频繁，请稍后再试")]
     RateLimitExceeded,
 
+    #[error("内容包含违规信息: {0}")]
+    ContentViolation(String),
+
     #[error("服务器内部错误")]
     Internal(#[from] anyhow::Error),
 }
@@ -49,6 +52,10 @@ impl IntoResponse for ApiError {
             ApiError::RateLimitExceeded => (
                 StatusCode::TOO_MANY_REQUESTS,
                 "请求过于频繁，请稍后再试".to_string(),
+            ),
+            ApiError::ContentViolation(msg) => (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                format!("内容包含违规信息: {}", msg),
             ),
             ApiError::Internal(ref e) => {
                 // Log the full error for server-side traceability before hiding it from the client.
@@ -84,6 +91,7 @@ mod tests {
             ApiError::Forbidden => "您没有权限执行此操作".to_string(),
             ApiError::Conflict(ref m) => format!("冲突: {}", m),
             ApiError::RateLimitExceeded => "请求过于频繁，请稍后再试".to_string(),
+            ApiError::ContentViolation(ref m) => format!("内容包含违规信息: {}", m),
             ApiError::Internal(_) => "服务器内部错误".to_string(),
         };
         assert_eq!(full_display_msg.as_str(), expected_error_msg);
@@ -246,6 +254,10 @@ mod tests {
             (ApiError::Forbidden, StatusCode::FORBIDDEN),
             (ApiError::Conflict("test".to_string()), StatusCode::CONFLICT),
             (ApiError::RateLimitExceeded, StatusCode::TOO_MANY_REQUESTS),
+            (
+                ApiError::ContentViolation("测试".to_string()),
+                StatusCode::UNPROCESSABLE_ENTITY,
+            ),
             (
                 ApiError::Internal(anyhow::anyhow!("test")),
                 StatusCode::INTERNAL_SERVER_ERROR,

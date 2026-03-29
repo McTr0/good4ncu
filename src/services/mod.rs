@@ -5,6 +5,8 @@ use tokio::sync::mpsc;
 pub mod admin;
 pub mod chat;
 pub mod hitl_expire;
+pub mod moderation;
+pub mod moderation_worker;
 pub mod notification;
 pub mod order;
 pub mod order_worker;
