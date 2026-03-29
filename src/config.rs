@@ -30,6 +30,7 @@ pub struct AppConfig {
     pub minimax_api_key: Option<String>,
     pub minimax_api_base_url: Option<String>,
     pub jwt_secret: String,
+    pub jwt_secret_old: Option<String>,
     pub database_url: String,
     pub oss_access_key_id: Option<String>,
     pub oss_access_key_secret: Option<String>,
@@ -61,6 +62,10 @@ pub struct AppConfig {
     pub price_tolerance: f64,
     pub categories: Vec<String>,
     pub blocked_keywords: Vec<String>,
+    // Moderation
+    pub moderation_image_enabled: bool,
+    pub moderation_image_api_url: Option<String>,
+    pub moderation_image_api_key: Option<String>,
 }
 
 impl fmt::Debug for AppConfig {
@@ -73,6 +78,10 @@ impl fmt::Debug for AppConfig {
             )
             .field("minimax_api_base_url", &self.minimax_api_base_url)
             .field("jwt_secret", &"[REDACTED]")
+            .field(
+                "jwt_secret_old",
+                &self.jwt_secret_old.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("database_url", &"[REDACTED]")
             .field("llm_provider", &self.llm_provider)
             .field("vector_dim", &self.vector_dim)
@@ -113,6 +122,11 @@ impl fmt::Debug for AppConfig {
             .field("price_tolerance", &self.price_tolerance)
             .field("categories", &self.categories)
             .field("blocked_keywords", &self.blocked_keywords)
+            .field("moderation_image_enabled", &self.moderation_image_enabled)
+            .field(
+                "moderation_image_api_key",
+                &self.moderation_image_api_key.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -177,6 +191,8 @@ impl AppConfig {
         if jwt_secret.len() < 32 {
             panic!("JWT_SECRET must be at least 32 characters for security");
         }
+
+        let jwt_secret_old = std::env::var("JWT_SECRET_OLD").ok();
 
         // CORS: env > file > default (empty = allow all)
         let cors_origins = std::env::var("CORS_ORIGINS")
@@ -294,11 +310,24 @@ impl AppConfig {
                     .collect()
             });
 
+        // Image moderation: file > default (true)
+        let moderation_image_enabled = file
+            .as_ref()
+            .and_then(|f| f.moderation.image_enabled)
+            .unwrap_or(true);
+        let moderation_image_api_url = file
+            .as_ref()
+            .and_then(|f| f.moderation.image_api_url.clone());
+        let moderation_image_api_key = file
+            .as_ref()
+            .and_then(|f| f.moderation.image_api_key.clone());
+
         Arc::new(Self {
             gemini_api_key: gemini_api_key.unwrap_or_default(),
             minimax_api_key,
             minimax_api_base_url,
             jwt_secret,
+            jwt_secret_old,
             database_url: std::env::var("DATABASE_URL")
                 .expect("DATABASE_URL must be set in environment"),
             llm_provider,
@@ -325,6 +354,9 @@ impl AppConfig {
             max_keyword_len,
             price_tolerance,
             categories,
+            moderation_image_enabled,
+            moderation_image_api_url,
+            moderation_image_api_key,
         })
     }
 }
@@ -340,6 +372,7 @@ mod tests {
             minimax_api_key: Some("minimax-secret".to_string()),
             minimax_api_base_url: None,
             jwt_secret: "jwt-secret-that-is-at-least-32-characters".to_string(),
+            jwt_secret_old: None,
             database_url: "postgres://user:pass@localhost/db".to_string(),
             oss_access_key_id: Some("oss-key-id".to_string()),
             oss_access_key_secret: Some("oss-key-secret".to_string()),
@@ -368,6 +401,9 @@ mod tests {
                 .map(|s| (*s).to_string())
                 .collect(),
             blocked_keywords: vec![],
+            moderation_image_enabled: true,
+            moderation_image_api_url: None,
+            moderation_image_api_key: Some("test-api-key".to_string()),
         };
         let debug_str = format!("{:?}", config);
         assert!(debug_str.contains("[REDACTED]"));

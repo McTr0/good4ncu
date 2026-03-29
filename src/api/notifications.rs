@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::auth::extract_user_id_from_token;
+use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
 use crate::api::AppState;
 
@@ -45,8 +45,12 @@ pub async fn get_notifications(
     headers: HeaderMap,
     Query(query): Query<NotificationQuery>,
 ) -> Result<Json<NotificationResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = query.limit.unwrap_or(20).min(100);
     let offset = query.offset.unwrap_or(0);
@@ -104,8 +108,12 @@ pub async fn mark_notification_read(
     headers: HeaderMap,
     Path(notification_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let marked = state
         .infra
@@ -126,8 +134,12 @@ pub async fn mark_all_notifications_read(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let count = state
         .infra

@@ -5,7 +5,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::api::auth::extract_user_id_from_token;
+use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::repositories::{CreateListingInput, ListingRepository, UpdateListingInput};
@@ -189,7 +189,12 @@ pub async fn get_listing(
 ) -> Result<Json<ListingDetail>, ApiError> {
     // Auth optional — guests can browse listing details. The only owner info
     // exposed is username (no email/phone), which is appropriate for a marketplace.
-    let viewer_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret).ok();
+    let viewer_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .ok();
 
     // Single query with JOIN to fetch listing and owner username together (avoids N+1)
     let (listing, owner_username) = state
@@ -229,8 +234,12 @@ pub async fn create_listing(
     headers: HeaderMap,
     Json(payload): Json<CreateListingRequest>,
 ) -> Result<Json<CreateListingResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Validate input
     if payload.title.is_empty() {
@@ -272,6 +281,26 @@ pub async fn create_listing(
         ));
     }
 
+    // Text content moderation — block prohibited content before persisting.
+    let text_to_check = format!(
+        "{}\n{}\n{}",
+        payload.title,
+        payload.brand,
+        payload.description.as_deref().unwrap_or_default(),
+    );
+    let defects_text = payload.defects.join(" ");
+    let full_text = if defects_text.is_empty() {
+        text_to_check
+    } else {
+        format!("{}\n{}", text_to_check, defects_text)
+    };
+    let mod_result = state.infra.moderation.check_text(&full_text);
+    if !mod_result.passed {
+        return Err(ApiError::ContentViolation(
+            mod_result.reason.unwrap_or_default(),
+        ));
+    }
+
     let listing_id = state
         .listing_repo
         .create(CreateListingInput {
@@ -300,8 +329,12 @@ pub async fn update_listing(
     Path(id): Path<String>,
     Json(payload): Json<UpdateListingRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Validate individual fields before building update input
     if let Some(ref title) = payload.title {
@@ -356,6 +389,27 @@ pub async fn update_listing(
             .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
     }
 
+    // Text content moderation — check only the fields being updated.
+    let defects_joined = payload.defects.as_ref().map(|d| d.join(" "));
+    let fields_to_check = [
+        payload.title.as_deref(),
+        payload.brand.as_deref(),
+        payload.description.as_deref(),
+        defects_joined.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join("\n");
+    if !fields_to_check.is_empty() {
+        let mod_result = state.infra.moderation.check_text(&fields_to_check);
+        if !mod_result.passed {
+            return Err(ApiError::ContentViolation(
+                mod_result.reason.unwrap_or_default(),
+            ));
+        }
+    }
+
     state
         .listing_repo
         .update(
@@ -389,8 +443,12 @@ pub async fn delete_listing(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     state
         .listing_repo
@@ -412,8 +470,12 @@ pub async fn relist_listing(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     state
         .listing_repo
@@ -455,8 +517,12 @@ pub async fn recognize_item(
     headers: HeaderMap,
     Json(payload): Json<RecognizeRequest>,
 ) -> Result<Json<RecognizedItem>, ApiError> {
-    let _ = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let _ = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if payload.image_base64.is_empty() {
         return Err(ApiError::BadRequest("image_base64 is required".to_string()));
@@ -551,6 +617,21 @@ Be honest about defects. If you cannot identify the item, return category="other
             json_str
         ))
     })?;
+
+    // Moderate AI-generated content before returning it to the user.
+    let ai_text = format!(
+        "{}\n{}\n{}\n{}",
+        recognized.title,
+        recognized.brand,
+        recognized.description,
+        recognized.defects.join(" "),
+    );
+    let mod_result = state.infra.moderation.check_text(&ai_text);
+    if !mod_result.passed {
+        tracing::warn!(reason = ?mod_result.reason, "AI-generated content flagged by moderation");
+        // Don't block the response — just log and continue.
+        // The user can still use the suggestion as a starting point.
+    }
 
     Ok(Json(recognized))
 }

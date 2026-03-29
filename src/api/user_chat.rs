@@ -20,7 +20,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::api::auth::extract_user_id_from_token;
+use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
 use crate::api::ws;
 use crate::api::AppState;
@@ -231,8 +231,12 @@ pub async fn connect_request(
     headers: HeaderMap,
     Json(body): Json<ConnectRequestBody>,
 ) -> Result<Json<ConnectRequestResponse>, ApiError> {
-    let requester_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let requester_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if requester_id == body.receiver_id {
         return Err(ApiError::BadRequest("不能向自己发起连接".to_string()));
@@ -300,8 +304,12 @@ pub async fn connect_accept(
     headers: HeaderMap,
     Json(body): Json<ConnectAcceptBody>,
 ) -> Result<Json<ConnectAcceptResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     tracing::info!(user_id = %user_id, connection_id = %body.connection_id, "ACCEPT_CONNECTION");
 
@@ -365,8 +373,12 @@ pub async fn connect_reject(
     headers: HeaderMap,
     Json(body): Json<ConnectRejectBody>,
 ) -> Result<Json<ConnectRejectResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
         "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
@@ -415,8 +427,12 @@ pub async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ConnectionListResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let rows = sqlx::query(
         r#"SELECT
@@ -489,8 +505,12 @@ pub async fn get_connection_messages(
     Path(connection_id): Path<String>,
     Query(params): Query<MessageListQuery>,
 ) -> Result<Json<MessageListResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
@@ -623,14 +643,26 @@ pub async fn send_connection_message(
     Path(connection_id): Path<String>,
     Json(body): Json<SendMessageBody>,
 ) -> Result<Json<SendMessageResponse>, ApiError> {
-    let sender_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let sender_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if body.content.is_empty() {
         return Err(ApiError::BadRequest("消息内容不能为空".to_string()));
     }
     if body.content.len() > 2000 {
         return Err(ApiError::BadRequest("消息内容不能超过2000字符".to_string()));
+    }
+
+    // Text content moderation — block prohibited content before persisting.
+    let mod_result = state.infra.moderation.check_text(&body.content);
+    if !mod_result.passed {
+        return Err(ApiError::ContentViolation(
+            mod_result.reason.unwrap_or_default(),
+        ));
     }
 
     let connection_uuid = uuid::Uuid::parse_str(&connection_id).ok();
@@ -753,8 +785,12 @@ pub async fn mark_message_read(
     headers: HeaderMap,
     Path(message_id): Path<i64>,
 ) -> Result<Json<MarkReadResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
         r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cm.conversation_id, cc.status as conn_status
@@ -839,8 +875,12 @@ pub async fn edit_message(
     Path(message_id): Path<i64>,
     Json(body): Json<EditMessageBody>,
 ) -> Result<Json<EditMessageResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if body.content.is_empty() {
         return Err(ApiError::BadRequest("消息内容不能为空".to_string()));
@@ -910,8 +950,12 @@ pub async fn typing_indicator(
     headers: HeaderMap,
     Json(body): Json<TypingBody>,
 ) -> Result<(), ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let connection_uuid = uuid::Uuid::parse_str(&body.conversation_id).ok();
     let is_special = body.conversation_id == "__agent__" || body.conversation_id == "global";
@@ -978,8 +1022,12 @@ pub async fn mark_connection_read(
     headers: HeaderMap,
     Path(connection_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let connection_uuid = uuid::Uuid::parse_str(&connection_id).ok();
     let is_special = connection_id == "__agent__" || connection_id == "global";

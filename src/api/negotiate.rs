@@ -12,7 +12,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::api::auth::extract_user_id_from_token;
+use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
 use crate::api::AppState;
 
@@ -39,8 +39,12 @@ pub async fn list_negotiations(
     headers: HeaderMap,
     Json(_params): Json<ListNegotiationsParams>,
 ) -> Result<Json<ListNegotiationsResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Sellers see: pending (awaiting their response) and expired (auto-cancelled).
     // Buyers see: countered (awaiting their accept/reject), approved/rejected (final),
@@ -114,8 +118,12 @@ pub async fn respond_negotiation(
     Path(id): Path<String>,
     Json(payload): Json<NegotiationResponse>,
 ) -> Result<Json<NegotiationResponseResult>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Fetch the request and verify ownership
     let row = sqlx::query(
@@ -272,8 +280,12 @@ pub async fn accept_counter_negotiation(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<NegotiationResponseResult>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Fetch the request and verify the buyer owns it.
     let row = sqlx::query(
@@ -368,8 +380,12 @@ pub async fn reject_counter_negotiation(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<NegotiationResponseResult>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
         "SELECT id, buyer_id, seller_id, listing_id, status FROM hitl_requests WHERE id = $1",

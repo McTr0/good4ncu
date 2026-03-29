@@ -403,8 +403,12 @@ pub async fn logout(
     headers: HeaderMap,
     Json(payload): Json<LogoutRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if let Some(ref token) = payload.refresh_token {
         revoke_refresh_token(&state.auth_repo, token).await?;
@@ -430,8 +434,12 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if payload.current_password.is_empty() {
         return Err(ApiError::BadRequest("当前密码不能为空".to_string()));
@@ -514,6 +522,24 @@ pub fn extract_user_id_from_token_str(token: &str, jwt_secret: &str) -> Result<S
     Ok(token_data.claims.sub)
 }
 
+pub fn extract_user_id_from_token_str_with_fallback(
+    token: &str,
+    jwt_secret: &str,
+    jwt_secret_old: Option<&str>,
+) -> Result<String, String> {
+    match extract_user_id_from_token_str(token, jwt_secret) {
+        Ok(user_id) => Ok(user_id),
+        Err(primary_err) => {
+            if let Some(old) = jwt_secret_old {
+                extract_user_id_from_token_str(token, old)
+                    .map_err(|_| format!("Invalid token (primary+fallback): {}", primary_err))
+            } else {
+                Err(primary_err)
+            }
+        }
+    }
+}
+
 /// Extract and validate the user_id and role from a raw JWT token string.
 /// Returns `Ok((user_id, role))` if the token is valid, or `Err(message)` if invalid.
 pub fn extract_user_id_and_role_from_token_str(
@@ -528,6 +554,24 @@ pub fn extract_user_id_and_role_from_token_str(
     .map_err(|e| format!("Invalid token: {}", e))?;
 
     Ok((token_data.claims.sub, token_data.claims.role))
+}
+
+pub fn extract_user_id_and_role_from_token_str_with_fallback(
+    token: &str,
+    jwt_secret: &str,
+    jwt_secret_old: Option<&str>,
+) -> Result<(String, String), String> {
+    match extract_user_id_and_role_from_token_str(token, jwt_secret) {
+        Ok(v) => Ok(v),
+        Err(primary_err) => {
+            if let Some(old) = jwt_secret_old {
+                extract_user_id_and_role_from_token_str(token, old)
+                    .map_err(|_| format!("Invalid token (primary+fallback): {}", primary_err))
+            } else {
+                Err(primary_err)
+            }
+        }
+    }
 }
 
 /// Extract and validate the user_id from the Authorization header using the provided secret.
@@ -545,8 +589,26 @@ pub fn extract_user_id_from_token(headers: &HeaderMap, jwt_secret: &str) -> Resu
     extract_user_id_from_token_str(token, jwt_secret)
 }
 
+pub fn extract_user_id_from_token_with_fallback(
+    headers: &HeaderMap,
+    jwt_secret: &str,
+    jwt_secret_old: Option<&str>,
+) -> Result<String, String> {
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Missing Authorization header".to_string())?;
+
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| "Invalid Authorization format".to_string())?;
+
+    extract_user_id_from_token_str_with_fallback(token, jwt_secret, jwt_secret_old)
+}
+
 /// Extract and validate the user_id and role from the Authorization header using the provided secret.
 /// Returns `Ok((user_id, role))` if the token is valid, or `Err(message)` if invalid/missing.
+#[allow(dead_code)]
 pub fn extract_user_id_and_role_from_token(
     headers: &HeaderMap,
     jwt_secret: &str,
@@ -561,6 +623,24 @@ pub fn extract_user_id_and_role_from_token(
         .ok_or_else(|| "Invalid Authorization format".to_string())?;
 
     extract_user_id_and_role_from_token_str(token, jwt_secret)
+}
+
+#[allow(dead_code)]
+pub fn extract_user_id_and_role_from_token_with_fallback(
+    headers: &HeaderMap,
+    jwt_secret: &str,
+    jwt_secret_old: Option<&str>,
+) -> Result<(String, String), String> {
+    let auth_header = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| "Missing Authorization header".to_string())?;
+
+    let token = auth_header
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| "Invalid Authorization format".to_string())?;
+
+    extract_user_id_and_role_from_token_str_with_fallback(token, jwt_secret, jwt_secret_old)
 }
 
 #[cfg(test)]

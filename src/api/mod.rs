@@ -3,6 +3,7 @@ use crate::api::metrics::MetricsService;
 use crate::llm::{LlmProvider, MarketplaceAgent};
 use crate::repositories;
 use crate::services::chat::ChatService;
+use crate::services::moderation::ModerationService;
 use crate::services::notification::NotificationService;
 use crate::services::order;
 use crate::services::BusinessEvent;
@@ -179,6 +180,7 @@ where
 #[derive(Clone)]
 pub struct ApiSecrets {
     pub jwt_secret: String,
+    pub jwt_secret_old: Option<String>,
     pub gemini_api_key: String,
     /// Alibaba Cloud OSS configuration for STS direct-upload.
     pub oss_endpoint: String,
@@ -200,6 +202,7 @@ pub struct ApiInfrastructure {
     pub metrics: Arc<MetricsService>,
     pub order_service: order::OrderService,
     pub admin_service: crate::services::admin::AdminService,
+    pub moderation: ModerationService,
 }
 
 /// LLM provider + intent routing.
@@ -456,8 +459,12 @@ async fn handle_chat(
         tracing::debug!(client_ip = %proxy_ip, peer = %addr, "Chat request");
     }
 
-    let current_user_id = auth::extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let current_user_id = auth::extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Route: lightweight intent classification before doing any LLM work.
     // Blocked content and simple chat greetings short-circuit here — no token spent.
@@ -672,16 +679,24 @@ async fn handle_chat_stream(
 
     let has_auth_header = headers.get("Authorization").is_some();
     let current_user_id = if has_auth_header {
-        auth::extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-            .map_err(|_| ApiError::Unauthorized)?
+        auth::extract_user_id_from_token_with_fallback(
+            &headers,
+            &state.secrets.jwt_secret,
+            state.secrets.jwt_secret_old.as_deref(),
+        )
+        .map_err(|_| ApiError::Unauthorized)?
     } else {
         let token = params
             .token
             .as_deref()
             .filter(|v| !v.is_empty())
             .ok_or(ApiError::Unauthorized)?;
-        auth::extract_user_id_from_token_str(token, &state.secrets.jwt_secret)
-            .map_err(|_| ApiError::Unauthorized)?
+        auth::extract_user_id_from_token_str_with_fallback(
+            token,
+            &state.secrets.jwt_secret,
+            state.secrets.jwt_secret_old.as_deref(),
+        )
+        .map_err(|_| ApiError::Unauthorized)?
     };
 
     // Route: lightweight intent classification before doing any LLM work.

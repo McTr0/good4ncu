@@ -5,7 +5,7 @@
 //!
 //! Security: Credentials are short-lived (1 hour), scoped to PutObject only.
 
-use crate::api::auth::extract_user_id_from_token;
+use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
 use crate::api::AppState;
 use axum::{extract::State, http::HeaderMap, Json};
@@ -22,8 +22,12 @@ pub async fn get_upload_token(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<StsResponse>, ApiError> {
-    let _user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let _user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Read OSS config from AppState (passed from AppConfig at startup).
     let role_arn = state

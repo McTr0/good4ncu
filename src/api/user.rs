@@ -6,7 +6,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 
-use crate::api::auth::extract_user_id_from_token;
+use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::repositories::{Listing, UserProfile, UserRepository};
@@ -54,8 +54,12 @@ pub async fn get_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<UserProfile>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let profile = state.user_repo.get_profile(&user_id).await?;
 
@@ -75,8 +79,12 @@ pub async fn update_profile(
     headers: HeaderMap,
     Json(body): Json<UpdateProfileRequest>,
 ) -> Result<Json<UserProfile>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     if let Some(username) = &body.username {
         if username.is_empty() {
@@ -84,6 +92,13 @@ pub async fn update_profile(
         }
         if username.len() > 50 {
             return Err(ApiError::BadRequest("用户名不能超过50个字符".to_string()));
+        }
+        // Text content moderation — block prohibited content in username.
+        let mod_result = state.infra.moderation.check_text(username);
+        if !mod_result.passed {
+            return Err(ApiError::ContentViolation(
+                mod_result.reason.unwrap_or_default(),
+            ));
         }
         state.user_repo.update_username(&user_id, username).await?;
     }
@@ -111,6 +126,13 @@ pub async fn update_profile(
         if !avatar_url.starts_with("http://") && !avatar_url.starts_with("https://") {
             return Err(ApiError::BadRequest("头像URL格式无效".to_string()));
         }
+        // Submit avatar image for async moderation.
+        state
+            .infra
+            .moderation
+            .submit_image_job(&state.infra.db, &user_id, avatar_url, "avatar")
+            .await
+            .ok();
         state.user_repo.update_avatar(&user_id, avatar_url).await?;
     }
 
@@ -124,8 +146,12 @@ pub async fn get_user_listings(
     headers: HeaderMap,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedListings>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let user_id = extract_user_id_from_token_with_fallback(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(20).min(100);
     let offset = params.offset.unwrap_or(0).max(0);

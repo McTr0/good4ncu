@@ -112,6 +112,11 @@ async fn main() -> Result<(), anyhow::Error> {
         Arc::clone(&broadcast),
     ));
 
+    // Content moderation worker: polls pending image moderation jobs.
+    let _moderation_worker_handle = tokio::spawn(
+        services::moderation_worker::run_moderation_worker(db_pool.clone()),
+    );
+
     // Build repository layer (concrete types - simpler than dyn traits for now)
     let listing_repo = repositories::PostgresListingRepository::new(db_pool.clone());
     let user_repo = repositories::PostgresUserRepository::new(db_pool.clone());
@@ -122,6 +127,7 @@ async fn main() -> Result<(), anyhow::Error> {
     let app_state = api::AppState {
         secrets: api::ApiSecrets {
             jwt_secret: config.jwt_secret.clone(),
+            jwt_secret_old: config.jwt_secret_old.clone(),
             gemini_api_key: config.gemini_api_key.clone(),
             oss_endpoint: config.oss_endpoint.clone(),
             oss_bucket: config.oss_bucket.clone(),
@@ -144,6 +150,7 @@ async fn main() -> Result<(), anyhow::Error> {
             metrics: Arc::clone(&metrics),
             order_service: services::order::OrderService::new(db_pool.clone()),
             admin_service,
+            moderation: services::moderation::ModerationService::new(&config),
         },
         agents: api::ApiAgents {
             llm_provider: Arc::clone(&llm_provider),
