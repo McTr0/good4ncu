@@ -11,6 +11,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 #[derive(Clone)]
 struct NoopEmbedUpdater;
@@ -50,15 +51,22 @@ fn build_tool_context(db_pool: sqlx::PgPool, current_user_id: Option<&str>) -> T
 #[tokio::test]
 async fn test_update_listing_tool_denies_cross_owner_mutation() {
     with_test_pool(|pool| async move {
+        let suffix = Uuid::new_v4().to_string();
+        let owner_id = format!("owner-user-{suffix}");
+        let attacker_id = format!("attacker-user-{suffix}");
+        let listing_id = format!("listing-auth-{suffix}");
+        let owner_username = format!("owner-{suffix}");
+        let attacker_username = format!("attacker-{suffix}");
+
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
-            .bind("owner-user")
-            .bind("owner")
+            .bind(&owner_id)
+            .bind(&owner_username)
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
-            .bind("attacker-user")
-            .bind("attacker")
+            .bind(&attacker_id)
+            .bind(&attacker_username)
             .execute(&pool)
             .await
             .unwrap();
@@ -67,18 +75,18 @@ async fn test_update_listing_tool_denies_cross_owner_mutation() {
             "INSERT INTO inventory (id, title, category, brand, condition_score, suggested_price_cny, defects, owner_id) \
              VALUES ($1, 'Owner Item', 'misc', 'Brand', 8, 10000, '[]', $2)",
         )
-        .bind("listing-auth-1")
-        .bind("owner-user")
+        .bind(&listing_id)
+        .bind(&owner_id)
         .execute(&pool)
         .await
         .unwrap();
 
         let tool = UpdateListingTool {
-            ctx: build_tool_context(pool.clone(), Some("attacker-user")),
+            ctx: build_tool_context(pool.clone(), Some(attacker_id.as_str())),
         };
         let result = tool
             .call(UpdateListingArgs {
-                listing_id: "listing-auth-1".to_string(),
+                listing_id: listing_id.clone(),
                 new_price: Some(9999),
                 new_title: None,
                 new_description: None,
@@ -89,7 +97,7 @@ async fn test_update_listing_tool_denies_cross_owner_mutation() {
         assert!(result.contains("or you don't own it"));
 
         let row = sqlx::query("SELECT suggested_price_cny FROM inventory WHERE id = $1")
-            .bind("listing-auth-1")
+            .bind(&listing_id)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -102,15 +110,22 @@ async fn test_update_listing_tool_denies_cross_owner_mutation() {
 #[tokio::test]
 async fn test_delete_listing_tool_denies_cross_owner_mutation() {
     with_test_pool(|pool| async move {
+        let suffix = Uuid::new_v4().to_string();
+        let owner_id = format!("owner-user-{suffix}");
+        let attacker_id = format!("attacker-user-{suffix}");
+        let listing_id = format!("listing-auth-{suffix}");
+        let owner_username = format!("owner-{suffix}");
+        let attacker_username = format!("attacker-{suffix}");
+
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
-            .bind("owner-user")
-            .bind("owner")
+            .bind(&owner_id)
+            .bind(&owner_username)
             .execute(&pool)
             .await
             .unwrap();
         sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
-            .bind("attacker-user")
-            .bind("attacker")
+            .bind(&attacker_id)
+            .bind(&attacker_username)
             .execute(&pool)
             .await
             .unwrap();
@@ -119,18 +134,18 @@ async fn test_delete_listing_tool_denies_cross_owner_mutation() {
             "INSERT INTO inventory (id, title, category, brand, condition_score, suggested_price_cny, defects, owner_id) \
              VALUES ($1, 'Owner Item', 'misc', 'Brand', 8, 10000, '[]', $2)",
         )
-        .bind("listing-auth-2")
-        .bind("owner-user")
+        .bind(&listing_id)
+        .bind(&owner_id)
         .execute(&pool)
         .await
         .unwrap();
 
         let tool = DeleteListingTool {
-            ctx: build_tool_context(pool.clone(), Some("attacker-user")),
+            ctx: build_tool_context(pool.clone(), Some(attacker_id.as_str())),
         };
         let result = tool
             .call(DeleteListingArgs {
-                listing_id: "listing-auth-2".to_string(),
+                listing_id: listing_id.clone(),
             })
             .await
             .unwrap();
@@ -138,7 +153,7 @@ async fn test_delete_listing_tool_denies_cross_owner_mutation() {
         assert!(result.contains("or you don't own it"));
 
         let row = sqlx::query("SELECT status FROM inventory WHERE id = $1")
-            .bind("listing-auth-2")
+            .bind(&listing_id)
             .fetch_one(&pool)
             .await
             .unwrap();
