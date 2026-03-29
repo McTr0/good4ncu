@@ -64,41 +64,16 @@ pub enum OrderError {
     Unauthorized,
     #[error("Forbidden")]
     Forbidden,
+    #[error("Listing already sold")]
+    AlreadySold,
     #[error("Database error: {0}")]
     Db(#[from] sqlx::Error),
+    #[error("Repository error: {0}")]
+    Repo(#[from] crate::api::error::ApiError),
 }
 
-pub struct OrderRow {
-    pub id: String,
-    pub listing_id: String,
-    pub buyer_id: String,
-    pub seller_id: String,
-    pub final_price: i64,
-    pub status: String,
-    pub cancellation_reason: Option<String>,
-    pub paid_at: Option<DateTime<Utc>>,
-    pub shipped_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-    pub cancelled_at: Option<DateTime<Utc>>,
-    pub created_at: DateTime<Utc>,
-    pub buyer_username: String,
-    pub seller_username: String,
-    pub listing_title: String,
-}
-
-pub struct OrderSummaryRow {
-    pub id: String,
-    pub listing_id: String,
-    pub listing_title: String,
-    pub buyer_id: String,
-    pub seller_id: String,
-    pub final_price: i64,
-    pub status: String,
-    pub created_at: DateTime<Utc>,
-    pub role: String,
-    pub buyer_username: String,
-    pub seller_username: String,
-}
+// sqlx row types — use FromRow derive + column name aliases
+pub type OrderSummaryRow = SqlxOrderSummaryRow;
 
 impl OrderService {
     pub fn new(db: PgPool) -> Self {
@@ -113,8 +88,27 @@ impl OrderService {
         seller_id: &str,
         final_price: i64,
     ) -> Result<String, OrderError> {
-        let order_id = uuid::Uuid::new_v4().to_string();
+        let mut tx: sqlx::Transaction<'_, sqlx::Postgres> = sqlx::Acquire::begin(&self.db)
+            .await
+            .map_err(OrderError::Db)?;
 
+        // Atomically mark listing as sold
+        let updated = sqlx::query(
+            r#"UPDATE inventory SET status = 'sold' WHERE id = $1 AND status = 'active'"#,
+        )
+        .bind(listing_id)
+        .execute(&mut *tx)
+        .await
+        .map_err(OrderError::Db)?;
+
+        if updated.rows_affected() == 0 {
+            return Err(OrderError::AlreadySold);
+        }
+
+        let order_id = uuid::Uuid::new_v4().to_string();
+        
+        // Note: Using query instead of repo because we are inside a transaction
+        // Future: Repo should support transactions
         sqlx::query(
             r#"
             INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status)
@@ -126,18 +120,20 @@ impl OrderService {
         .bind(buyer_id)
         .bind(seller_id)
         .bind(final_price)
-        .execute(&self.db)
+        .execute(&mut *tx)
         .await
         .map_err(OrderError::Db)?;
+
+        tx.commit().await.map_err(OrderError::Db)?;
 
         Ok(order_id)
     }
 
-    /// Get order with buyer/seller info.
+    /// Get order with buyer/seller info using a direct joined query.
     pub async fn get_order_with_details(
         &self,
         order_id: &str,
-    ) -> Result<Option<OrderRow>, OrderError> {
+    ) -> Result<Option<SqlxOrderRow>, OrderError> {
         let row = sqlx::query_as::<_, SqlxOrderRow>(
             r#"
             SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
@@ -158,23 +154,7 @@ impl OrderService {
         .await
         .map_err(OrderError::Db)?;
 
-        Ok(row.map(|r| OrderRow {
-            id: r.id,
-            listing_id: r.listing_id,
-            buyer_id: r.buyer_id,
-            seller_id: r.seller_id,
-            final_price: r.final_price,
-            status: r.status,
-            cancellation_reason: r.cancellation_reason,
-            paid_at: r.paid_at,
-            shipped_at: r.shipped_at,
-            completed_at: r.completed_at,
-            cancelled_at: r.cancelled_at,
-            created_at: r.created_at,
-            buyer_username: r.buyer_username,
-            seller_username: r.seller_username,
-            listing_title: r.listing_title,
-        }))
+        Ok(row)
     }
 
     /// Get paginated orders for a user.
@@ -185,20 +165,34 @@ impl OrderService {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<OrderSummaryRow>, i64), OrderError> {
-        let where_clause = match role {
-            Some("buyer") => "WHERE o.buyer_id = $1",
-            Some("seller") => "WHERE o.seller_id = $1",
-            _ => "WHERE (o.buyer_id = $1 OR o.seller_id = $1)",
+        let (where_clause, total): (String, i64) = match role {
+            Some("buyer") => {
+                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE buyer_id = $1")
+                    .bind(user_id)
+                    .fetch_one(&self.db)
+                    .await
+                    .map_err(OrderError::Db)?;
+                ("WHERE o.buyer_id = $1".to_string(), count)
+            }
+            Some("seller") => {
+                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE seller_id = $1")
+                    .bind(user_id)
+                    .fetch_one(&self.db)
+                    .await
+                    .map_err(OrderError::Db)?;
+                ("WHERE o.seller_id = $1".to_string(), count)
+            }
+            _ => {
+                let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM orders WHERE buyer_id = $1 OR seller_id = $1")
+                    .bind(user_id)
+                    .fetch_one(&self.db)
+                    .await
+                    .map_err(OrderError::Db)?;
+                ("WHERE (o.buyer_id = $1 OR o.seller_id = $1)".to_string(), count)
+            }
         };
 
-        let total: i64 =
-            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM orders o {}", where_clause))
-                .bind(user_id)
-                .fetch_one(&self.db)
-                .await
-                .map_err(OrderError::Db)?;
-
-        let rows: Vec<SqlxOrderSummaryRow> = sqlx::query_as(&format!(
+        let rows = sqlx::query_as::<_, SqlxOrderSummaryRow>(&format!(
             r#"
             SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
                    o.status, o.created_at,
@@ -222,31 +216,43 @@ impl OrderService {
         .await
         .map_err(OrderError::Db)?;
 
-        let items = rows
-            .into_iter()
-            .map(|r| {
-                let role = if r.buyer_id == user_id {
-                    "buyer"
-                } else {
-                    "seller"
-                };
-                OrderSummaryRow {
-                    id: r.id,
-                    listing_id: r.listing_id,
-                    listing_title: r.listing_title,
-                    buyer_id: r.buyer_id,
-                    seller_id: r.seller_id,
-                    final_price: r.final_price,
-                    status: r.status,
-                    created_at: r.created_at,
-                    role: role.to_string(),
-                    buyer_username: r.buyer_username,
-                    seller_username: r.seller_username,
-                }
-            })
-            .collect();
+        Ok((rows, total))
+    }
 
-        Ok((items, total))
+    /// Admin: Get all orders across the platform.
+    pub async fn admin_list_orders(
+        &self,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<OrderSummaryRow>, i64), OrderError> {
+        let total: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM orders")
+                .fetch_one(&self.db)
+                .await
+                .map_err(OrderError::Db)?;
+
+        let rows = sqlx::query_as::<_, SqlxOrderSummaryRow>(
+            r#"
+            SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
+                   o.status, o.created_at,
+                   i.title as listing_title,
+                   buyer.username as buyer_username,
+                   seller.username as seller_username
+            FROM orders o
+            JOIN inventory i ON i.id = o.listing_id
+            JOIN users buyer ON buyer.id = o.buyer_id
+            JOIN users seller ON seller.id = o.seller_id
+            ORDER BY o.created_at DESC
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.db)
+        .await
+        .map_err(OrderError::Db)?;
+
+        Ok((rows, total))
     }
 
     /// Transition order to a new status atomically.
@@ -257,32 +263,36 @@ impl OrderService {
         new_status: &str,
         cancellation_reason: Option<&str>,
     ) -> Result<bool, OrderError> {
-        let current = OrderStatus::parse_status(expected_current).ok_or_else(|| {
-            OrderError::InvalidTransition(format!("unknown current status: {expected_current}"))
-        })?;
-        let next = OrderStatus::parse_status(new_status).ok_or_else(|| {
-            OrderError::InvalidTransition(format!("unknown new status: {new_status}"))
-        })?;
+        let current =
+            OrderStatus::parse_status(expected_current).ok_or_else(|| {
+                OrderError::InvalidTransition(format!(
+                    "unknown current status: {expected_current}"
+                ))
+            })?;
+        let next = OrderStatus::parse_status(new_status)
+            .ok_or_else(|| {
+                OrderError::InvalidTransition(format!("unknown new status: {new_status}"))
+            })?;
 
         if !current.can_transition_to(&next) {
             return Ok(false);
         }
 
-        let (timestamp_field, reason_set) = match next {
-            OrderStatus::Paid => ("paid_at", false),
-            OrderStatus::Shipped => ("shipped_at", false),
-            OrderStatus::Completed => ("completed_at", false),
-            OrderStatus::Cancelled => ("cancelled_at", true),
+        let timestamp_field = match next {
+            OrderStatus::Paid => "paid_at",
+            OrderStatus::Shipped => "shipped_at",
+            OrderStatus::Completed => "completed_at",
+            OrderStatus::Cancelled => "cancelled_at",
             OrderStatus::Pending => return Ok(false),
         };
 
-        let result = if reason_set {
+        let updated = if let Some(reason) = cancellation_reason {
             sqlx::query(&format!(
                 "UPDATE orders SET status = $1, {} = NOW(), cancellation_reason = $2 WHERE id = $3 AND status = $4",
                 timestamp_field
             ))
             .bind(new_status)
-            .bind(cancellation_reason.unwrap_or(""))
+            .bind(reason)
             .bind(order_id)
             .bind(expected_current)
             .execute(&self.db)
@@ -297,10 +307,10 @@ impl OrderService {
             .bind(expected_current)
             .execute(&self.db)
             .await
-        };
+        }
+        .map_err(OrderError::Db)?;
 
-        let rows = result.map_err(OrderError::Db)?.rows_affected();
-        Ok(rows > 0)
+        Ok(updated.rows_affected() > 0)
     }
 
     /// Verify user is buyer or seller of the order.
@@ -309,15 +319,18 @@ impl OrderService {
         order_id: &str,
         user_id: &str,
     ) -> Result<bool, OrderError> {
-        let row: Option<(String, String)> =
-            sqlx::query_as("SELECT buyer_id, seller_id FROM orders WHERE id = $1")
+        let row =
+            sqlx::query("SELECT buyer_id, seller_id FROM orders WHERE id = $1")
                 .bind(order_id)
                 .fetch_optional(&self.db)
                 .await
                 .map_err(OrderError::Db)?;
-
         match row {
-            Some((buyer_id, seller_id)) => Ok(buyer_id == user_id || seller_id == user_id),
+            Some(r) => {
+                let buyer_id: String = r.get("buyer_id");
+                let seller_id: String = r.get("seller_id");
+                Ok(buyer_id == user_id || seller_id == user_id)
+            }
             None => Ok(false),
         }
     }
@@ -327,48 +340,53 @@ impl OrderService {
         &self,
         order_id: &str,
     ) -> Result<Option<(String, i64)>, OrderError> {
-        let row = sqlx::query("SELECT status, final_price FROM orders WHERE id = $1")
-            .bind(order_id)
-            .fetch_optional(&self.db)
-            .await
-            .map_err(OrderError::Db)?;
-
-        Ok(row.map(|r| (r.get("status"), r.get("final_price"))))
+        let row =
+            sqlx::query("SELECT status, final_price FROM orders WHERE id = $1")
+                .bind(order_id)
+                .fetch_optional(&self.db)
+                .await
+                .map_err(OrderError::Db)?;
+        Ok(row.map(|r| {
+            let status: String = r.get("status");
+            let final_price: i64 = r.get("final_price");
+            (status, final_price)
+        }))
     }
 }
 
+
 // sqlx row types — use FromRow derive + column name aliases
 #[derive(sqlx::FromRow)]
-struct SqlxOrderRow {
-    id: String,
-    listing_id: String,
-    buyer_id: String,
-    seller_id: String,
-    final_price: i64,
-    status: String,
-    cancellation_reason: Option<String>,
-    paid_at: Option<DateTime<Utc>>,
-    shipped_at: Option<DateTime<Utc>>,
-    completed_at: Option<DateTime<Utc>>,
-    cancelled_at: Option<DateTime<Utc>>,
-    created_at: DateTime<Utc>,
-    buyer_username: String,
-    seller_username: String,
-    listing_title: String,
+pub struct SqlxOrderRow {
+    pub id: String,
+    pub listing_id: String,
+    pub buyer_id: String,
+    pub seller_id: String,
+    pub final_price: i64,
+    pub status: String,
+    pub cancellation_reason: Option<String>,
+    pub paid_at: Option<DateTime<Utc>>,
+    pub shipped_at: Option<DateTime<Utc>>,
+    pub completed_at: Option<DateTime<Utc>>,
+    pub cancelled_at: Option<DateTime<Utc>>,
+    pub created_at: DateTime<Utc>,
+    pub buyer_username: String,
+    pub seller_username: String,
+    pub listing_title: String,
 }
 
 #[derive(sqlx::FromRow)]
-struct SqlxOrderSummaryRow {
-    id: String,
-    listing_id: String,
-    buyer_id: String,
-    seller_id: String,
-    final_price: i64,
-    status: String,
-    created_at: DateTime<Utc>,
-    buyer_username: String,
-    seller_username: String,
-    listing_title: String,
+pub struct SqlxOrderSummaryRow {
+    pub id: String,
+    pub listing_id: String,
+    pub buyer_id: String,
+    pub seller_id: String,
+    pub final_price: i64,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+    pub buyer_username: String,
+    pub seller_username: String,
+    pub listing_title: String,
 }
 
 #[cfg(test)]
