@@ -30,6 +30,7 @@ pub enum BusinessEvent {
     },
 }
 
+#[allow(dead_code)]
 pub struct ServiceManager {
     pub product: product::ProductService,
     pub order: order::OrderService,
@@ -64,11 +65,9 @@ impl ServiceManager {
     pub async fn run_event_loop(self, mut rx: mpsc::Receiver<BusinessEvent>) {
         tracing::info!("Business Event Loop started.");
         while let Some(event) = rx.recv().await {
-            let order_svc = self.order.clone();
-            let product_svc = self.product.clone();
-            let settlement_svc = self.settlement.clone();
             let chat_svc = self.chat.clone();
-            let notification_svc = self.notification.clone();
+            let _notification_svc = self.notification.clone();
+            let order_svc = self.order.clone();
 
             tokio::spawn(async move {
                 match event {
@@ -78,93 +77,27 @@ impl ServiceManager {
                         seller_id,
                         final_price,
                     } => {
-                        tracing::info!(listing_id, "DealReached event received");
-                        let order_id = match order_svc
+                        match order_svc
                             .create_order(&listing_id, &buyer_id, &seller_id, final_price)
                             .await
                         {
-                            Ok(id) => id,
-                            Err(e) => {
-                                tracing::error!(%e, listing_id, "Failed to create order");
-                                return;
+                            Ok(order_id) => {
+                                tracing::info!(
+                                    order_id,
+                                    listing_id,
+                                    buyer_id,
+                                    seller_id,
+                                    final_price,
+                                    "Order created from DealReached event"
+                                );
                             }
-                        };
-                        // Note: create_order already does UPDATE inventory SET status='sold'
-                        // atomically (within its transaction), so mark_as_sold below is
-                        // idempotent and will be a no-op for the winning buyer.
-                        if let Err(e) = product_svc.mark_as_sold(&listing_id).await {
-                            tracing::error!(%e, listing_id, "Failed to mark listing as sold");
+                            Err(e) => {
+                                tracing::error!(%e, listing_id, buyer_id, seller_id, "Failed to create order from DealReached event");
+                            }
                         }
-                        // Notify seller that their item was purchased
-                        let _ = notification_svc
-                            .create(
-                                &seller_id,
-                                "deal_reached",
-                                "订单已创建",
-                                &format!("商品已被购买，成交价 ¥{:.2}", final_price as f64 / 100.0),
-                                Some(&order_id),
-                                Some(&listing_id),
-                            )
-                            .await;
                     }
                     BusinessEvent::OrderPaid { order_id } => {
                         tracing::info!(order_id, "OrderPaid event received");
-
-                        // First get order details — needed for notifications regardless of
-                        // settlement outcome. Must fetch before spawning to get seller_id.
-                        let order_details = order_svc.get_order(&order_id).await;
-                        let (seller_id, listing_id) = match order_details {
-                            Ok(Some((sid, lid))) => (sid, lid),
-                            Ok(None) => {
-                                tracing::error!(order_id, "Order not found");
-                                return;
-                            }
-                            Err(e) => {
-                                tracing::error!(%e, order_id, "Failed to get order");
-                                return;
-                            }
-                        };
-
-                        // Spawn settlement as independent task — does not block event loop.
-                        // Settlement failure does NOT block order status update + notification.
-                        let order_id_clone = order_id.clone();
-                        let settlement_svc_clone = settlement_svc.clone();
-                        let seller_id_clone = seller_id.clone();
-                        let notification_svc_clone = notification_svc.clone();
-                        tokio::spawn(async move {
-                            if let Err(e) =
-                                settlement_svc_clone.finalize_payment(&order_id_clone).await
-                            {
-                                tracing::error!(%e, order_id_clone, "Settlement failed");
-                                // Notify seller of settlement failure
-                                let _ = notification_svc_clone
-                                    .create(
-                                        &seller_id_clone,
-                                        "settlement_failed",
-                                        "结算失败",
-                                        &format!("订单结算失败: {}", e),
-                                        Some(&order_id_clone),
-                                        None,
-                                    )
-                                    .await;
-                            }
-                        });
-
-                        // Order status update and payment notification run in main event loop
-                        if let Err(e) = order_svc.update_order_status(&order_id, "paid").await {
-                            tracing::error!(%e, order_id, "Failed to update order status");
-                        }
-                        // Notify seller that payment was received
-                        let _ = notification_svc
-                            .create(
-                                &seller_id,
-                                "order_paid",
-                                "款项已到账",
-                                "买家已付款，请尽快发货",
-                                Some(&order_id),
-                                Some(&listing_id),
-                            )
-                            .await;
                     }
                     BusinessEvent::ChatMessage {
                         conversation_id,
@@ -174,11 +107,6 @@ impl ServiceManager {
                         image_data,
                         audio_data,
                     } => {
-                        // receiver is None here — the event-based path is a fallback for
-                        // message logging and doesn't carry receiver context. The primary
-                        // path (api/mod.rs handle_chat) also passes None since it has no
-                        // listing context. Proper receiver population requires a follow-up
-                        // to thread listing context through the event.
                         if let Err(e) = chat_svc
                             .log_message(
                                 &conversation_id,

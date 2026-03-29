@@ -18,6 +18,7 @@ const WHITELISTED_PATHS: &[&str] = &[
     "/api/chat/connections",
     "/api/chat/conversations",
     "/api/chat/messages",
+    "/api/ws",
 ];
 
 /// Token bucket rate limiter using moka cache.

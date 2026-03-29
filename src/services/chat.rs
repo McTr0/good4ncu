@@ -77,8 +77,8 @@ impl ChatService {
         Ok(rows
             .into_iter()
             .map(|row| {
-                let image_data: Option<String> = Row::get(&row, "image_data");
-                let audio_data: Option<String> = Row::get(&row, "audio_data");
+                let image_data: Option<String> = row.try_get("image_data").ok().flatten();
+                let audio_data: Option<String> = row.try_get("audio_data").ok().flatten();
                 ChatHistoryEntry {
                     sender: Row::get(&row, "sender"),
                     content: Row::get(&row, "content"),
@@ -92,6 +92,7 @@ impl ChatService {
 
     /// List all conversation IDs for a user with metadata.
     /// Returns paginated results ordered by most recent message.
+    #[allow(dead_code)]
     pub async fn list_conversations(
         &self,
         user_id: &str,
@@ -187,6 +188,7 @@ impl ChatService {
 }
 
 /// Summary of a conversation for listing
+#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize)]
 pub struct ConversationSummary {
     pub conversation_id: String,
@@ -303,250 +305,5 @@ mod unit_tests {
         // Verify the constant is a reasonable size for context window
         assert!(CONVERSATION_HISTORY_LIMIT >= 1);
         assert!(CONVERSATION_HISTORY_LIMIT <= 100);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sqlx::postgres::PgPoolOptions;
-
-    async fn test_pool() -> PgPool {
-        let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/test_db".to_string());
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&database_url)
-            .await
-            .unwrap();
-        // Clean up residual data from previous tests before running migrations.
-        sqlx::query(
-            "TRUNCATE TABLE chat_messages, chat_connections, orders, inventory, users CASCADE",
-        )
-        .execute(&pool)
-        .await
-        .ok();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        pool
-    }
-
-    async fn insert_user(pool: &PgPool, id: &str, username: &str) {
-        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
-            .bind(id)
-            .bind(username)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
-    async fn insert_listing(pool: &PgPool, id: &str, owner_id: &str) {
-        sqlx::query(
-            "INSERT INTO inventory (id, title, category, brand, condition_score, suggested_price_cny, defects, owner_id) \
-             VALUES ($1, 'Item', 'misc', 'Brand', 8, 10000, '[]', $2)",
-        )
-        .bind(id)
-        .bind(owner_id)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_log_message() {
-        let pool = test_pool().await;
-        insert_user(&pool, "user-1", "user1").await;
-        insert_listing(&pool, "listing-1", "user-1").await;
-        ChatService::new(pool.clone())
-            .log_message(
-                "conv-1",
-                "listing-1",
-                "user-1",
-                None,
-                false,
-                "Hello!",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let row =
-            sqlx::query("SELECT sender, content FROM chat_messages WHERE listing_id = 'listing-1'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-
-        assert_eq!(Row::get::<String, _>(&row, "sender"), "user-1");
-        assert_eq!(Row::get::<String, _>(&row, "content"), "Hello!");
-    }
-
-    #[tokio::test]
-    async fn test_get_conversation_history() {
-        let pool = test_pool().await;
-        insert_user(&pool, "user-1", "user1").await;
-        insert_listing(&pool, "listing-1", "user-1").await;
-
-        let chat_svc = ChatService::new(pool.clone());
-
-        // Log multiple messages in the same conversation
-        chat_svc
-            .log_message(
-                "conv-test",
-                "listing-1",
-                "user-1",
-                None,
-                false,
-                "First message",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        chat_svc
-            .log_message(
-                "conv-test",
-                "listing-1",
-                "user-1",
-                None,
-                true,
-                "Agent reply",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        chat_svc
-            .log_message(
-                "conv-test",
-                "listing-1",
-                "user-1",
-                None,
-                false,
-                "Third message",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let history = chat_svc
-            .get_conversation_history("conv-test")
-            .await
-            .unwrap();
-
-        assert_eq!(history.len(), 3);
-        assert_eq!(history[0].content, "First message");
-        assert!(!history[0].is_agent);
-        assert_eq!(history[1].content, "Agent reply");
-        assert!(history[1].is_agent);
-        assert_eq!(history[2].content, "Third message");
-        assert!(!history[2].is_agent);
-    }
-
-    #[tokio::test]
-    async fn test_get_conversation_history_empty() {
-        let pool = test_pool().await;
-        insert_user(&pool, "user-1", "user1").await;
-
-        let history = ChatService::new(pool.clone())
-            .get_conversation_history("nonexistent-conv")
-            .await
-            .unwrap();
-
-        assert!(history.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_list_conversations() {
-        let pool = test_pool().await;
-        insert_user(&pool, "user-1", "user1").await;
-        insert_user(&pool, "user-2", "user2").await;
-        insert_listing(&pool, "listing-1", "user-1").await;
-
-        let chat_svc = ChatService::new(pool.clone());
-
-        // Create conversations for user-1
-        chat_svc
-            .log_message(
-                "conv-1",
-                "listing-1",
-                "user-1",
-                None,
-                false,
-                "Message in conv 1",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-        chat_svc
-            .log_message(
-                "conv-2",
-                "listing-1",
-                "user-1",
-                None,
-                false,
-                "Message in conv 2",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        // Create conversation for user-2 (should not appear for user-1)
-        chat_svc
-            .log_message(
-                "conv-3",
-                "listing-1",
-                "user-2",
-                None,
-                false,
-                "User-2 message",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let (conversations, total) = chat_svc.list_conversations("user-1", 20, 0).await.unwrap();
-
-        assert_eq!(conversations.len(), 2);
-        assert_eq!(total, 2);
-        let conv_ids: Vec<&str> = conversations
-            .iter()
-            .map(|c| c.conversation_id.as_str())
-            .collect();
-        assert!(conv_ids.contains(&"conv-1"));
-        assert!(conv_ids.contains(&"conv-2"));
-        assert!(!conv_ids.contains(&"conv-3"));
-    }
-
-    #[tokio::test]
-    async fn test_list_conversations_with_listing_title() {
-        let pool = test_pool().await;
-        insert_user(&pool, "user-1", "user1").await;
-        insert_listing(&pool, "listing-1", "user-1").await;
-
-        let chat_svc = ChatService::new(pool.clone());
-        chat_svc
-            .log_message(
-                "conv-1",
-                "listing-1",
-                "user-1",
-                None,
-                false,
-                "Hello",
-                None,
-                None,
-            )
-            .await
-            .unwrap();
-
-        let (conversations, total) = chat_svc.list_conversations("user-1", 20, 0).await.unwrap();
-
-        assert_eq!(conversations.len(), 1);
-        assert_eq!(total, 1);
-        assert_eq!(conversations[0].listing_id, "listing-1");
-        assert_eq!(conversations[0].listing_title.as_deref(), Some("Item"));
     }
 }

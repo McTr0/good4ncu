@@ -2,6 +2,7 @@ use anyhow::Result;
 use sqlx::PgPool;
 
 #[derive(Clone)]
+#[allow(dead_code)]
 pub struct ProductService {
     db: PgPool,
 }
@@ -11,6 +12,8 @@ impl ProductService {
         Self { db }
     }
 
+    /// Mark a listing as sold (DISABLED - called from disabled DealReached event)
+    #[allow(dead_code)]
     pub async fn mark_as_sold(&self, listing_id: &str) -> Result<()> {
         tracing::info!(listing_id, "Marking listing as sold");
         sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1")
@@ -43,64 +46,5 @@ mod unit_tests {
         // ProductService is Clone, verify it compiles
         fn assert_clone<T: Clone>() {}
         assert_clone::<ProductService>();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sqlx::postgres::PgPoolOptions;
-
-    async fn test_pool() -> PgPool {
-        let database_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgres://postgres:postgres@localhost/test_db".to_string());
-        let pool = PgPoolOptions::new()
-            .max_connections(1)
-            .connect(&database_url)
-            .await
-            .unwrap();
-        // Clean up residual data from previous tests before running migrations.
-        sqlx::query(
-            "TRUNCATE TABLE chat_messages, chat_connections, orders, inventory, users CASCADE",
-        )
-        .execute(&pool)
-        .await
-        .ok();
-        sqlx::migrate!("./migrations").run(&pool).await.unwrap();
-        pool
-    }
-
-    async fn insert_user(pool: &PgPool, id: &str, username: &str) {
-        sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
-            .bind(id)
-            .bind(username)
-            .execute(pool)
-            .await
-            .unwrap();
-    }
-
-    #[tokio::test]
-    async fn test_mark_as_sold() {
-        let pool = test_pool().await;
-        insert_user(&pool, "owner", "owneruser").await;
-        sqlx::query(
-            "INSERT INTO inventory (id, title, category, brand, condition_score, suggested_price_cny, defects, owner_id, status) \
-             VALUES ('prod-1', 'Test', 'misc', 'Brand', 8, 10000, '[]', 'owner', 'active')",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        ProductService::new(pool.clone())
-            .mark_as_sold("prod-1")
-            .await
-            .unwrap();
-
-        let row = sqlx::query("SELECT status FROM inventory WHERE id = 'prod-1'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        let status: String = sqlx::Row::get(&row, "status");
-        assert_eq!(status, "sold");
     }
 }

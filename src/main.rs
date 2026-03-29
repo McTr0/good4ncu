@@ -1,4 +1,5 @@
 mod agents;
+mod repositories;
 mod services;
 
 mod api;
@@ -36,8 +37,9 @@ async fn main() -> Result<(), anyhow::Error> {
         .json()
         .init();
 
-    // Load unified configuration at startup — fail fast if env vars are missing
-    let config = config::AppConfig::load();
+    // Load unified configuration at startup — fail fast if env vars are missing.
+    // Merges TOML config file with env vars (env vars take precedence).
+    let config = config::AppConfig::load_with_file(None);
     tracing::info!(provider = %config.llm_provider, vector_dim = config.vector_dim, "Initializing LLM provider");
 
     // Metrics service — shared across all request handlers
@@ -103,33 +105,51 @@ async fn main() -> Result<(), anyhow::Error> {
         Arc::clone(&broadcast),
     ));
 
+    // Build repository layer (concrete types - simpler than dyn traits for now)
+    let listing_repo = repositories::PostgresListingRepository::new(db_pool.clone());
+    let user_repo = repositories::PostgresUserRepository::new(db_pool.clone());
+    let chat_repo = repositories::PostgresChatRepository::new(db_pool.clone());
+    let auth_repo = repositories::PostgresAuthRepository::new(db_pool.clone());
+
     let app_state = api::AppState {
-        db: db_pool.clone(),
-        llm_provider: Arc::clone(&llm_provider),
-        event_tx: event_tx.clone(),
-        rate_limit: {
-            let factory = middleware::rate_limit::RateLimiterFactory::new(
-                config.rate_limit_max_requests,
-                config.rate_limit_window_secs,
-            );
-            middleware::rate_limit::RateLimitStateHandle::new(factory.build_local())
+        secrets: api::ApiSecrets {
+            jwt_secret: config.jwt_secret.clone(),
+            gemini_api_key: config.gemini_api_key.clone(),
+            oss_endpoint: config.oss_endpoint.clone(),
+            oss_bucket: config.oss_bucket.clone(),
+            oss_role_arn: config.oss_role_arn.clone(),
+            oss_access_key_id: config.oss_access_key_id.clone(),
+            oss_access_key_secret: config.oss_access_key_secret.clone(),
         },
-        jwt_secret: config.jwt_secret.clone(),
-        gemini_api_key: config.gemini_api_key.clone(),
-        notification,
-        ws_connections: ws_state,
-        router,
-        oss_endpoint: config.oss_endpoint.clone(),
-        oss_bucket: config.oss_bucket.clone(),
-        oss_role_arn: config.oss_role_arn.clone(),
-        oss_access_key_id: config.oss_access_key_id.clone(),
-        oss_access_key_secret: config.oss_access_key_secret.clone(),
-        metrics: Arc::clone(&metrics),
+        infra: api::ApiInfrastructure {
+            db: db_pool.clone(),
+            event_tx: event_tx.clone(),
+            rate_limit: {
+                let factory = middleware::rate_limit::RateLimiterFactory::new(
+                    config.rate_limit_max_requests,
+                    config.rate_limit_window_secs,
+                );
+                middleware::rate_limit::RateLimitStateHandle::new(factory.build_local())
+            },
+            notification,
+            ws_connections: ws_state,
+            metrics: Arc::clone(&metrics),
+            order_service: services::order::OrderService::new(db_pool.clone()),
+        },
+        agents: api::ApiAgents {
+            llm_provider: Arc::clone(&llm_provider),
+            router,
+        },
+        listing_repo,
+        user_repo,
+        chat_repo,
+        auth_repo,
     };
 
     let app = api::create_router(app_state, &config.cors_origins);
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:3000").await?;
-    tracing::info!("Web Server started at http://127.0.0.1:3000");
+    let bind_addr = format!("{}:{}", config.server_host, config.server_port);
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    tracing::info!(addr = %bind_addr, "Web Server started");
 
     let server_handle = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, app).await {
