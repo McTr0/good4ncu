@@ -40,6 +40,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
@@ -47,6 +48,15 @@ use uuid::Uuid;
 
 use crate::middleware::rate_limit::{is_whitelisted, RateLimitStateHandle};
 use regex::Regex;
+
+static UUID_PATH_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+        .expect("valid uuid regex")
+});
+static MONGO_ID_PATH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"[0-9a-fA-F]{24}").expect("valid object id regex"));
+static NUMERIC_PATH_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\d+").expect("valid numeric regex"));
 
 /// Security headers applied to all responses.
 async fn security_headers_middleware(
@@ -110,15 +120,9 @@ pub async fn rate_limit_middleware(
 /// Normalize dynamic path segments to prevent Prometheus label cardinality explosion.
 /// Replaces UUIDs, MongoDB ObjectIds, and numeric IDs with `{id}`.
 fn normalize_path(path: &str) -> String {
-    let uuid_regex =
-        Regex::new(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
-            .unwrap();
-    let mongo_id_regex = Regex::new(r"[0-9a-fA-F]{24}").unwrap();
-    let numeric_regex = Regex::new(r"\d+").unwrap();
-
-    let step1 = uuid_regex.replace_all(path, "{id}");
-    let step2 = mongo_id_regex.replace_all(&step1, "{id}");
-    let step3 = numeric_regex.replace_all(&step2, "{id}");
+    let step1 = UUID_PATH_RE.replace_all(path, "{id}");
+    let step2 = MONGO_ID_PATH_RE.replace_all(&step1, "{id}");
+    let step3 = NUMERIC_PATH_RE.replace_all(&step2, "{id}");
     step3.to_string()
 }
 

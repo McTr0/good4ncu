@@ -62,8 +62,14 @@ pub async fn get_similar_listings(
         Some(v) => v,
         None => {
             // No embedding for this listing — return newest active as fallback
-            return get_recommendation_feed(State(state), Query(FeedQuery { limit: Some(limit), offset: None }))
-                .await;
+            return get_recommendation_feed(
+                State(state),
+                Query(FeedQuery {
+                    limit: Some(limit),
+                    offset: None,
+                }),
+            )
+            .await;
         }
     };
 
