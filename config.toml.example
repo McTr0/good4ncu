@@ -1,0 +1,103 @@
+# =============================================================================
+# Good4NCU Configuration File
+# =============================================================================
+#
+# COPY THIS FILE TO good4ncu.toml (or config/good4ncu.toml) AND FILL IN VALUES.
+# This file is safe to commit — it contains no secrets.
+#
+# Env vars ALWAYS override file values. Secrets must come from env vars only.
+#
+# Config file search order:
+#   1. $CONFIG_FILE env var (if set)
+#   2. ./good4ncu.toml (if exists)
+#   3. ./config/good4ncu.toml (if exists)
+# =============================================================================
+
+# -----------------------------------------------------------------------
+# Server
+# -----------------------------------------------------------------------
+[server]
+host = "127.0.0.1"
+port = 3000
+
+# -----------------------------------------------------------------------
+# LLM
+# -----------------------------------------------------------------------
+[llm]
+provider = "gemini"          # "gemini" or "minimax"
+vector_dim = 768             # Embedding vector dimensions
+# API keys come from env vars: GEMINI_API_KEY, MINIMAX_API_KEY, MINIMAX_API_BASE_URL
+
+# -----------------------------------------------------------------------
+# Rate Limiting
+# -----------------------------------------------------------------------
+[rate_limit]
+max_requests = 100           # Max requests per window per IP
+window_secs = 60             # Window duration in seconds
+moka_cache_max_capacity = 100_000  # Local cache size for single-node
+
+# Distributed rate limiting via Redis (optional)
+# redis_url = "redis://localhost:6379"
+
+# -----------------------------------------------------------------------
+# Event Bus
+# -----------------------------------------------------------------------
+[event_bus]
+capacity = 2048              # Bounded channel capacity for backpressure
+
+# -----------------------------------------------------------------------
+# Background Workers
+# -----------------------------------------------------------------------
+[workers.hitl_expire]
+scan_interval_secs = 600     # How often to scan for expired negotiations
+expire_timeout_hours = 48    # Hours before pending negotiations expire
+
+# -----------------------------------------------------------------------
+# Authentication
+# -----------------------------------------------------------------------
+[auth]
+access_token_ttl_secs = 86400        # 24 hours
+refresh_token_ttl_secs = 604800      # 7 days
+# Secrets come from env vars: JWT_SECRET
+
+# -----------------------------------------------------------------------
+# Marketplace
+# -----------------------------------------------------------------------
+[marketplace]
+conversation_history_limit = 10  # Chat messages in context window
+max_keyword_len = 200           # Max keyword search length
+price_tolerance = 0.50          # Negotiation price tolerance (0.0–1.0)
+
+categories = [
+    "electronics",
+    "books",
+    "digitalAccessories",
+    "dailyGoods",
+    "clothingShoes",
+    "other",
+]
+
+# -----------------------------------------------------------------------
+# Content Moderation
+# -----------------------------------------------------------------------
+# Blocked keywords come from BLOCKED_KEYWORDS env var (safer than file).
+# If you must list them here, keep the file permissions restrictive (chmod 600).
+[moderation]
+# blocked_keywords = ["毒品", "武器"]
+
+# -----------------------------------------------------------------------
+# CORS
+# -----------------------------------------------------------------------
+[cors]
+wildcard = false              # Set true to allow all origins (not recommended)
+origins = [
+    # "https://your-domain.com",
+]
+
+# -----------------------------------------------------------------------
+# Alibaba Cloud OSS
+# -----------------------------------------------------------------------
+[oss]
+endpoint = "https://oss-cn-beijing.aliyuncs.com"
+bucket = "good4ncu"
+# Credentials come from env vars: OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_ROLE_ARN

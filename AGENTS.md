@@ -1,7 +1,10 @@
 # AGENTS.md — good4ncu
 
-Agentic secondhand marketplace platform built with Rust, Rig framework, and Gemini LLM.
-Campus-oriented buy/sell platform with AI agents for listing, search, negotiation, and RAG-based semantic retrieval.
+Agentic information sharing platform built with Rust, Rig framework, and Gemini LLM.
+Campus-oriented information publishing platform with AI agents for listing, search, and RAG-based semantic retrieval.
+
+**Disclaimer:** 本产品仅做信息发布，无担保和资金中介，也不收手续费。
+
 Monorepo: Rust backend + Flutter mobile frontend.
 
 ## Build / Run / Test
@@ -60,23 +63,60 @@ No CI pipeline exists yet. Unit tests are run locally with `cargo test`.
 
 ```
 src/                         # Rust backend
-├── main.rs                  # Entry point: DB init, Gemini client, event bus, Axum server, CLI
-├── db.rs                    # PostgreSQL + pgvector init (sqlx pool, CREATE EXTENSION IF NOT EXISTS vector)
+├── main.rs                  # Entry point: DB init, LLM provider, event bus, Axum server, CLI
+├── db.rs                    # PostgreSQL + pgvector init (sqlx pool, CREATE EXTENSION)
 ├── cli.rs                   # Interactive CLI menu (inquire)
+├── config.rs                # AppConfig loading and validation
+├── utils.rs                 # Money helpers: yuan_to_cents(), cents_to_yuan()
 ├── api/
-│   └── mod.rs               # Axum REST API (health check, chat endpoint with multimodal support)
+│   ├── mod.rs               # AppState (with infra/secrets/agents sub-structs), create_router
+│   ├── error.rs             # ApiError enum with HTTP status mappings
+│   ├── auth.rs              # JWT authentication
+│   ├── listings.rs          # Listing CRUD + item recognition
+│   ├── user.rs              # User profiles
+│   ├── user_chat.rs         # User-to-user chat with connection handshake
+│   ├── ws.rs                # WebSocket handler + broadcast
+│   ├── conversations.rs     # Conversation listing
+│   ├── orders.rs            # Order management
+│   ├── negotiate.rs         # Negotiation endpoints
+│   ├── notifications.rs     # Notification endpoints
+│   ├── watchlist.rs         # Watchlist endpoints
+│   ├── recommendations.rs    # Recommendation feed
+│   ├── upload.rs            # OSS upload token generation
+│   ├── admin.rs             # Admin-only endpoints
+│   ├── metrics.rs           # Prometheus metrics
+│   └── stats.rs             # Site statistics
 ├── agents/
 │   ├── mod.rs               # Module declarations
-│   ├── models.rs            # Domain models: ListingDetails, Document (with Embed derive for vector store)
-│   ├── tools.rs             # Rig Tool implementations: CRUD listings, search, purchase intent
-│   ├── marketplace.rs       # Marketplace agent builder with RAG context + all tools
-│   └── negotiate.rs         # Auto-negotiation with human-in-the-loop (HITL)
-└── services/
-    ├── mod.rs               # ServiceManager, BusinessEvent enum, event loop
-    ├── product.rs           # ProductService (mark sold)
-    ├── order.rs             # OrderService (create/update orders)
-    ├── chat.rs              # ChatService (log messages)
-    └── settlement.rs        # SettlementService (payment finalization stub)
+│   ├── router.rs            # IntentRouter for lightweight intent classification
+│   ├── tools.rs             # Rig Tool implementations
+│   └── models.rs            # Domain models: ListingDetails, Document (with Embed)
+├── llm/
+│   ├── mod.rs               # LlmProvider trait + PREAMBLE constants
+│   ├── gemini.rs            # GeminiProvider (Gemini + pgvector)
+│   └── minimax.rs           # MiniMaxProvider (MiniMax chat + Gemini embeddings)
+├── repositories/            # Data access layer
+│   ├── mod.rs               # Exports
+│   ├── traits.rs            # Repository traits
+│   ├── auth_repo.rs         # PostgresAuthRepository
+│   ├── chat_repo.rs         # PostgresChatRepository
+│   ├── listing_repo.rs      # PostgresListingRepository
+│   └── user_repo.rs         # PostgresUserRepository
+├── services/
+│   ├── mod.rs               # ServiceManager, BusinessEvent enum, event loop
+│   ├── product.rs           # ProductService
+│   ├── order.rs             # OrderService
+│   ├── chat.rs              # ChatService
+│   ├── notification.rs     # NotificationService
+│   ├── settlement.rs       # SettlementService
+│   └── hitl_expire.rs       # HITL expiration worker
+└── middleware/
+    ├── mod.rs               # Middleware exports
+    ├── rate_limit/
+    │   ├── mod.rs           # RateLimiterFactory, RateLimitStateHandle
+    │   ├── local.rs        # In-memory rate limiter
+    │   └── redis_backend.rs # Redis rate limiter (optional)
+    └── admin.rs             # Admin authentication middleware
 
 mobile/                      # Flutter mobile app (only lib/ and config tracked in git)
 ├── lib/
@@ -89,10 +129,12 @@ mobile/                      # Flutter mobile app (only lib/ and config tracked 
 ```
 
 Key patterns:
-- Event-driven architecture via `tokio::sync::mpsc` unbounded channels
+- Event-driven architecture via `tokio::sync::mpsc` bounded channel (2048 capacity)
 - `ServiceManager` runs a background event loop processing `BusinessEvent` variants
+- Repository layer: `src/repositories/` provides trait-based data access
+- `IntentRouter` classifies intent before LLM calls (blocks content, greets, etc.)
 - Agents are built using Rig's `AgentBuilder` with `.tool()` and `.dynamic_context()` for RAG
-- `ToolContext` struct is shared across all tools (db pool, vector conn, gemini client, event tx)
+- AppState uses sub-structs: `secrets` (config), `infra` (runtime), `agents` (LLM + router)
 
 ## Git Policy
 
@@ -100,6 +142,17 @@ Key patterns:
 - Generated files (`pubspec.lock`, `generated_plugin_registrant.*`) are gitignored
 - `.env`, `.DS_Store` are gitignored — never commit secrets
 - Commit style: conventional commits (`feat:`, `fix:`, `chore:`, `docs:`, `style:`)
+
+## Code Review Checklist
+
+Before every commit:
+- [ ] `cargo fmt` passes
+- [ ] `cargo clippy -- -D warnings` passes (treat warnings as errors)
+- [ ] No hardcoded secrets (API keys, passwords, tokens in source)
+- [ ] All user inputs validated at system boundaries
+- [ ] SQL injection prevention (parameterized queries only)
+- [ ] Error messages don't leak internal paths or sensitive data
+- [ ] New public APIs have doc comments (`///`)
 
 ## Code Style
 
@@ -111,12 +164,12 @@ Key patterns:
 
 ### Naming
 - Types/structs: `PascalCase` — `ToolContext`, `BusinessEvent`, `CreateListingTool`
-- Functions/methods: `snake_case` — `run_marketplace_agent`, `create_order`
+- Functions/methods: `snake_case` — `run_marketplace_agent`, `create_listing`
 - Constants: `SCREAMING_SNAKE_CASE` (Rig tool names use `const NAME: &'static str`)
 - Modules: `snake_case` file names
 - Tool structs follow `{Action}{Entity}Tool` pattern — `CreateListingTool`, `SearchInventoryTool`
 - Tool args follow `{Action}{Entity}Args` pattern — `CreateListingArgs`
-- Services follow `{Domain}Service` pattern — `OrderService`, `ChatService`
+- Services follow `{Domain}Service` pattern — `ChatService`
 
 ### Types
 - Use `anyhow::Result` for application-level error propagation
@@ -151,7 +204,7 @@ Key patterns:
 ### Database
 - PostgreSQL with pgvector extension: relational data + vector similarity search in one DB
 - UUIDs as TEXT primary keys (generated via `uuid::Uuid::new_v4().to_string()`)
-- Soft deletes: `status` column with values `'active'`, `'sold'`, `'deleted'`
+- Soft deletes: `status` column with values `'active'`, `'deleted'`
 - SQL uses `$1, $2` bind parameters (PostgreSQL style) — never interpolate user input directly into SQL strings
 - Schema defined inline in `db::init_db()` with `CREATE TABLE IF NOT EXISTS` and `CREATE EXTENSION IF NOT EXISTS vector`
 
@@ -190,6 +243,7 @@ Key patterns:
 
 ## Notes
 
-- This is a prototype — no auth (prototype stage), no proper HTTP error handling (being improved), no tests yet
 - Agent preambles and user-facing strings are in Chinese (Simplified)
 - Flutter platform directories are gitignored — regenerate with `cd mobile && flutter create .`
+- Database: PostgreSQL with pgvector for relational + vector storage
+- Rate limiting: token bucket per IP, whitelisted paths include health/metrics/chat read endpoints
