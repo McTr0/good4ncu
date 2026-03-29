@@ -53,47 +53,95 @@ No CI pipeline exists yet. Unit tests are run locally with `cargo test`.
 ## Environment
 
 - Rust edition 2021, Cargo lock version 4
-- Requires `.env` file with `GEMINI_API_KEY` and `DATABASE_URL` set (loaded via `dotenvy`)
+- Configuration via `.env` file (secrets) + `good4ncu.toml` (non-secret config)
+- **Config file search order:** `$CONFIG_FILE` env var → `./good4ncu.toml` → `./config/good4ncu.toml`
 - PostgreSQL database (relational + pgvector for vector similarity search) — connection via `DATABASE_URL`
 - Dependencies from crates.io: `rig-core` 0.33.0, `rig-postgres` 0.2.2
 - Uses `rustls` TLS backend for reqwest (not native-tls) — required for proxy compatibility
 - Flutter SDK required for mobile app development
 
+### TOML Configuration
+
+Non-secret settings can be set in `good4ncu.toml`:
+
+```toml
+[server]
+host = "127.0.0.1"
+port = 3000
+
+[llm]
+provider = "gemini"      # or "minimax"
+vector_dim = 768
+
+[rate_limit]
+max_requests = 100
+window_secs = 60
+redis_url = ""           # Leave empty for local in-memory limiter
+
+[event_bus]
+capacity = 2048          # Bounded channel capacity for BusinessEvent
+
+[workers.hitl_expire]
+scan_interval_secs = 600  # 10 minutes
+expire_timeout_hours = 48
+
+[cors]
+origins = ["*"]          # Comma-separated list
+
+[marketplace]
+conversation_history_limit = 10
+price_tolerance = 0.50    # ±50% tolerance for negotiated prices
+
+[auth]
+access_token_ttl_secs = 86400      # 24 hours
+refresh_token_ttl_secs = 604800    # 7 days
+
+[moderation]
+blocked_keywords = ""    # Comma-separated
+
+[oss]
+endpoint = "https://oss-cn-beijing.aliyuncs.com"
+bucket = "good4ncu"
+role_arn = ""             # STS role ARN for temporary credentials
+```
+
 ## Architecture
 
 ```
 src/                         # Rust backend
-├── main.rs                  # Entry point: DB init, LLM provider, event bus, Axum server, CLI
+├── main.rs                  # Entry point: DB init, LLM provider, ServiceManager, Axum server, CLI
 ├── db.rs                    # PostgreSQL + pgvector init (sqlx pool, CREATE EXTENSION)
 ├── cli.rs                   # Interactive CLI menu (inquire)
-├── config.rs                # AppConfig loading and validation
+├── config.rs                # AppConfig loading and validation (env + TOML)
+├── config/file.rs           # TOML file-based configuration provider
 ├── utils.rs                 # Money helpers: yuan_to_cents(), cents_to_yuan()
 ├── api/
 │   ├── mod.rs               # AppState (with infra/secrets/agents sub-structs), create_router
 │   ├── error.rs             # ApiError enum with HTTP status mappings
-│   ├── auth.rs              # JWT authentication
-│   ├── listings.rs          # Listing CRUD + item recognition
-│   ├── user.rs              # User profiles
+│   ├── auth.rs              # JWT authentication (register, login, refresh)
+│   ├── listings.rs          # Listing CRUD + item recognition + search
+│   ├── orders.rs            # Order management + state machine transitions
+│   ├── user.rs              # User profiles, listings, search
 │   ├── user_chat.rs         # User-to-user chat with connection handshake
 │   ├── ws.rs                # WebSocket handler + broadcast
-│   ├── conversations.rs     # Conversation listing
-│   ├── orders.rs            # Order management
-│   ├── negotiate.rs         # Negotiation endpoints
-│   ├── notifications.rs     # Notification endpoints
-│   ├── watchlist.rs         # Watchlist endpoints
-│   ├── recommendations.rs    # Recommendation feed
+│   ├── conversations.rs     # Conversation listing + pagination
+│   ├── negotiate.rs         # Negotiation endpoints (HITL workflow)
+│   ├── notifications.rs     # Notification listing/marking
+│   ├── watchlist.rs         # Watchlist add/remove
+│   ├── recommendations.rs   # Feed + similar listings (pgvector cosine similarity)
 │   ├── upload.rs            # OSS upload token generation
-│   ├── admin.rs             # Admin-only endpoints
-│   ├── metrics.rs           # Prometheus metrics
-│   └── stats.rs             # Site statistics
+│   ├── admin.rs             # Admin-only: stats, ban, takedown, audit logs
+│   ├── metrics.rs           # Prometheus /metrics endpoint
+│   └── stats.rs             # Public site statistics
 ├── agents/
 │   ├── mod.rs               # Module declarations
 │   ├── router.rs            # IntentRouter for lightweight intent classification
 │   ├── tools.rs             # Rig Tool implementations
-│   └── models.rs            # Domain models: ListingDetails, Document (with Embed)
+│   ├── models.rs            # Domain models: ListingDetails, Document (with Embed)
+│   └── negotiate.rs         # Negotiation agent: HitlRequest, HumanApprovalTool, HitlChannel
 ├── llm/
-│   ├── mod.rs               # LlmProvider trait + PREAMBLE constants
-│   ├── gemini.rs            # GeminiProvider (Gemini + pgvector)
+│   ├── mod.rs               # LlmProvider trait + PREAMBLE + NEGOTIATION_PREAMBLE constants
+│   ├── gemini.rs            # GeminiProvider (Gemini chat + Gemini embeddings)
 │   └── minimax.rs           # MiniMaxProvider (MiniMax chat + Gemini embeddings)
 ├── repositories/            # Data access layer
 │   ├── mod.rs               # Exports
@@ -101,28 +149,33 @@ src/                         # Rust backend
 │   ├── auth_repo.rs         # PostgresAuthRepository
 │   ├── chat_repo.rs         # PostgresChatRepository
 │   ├── listing_repo.rs      # PostgresListingRepository
+│   ├── order_repo.rs        # PostgresOrderRepository
 │   └── user_repo.rs         # PostgresUserRepository
 ├── services/
-│   ├── mod.rs               # ServiceManager, BusinessEvent enum, event loop
-│   ├── product.rs           # ProductService
+│   ├── mod.rs               # ServiceManager, BusinessEvent enum, run_event_loop
+│   ├── product.rs           # ProductService (DISABLED)
 │   ├── order.rs             # OrderService
 │   ├── chat.rs              # ChatService
-│   ├── notification.rs     # NotificationService
-│   ├── settlement.rs       # SettlementService
-│   └── hitl_expire.rs       # HITL expiration worker
+│   ├── notification.rs      # NotificationService
+│   ├── settlement.rs         # SettlementService (DISABLED)
+│   ├── admin.rs             # AdminService (audit logging, ban, takedown)
+│   ├── hitl_expire.rs       # HITL expiration worker (48h timeout, 10min scan interval)
+│   └── order_worker.rs      # Order lifecycle worker (30min payment timeout, 7d auto-confirm)
 └── middleware/
     ├── mod.rs               # Middleware exports
     ├── rate_limit/
     │   ├── mod.rs           # RateLimiterFactory, RateLimitStateHandle
-    │   ├── local.rs        # In-memory rate limiter
-    │   └── redis_backend.rs # Redis rate limiter (optional)
+    │   ├── local.rs         # In-memory token bucket rate limiter
+    │   ├── redis_backend.rs # Redis backend for distributed rate limiting
+    │   └── traits.rs        # RateLimiter trait
     └── admin.rs             # Admin authentication middleware
 
 mobile/                      # Flutter mobile app (only lib/ and config tracked in git)
 ├── lib/
 │   ├── main.dart            # App entry point
-│   ├── pages/chat_page.dart # Chat UI page
-│   ├── services/api_service.dart # HTTP client to backend API
+│   ├── pages/               # All pages (home, login, chat, listing_detail, etc.)
+│   ├── services/            # API clients by domain (api_service, auth_service, etc.)
+│   ├── providers/            # Provider state management
 │   └── models/models.dart   # Dart data models
 ├── pubspec.yaml             # Flutter dependencies
 └── analysis_options.yaml    # Dart lint rules
@@ -130,11 +183,15 @@ mobile/                      # Flutter mobile app (only lib/ and config tracked 
 
 Key patterns:
 - Event-driven architecture via `tokio::sync::mpsc` bounded channel (2048 capacity)
-- `ServiceManager` runs a background event loop processing `BusinessEvent` variants
+- `ServiceManager` runs a background event loop processing `BusinessEvent` variants:
+  - `DealReached` → creates order atomically (listing sold + order insert in tx)
+  - `OrderPaid` → logs only (no-op)
+  - `ChatMessage` → logs to chat
 - Repository layer: `src/repositories/` provides trait-based data access
 - `IntentRouter` classifies intent before LLM calls (blocks content, greets, etc.)
 - Agents are built using Rig's `AgentBuilder` with `.tool()` and `.dynamic_context()` for RAG
 - AppState uses sub-structs: `secrets` (config), `infra` (runtime), `agents` (LLM + router)
+- HITL negotiation: `HumanApprovalTool` creates `HitlRequest` rows, worker scans for expired pending requests
 
 ## Git Policy
 
@@ -240,6 +297,17 @@ Before every commit:
 | `chrono` | 0.4 | Timestamps |
 | `uuid` | 1.22.0 | ID generation |
 | `dotenvy` | 0.15 | .env file loading |
+| `jsonwebtoken` | 9.3 | JWT encoding/decoding |
+| `argon2` | 0.5 | Password hashing |
+| `tokio-tungstenite` | 0.28 | WebSocket server |
+| `tower` / `tower-http` | 0.5 | Axum middleware (CORS, rate limit) |
+| `prometheus` | 0.13 | Metrics collection |
+| `moka` | 0.12 | Local rate limiter cache |
+| `sha2` / `hmac` / `hex` | various | OSS signing |
+| `base64` | 0.22 | Media data encoding |
+| `lazy_static` | 1.5 | Static initialization |
+| `async-stream` | 0.3 | Async iterators for SSE |
+| `futures` / `futures-util` | 0.3 | Async combinators |
 
 ## Notes
 

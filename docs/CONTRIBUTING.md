@@ -6,11 +6,11 @@ Thank you for your interest in contributing to Good4NCU!
 
 We use a simple branching model:
 
-- **`main`** - Production-ready code, protected branch
+- **`master`** - Production-ready code, protected branch
 - **`feat/<description>`** - New features (e.g., `feat/user-authentication`)
 - **`fix/<description>`** - Bug fixes (e.g., `fix/cors-origin-validation`)
 
-All feature and fix branches should be based off `main`.
+All feature and fix branches should be based off `master`.
 
 ## Conventional Commits
 
@@ -66,11 +66,12 @@ Scopes are specific to the codebase structure:
 
 ### PR Requirements
 
-1. **Branch up to date** - Rebase onto latest `main` before submitting PR
-2. **Tests pass** - All `cargo test` must pass
+1. **Branch up to date** - Rebase onto latest `master` before submitting PR
+2. **Tests pass** - `cargo test --lib` must pass (unit tests; integration tests need a running DB)
 3. **Lint passes** - `cargo clippy -- -D warnings` must pass with no warnings
 4. **Format correct** - `cargo fmt` must show no changes needed
 5. **Sign commits** - GPG signing recommended but not required
+6. **Content moderation** - New moderation tests required for any handler accepting user input; verify 422 `ContentViolation` responses
 
 ### PR Description Template
 
@@ -98,19 +99,20 @@ Steps to test the change:
 
 ### Review Requirements
 
-- At least 1 approval required to merge to `main`
+- At least 1 approval required to merge to `master`
 - Reviews should check: correctness, style, test coverage, documentation
 - Approvals do not expire but should be re-requested if significant changes are made
 
 ## Development Setup
 
-1. Copy `.env.example` to `.env` and fill in required values
-2. Run `cargo build` to build the project
-3. Run `cargo check` for type checking
-4. Run `cargo test` to run tests
+1. Copy `config.toml.example` to `good4ncu.toml` and fill in required values (or set env vars)
+2. Create a `.env` file with required secrets: `DATABASE_URL`, `GEMINI_API_KEY` (or `MINIMAX_API_KEY`), `JWT_SECRET`
+3. Run `cargo build` to build the project
+4. Run `cargo check` for type checking
+5. Run `cargo test --lib` to run unit tests
 
 ## Getting Help
 
 - Open an issue for bugs or feature requests
 - Check `CLAUDE.md` for project architecture details
-- Check `AGENTS.md` for AI agent implementation details
+- Check `DEVELOPER.md` for development workflow and agent team guidelines

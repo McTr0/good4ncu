@@ -152,49 +152,68 @@ cargo run admin promote <username>
 ```
 good4ncu/
 ├── src/                    # Rust 后端
-│   ├── main.rs            # 入口：DB初始化、LLM配置、事件总线、HTTP服务
+│   ├── main.rs            # 入口：DB初始化、LLM配置、ServiceManager、HTTP服务
 │   ├── config.rs          # 配置加载（env + TOML）
-│   ├── config/file.rs     # TOML 配置结构定义
+│   ├── config/file.rs     # TOML 文件配置提供方
 │   ├── db.rs              # PostgreSQL + pgvector 初始化
+│   ├── cli.rs             # 交互式 CLI（admin promote 等）
+│   ├── utils.rs           # 金额转换：yuan_to_cents()、cents_to_yuan()
 │   ├── api/               # REST API（Axum）
 │   │   ├── auth.rs        # JWT 注册/登录/刷新
-│   │   ├── listings.rs    # 商品 CRUD + AI识别
-│   │   ├── orders.rs      # 订单管理
-│   │   ├── user.rs        # 用户资料
-│   │   ├── user_chat.rs   # 买卖双方聊天
-│   │   ├── ws.rs          # WebSocket 处理器
-│   │   ├── negotiate.rs   # 还价协商
-│   │   ├── upload.rs      # OSS 上传凭证
-│   │   └── admin.rs       # 管理后台
-│   ├── agents/            # AI Agent（Rig框架）
+│   │   ├── listings.rs    # 商品 CRUD + AI识别 + 搜索
+│   │   ├── orders.rs      # 订单管理 + 状态机流转
+│   │   ├── user.rs        # 用户资料、我的商品、用户搜索
+│   │   ├── user_chat.rs   # 买卖双方聊天（连接握手、消息收发）
+│   │   ├── ws.rs          # WebSocket 处理器 + 广播
+│   │   ├── conversations.rs # 会话列表 + 分页
+│   │   ├── negotiate.rs   # 还价协商（HITL 工作流）
+│   │   ├── notifications.rs # 通知列表、标记已读
+│   │   ├── watchlist.rs   # 心愿单增删
+│   │   ├── recommendations.rs # 推荐 feed + 相似商品（pgvector）
+│   │   ├── upload.rs      # OSS 上传凭证生成
+│   │   ├── admin.rs       # 管理后台（封禁、下架、审计日志）
+│   │   ├── metrics.rs     # Prometheus /metrics 端点
+│   │   └── stats.rs       # 公开站点统计
+│   ├── agents/            # AI Agent（Rig 框架）
 │   │   ├── router.rs      # 意图分类（轻量级决策树）
-│   │   └── tools.rs       # Agent工具集
-│   ├── llm/               # LLM 提供商
-│   │   ├── gemini.rs       # Google Gemini
-│   │   └── minimax.rs     # MiniMax（Chat + Gemini Embedding）
-│   ├── repositories/      # 数据访问层（trait + Postgres实现）
-│   │   ├── traits.rs      # Repository trait 定义
-│   │   ├── listing_repo.rs
-│   │   ├── user_repo.rs
+│   │   ├── tools.rs       # Agent 工具集
+│   │   ├── models.rs      # 领域模型
+│   │   └── negotiate.rs   # 议价 Agent（HitlRequest、HumanApprovalTool）
+│   ├── llm/              # LLM 提供商
+│   │   ├── mod.rs         # LlmProvider trait、PREAMBLE 常量
+│   │   ├── gemini.rs      # Google Gemini（chat + embeddings）
+│   │   └── minimax.rs     # MiniMax（chat + Gemini embeddings）
+│   ├── repositories/      # 数据访问层（trait + Postgres 实现）
+│   │   ├── traits.rs     # Repository trait 定义
+│   │   ├── auth_repo.rs
 │   │   ├── chat_repo.rs
-│   │   └── auth_repo.rs
-│   └── services/          # 业务逻辑 + 事件循环
-│       ├── mod.rs          # ServiceManager、BusinessEvent、事件循环
-│       ├── order.rs        # 订单服务
-│       ├── chat.rs         # 聊天服务
-│       └── notification.rs  # 通知服务
-├── migrations/             # SQL 迁移脚本（按序号执行）
-├── mobile/                # Flutter 移动端
+│   │   ├── listing_repo.rs
+│   │   ├── order_repo.rs
+│   │   └── user_repo.rs
+│   ├── services/          # 业务逻辑 + 事件循环 + Worker
+│   │   ├── mod.rs        # ServiceManager、BusinessEvent、事件循环
+│   │   ├── order.rs       # 订单服务（创建、状态转换、原子性）
+│   │   ├── chat.rs        # 聊天服务（连接生命周期、消息历史）
+│   │   ├── notification.rs # 通知服务
+│   │   ├── admin.rs       # AdminService（审计日志、封禁、下架）
+│   │   ├── product.rs     # ProductService（已禁用）
+│   │   ├── settlement.rs  # SettlementService（已禁用）
+│   │   ├── hitl_expire.rs # 议价超时 Worker（48h，10min 扫描）
+│   │   └── order_worker.rs # 订单生命周期 Worker（30m 支付超时、7d 自动确认）
+│   └── middleware/        # Axum 中间件
+│       └── rate_limit/    # 令牌桶限流（本地内存 / Redis）
+├── migrations/            # SQL 迁移脚本（序号执行）
+├── mobile/               # Flutter 移动端
 │   └── lib/
-│       ├── main.dart      # 应用入口
-│       ├── pages/         # 页面（home, chat, listing_detail, profile 等）
-│       ├── services/      # API 客户端（按领域拆分）
-│       ├── providers/     # Provider 状态管理
-│       ├── l10n/           # 国际化（ARB → Dart）
-│       └── theme/          # 主题颜色、尺寸常量
-├── good4ncu.toml         # 配置文件（不提交到 git）
-├── config.toml.example    # 配置模板（可提交）
-└── .env                   # 环境变量（不提交到 git）
+│       ├── main.dart     # 应用入口
+│       ├── pages/        # 页面（home、login、chat、listing_detail 等 17 个）
+│       ├── services/     # API 客户端（按领域拆分，13 个服务）
+│       ├── providers/    # Provider 状态管理（ChatNotifier 等）
+│       ├── l10n/         # 国际化（ARB → Dart）
+│       └── theme/        # 主题颜色、尺寸常量
+├── good4ncu.toml        # 配置文件（不提交）
+├── config.toml.example   # 配置模板（可提交）
+└── .env                  # 环境变量（不提交）
 ```
 
 ## 数据库
@@ -203,13 +222,17 @@ good4ncu/
 
 | 表 | 说明 |
 |----|------|
-| `users` | 用户（id, username, email, password_hash, role） |
-| `inventory` | 商品（标题、分类、品牌、成色、建议价、状态） |
-| `chat_connections` | 聊天连接（买卖双方握手状态） |
-| `chat_messages` | 聊天消息 |
-| `orders` | 订单（状态机：pending → paid → shipped → confirmed） |
-| `documents` | 向量文档（listing_id + pgvector embedding） |
-| `watchlist` | 收藏夹 |
+| `users` | 用户（id, username, email, password_hash, role, status） |
+| `inventory` | 商品（标题、分类、品牌、成色、建议价、缺陷描述、状态、owner_id） |
+| `chat_connections` | 聊天连接（买卖双方握手状态：pending/connected/rejected） |
+| `chat_messages` | 聊天消息（sender, receiver, content, is_agent, 已读时间戳） |
+| `orders` | 订单（状态机：pending → paid → shipped → completed/cancelled） |
+| `documents` | 向量文档（listing_id + pgvector embedding，供语义搜索） |
+| `watchlist` | 心愿单（user_id, listing_id） |
+| `notifications` | 通知（user_id, event_type, title, body, related_order_id） |
+| `hitl_requests` | 议价请求（propose_price, status: pending/approved/rejected/expired） |
+| `refresh_tokens` | JWT 刷新令牌（user_id, token_hash, expires_at） |
+| `admin_audit_logs` | 管理员操作审计（admin_id, action, target, old/new_value） |
 
 **金额存储**：所有价格存为 `i32` 整数（分），显示时除以 100 转为元。
 

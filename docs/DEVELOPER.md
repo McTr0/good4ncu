@@ -280,6 +280,25 @@ REFACTOR → 重构代码，测试保持通过
 
 ---
 
+### doc-updater — 文档更新专家
+
+**职责：** 保持文档与代码实现同步，确保文档准确反映系统架构和使用方法
+
+**触发场景：**
+- 新功能开发完成后
+- API端点变更
+- 架构决策记录（ADR）更新
+- 配置格式变更
+- 数据库Schema变更
+
+**工作方式：**
+1. 提取代码中的JSDoc/TSDoc注释
+2. 同步更新相关Markdown文档
+3. 验证文档中的示例能正确运行
+4. 更新API参考文档
+
+---
+
 ## 开发环境搭建
 
 ### Rust后端
@@ -342,6 +361,25 @@ JWT_SECRET=your_jwt_secret_at_least_32_chars
 LLM_PROVIDER=gemini  # 或 minimax
 VECTOR_DIM=768
 SERVER_PORT=3000
+```
+
+TOML配置示例：
+
+```toml
+[llm]
+provider = "gemini"
+vector_dim = 768
+
+[server]
+host = "0.0.0.0"
+port = 3000
+
+[moderation]
+blocked_keywords = "admin,manager,支付宝,微信,QQ"
+image_enabled = true
+image_api_url = "https://api.imantect.example.com/v1/moderation"
+image_api_key = "your-image-moderation-api-key"
+image_max_retries = 3
 ```
 
 **TOML配置文件搜索路径：**
@@ -522,6 +560,92 @@ flutter test integration_test/
 
 ---
 
+### ADR-006: 内容审核架构（Content Moderation）
+
+**Context（背景）:**
+
+聊天系统和商品列表中用户生成内容（UGC）需要内容审核，防止：
+- 敏感词（政治、色情、违禁品等）
+- 联系方式（手机号、微信号、QQ号、支付宝等）
+- 外部链接（诱导用户到其他平台）
+
+**Decision（决策）:**
+
+采用**同步文本审核 + 异步图片审核**的混合架构：
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      Content Moderation Architecture                 │
+├─────────────────────────────────────────────────────────────────────┤
+│  [User Content]                                                      │
+│       │                                                              │
+│       ├─── Text Content ────► [check_text()] ────► HTTP 422          │
+│       │                        │                   (rejected)        │
+│       │                        ▼                                      │
+│       │                   [passed]                                   │
+│       │                        │                                      │
+│       │                        ▼                                      │
+│       │                   [Persist]                                  │
+│       │                                                              │
+│       └─── Image Content ──► [submit_image_job()] ──► job_id        │
+│                                │                     (async)          │
+│                                ▼                                      │
+│                         [moderation_jobs table]                      │
+│                                │                                      │
+│                                ▼                                      │
+│                    [ModerationWorker] ◄─── polling                   │
+│                                │                                      │
+│                                ▼                                      │
+│                    [IMAN API / Stub]                                 │
+│                                │                                      │
+│                                ▼                                      │
+│                    [update_resource_status()]                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**ModerationService API:**
+
+```rust
+// 文本审核（同步）
+pub async fn check_text(&self, content: &str) -> Result<ModerationResult, ModerationError>
+
+// 图片审核任务提交（异步，立即返回）
+pub async fn submit_image_job(
+    &self,
+    resource_type: &str,  // "listing_image", "chat_image"
+    resource_id: &str,
+    image_data: &[u8],
+) -> Result<String, ModerationError>  // Returns job_id
+
+// ModerationCode 枚举
+pub enum ModerationCode {
+    Pass,           // 通过
+    Profanity,      // 脏话/敏感词
+    ContactInfo,    // 联系方式（手机/微信/QQ/支付宝）
+    ExternalLink,   // 外部链接
+    Spam,           // 垃圾信息
+    Political,      // 政治敏感
+    Adult,          // 色情内容
+    Other(String),  // 其他原因
+}
+```
+
+**ModerationWorker:**
+
+```rust
+pub fn run_moderation_worker(
+    pool: PgPool,
+    moderation_service: Arc<ModerationService>,
+    shutdown_rx: oneshot::Receiver<()>,
+) -> JoinHandle<()>
+```
+
+CRITICAL: `moderation_worker_handle.abort()` must be called on shutdown.
+
+**状态：** 已实施
+
+---
+
 ## Flutter开发指南
 
 ### 状态管理
@@ -641,14 +765,57 @@ sqlx::query(query)
 let query = format!("SELECT * FROM users WHERE id = '{}'", user_id);
 ```
 
+### ModerationService 内容审核服务
+
+所有用户生成的文本内容在保存前必须经过审核：
+
+```rust
+// 文本审核（同步）
+// 失败返回 ModerationError::ContentViolation
+pub async fn check_text(&self, content: &str) -> Result<ModerationResult, ModerationError>
+
+// 提交图片审核任务（异步）
+pub async fn submit_image_job(
+    &self,
+    resource_type: &str,   // "listing_image" | "chat_image" | "avatar"
+    resource_id: &str,
+    image_data: &[u8],
+) -> Result<String, ModerationError>  // job_id
+```
+
+**图片审核状态枚举 (ImageModerationStatus):**
+
+```rust
+pub enum ImageModerationStatus {
+    Approved,   // 图片审核通过
+    Pending,    // 待审核
+    Rejected,   // 图片审核未通过
+}
+```
+
+**图片审核任务结构 (ImageModerationJob):**
+
+```rust
+pub struct ImageModerationJob {
+    pub id: String,
+    pub resource_type: String,
+    pub resource_id: String,
+    pub image_url: String,
+    pub status: String,
+    pub retry_count: i32,
+}
+```
+
 ### 后台 Worker 开发指南
 
 项目在 `src/services/` 下维护了多个自动化 Worker：
 
 1. **`hitl_expire.rs`**: 处理议价请求超时（48小时）。
-2. **`order_worker.rs`**: 
+2. **`order_worker.rs`**:
    - **支付超时**：`pending` -> `cancelled` (30m)。逻辑：取消订单 + 恢复商品 Inventory 为 `active`。
    - **自动完成**：`shipped` -> `completed` (7d)。
+3. **`moderation_worker.rs`**: 异步图片审核 Worker，轮询 `moderation_jobs` 表，调用阿里云 IMAN API。
+   - **关键**：必须在 `main.rs` 的 shutdown 序列中调用 `moderation_worker_handle.abort()`。
 
 **开发要点：**
 - **幂等性**：Worker 逻辑必须支持无限次重复运行而不产生副作用。

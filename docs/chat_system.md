@@ -482,6 +482,29 @@ curl -X POST http://localhost:3000/api/chat/typing \
 
 ---
 
+## Content Moderation
+
+All user-generated text content is moderated before being persisted. Both `send_message` and `edit_message` endpoints call `check_text()` before saving:
+
+- If content **passes** moderation: message is saved and returned normally
+- If content **fails** moderation: returns HTTP `422 ContentViolation`
+
+```rust
+// In handler:
+let mod_result = state.moderation_service
+    .check_text(&payload.content)
+    .await
+    .map_err(|e| ApiError::BadRequest(e.to_string()))?;
+
+if !mod_result.passed {
+    return Err(ApiError::ContentViolation(mod_result.message));
+}
+```
+
+**Image moderation**: When a message contains an image (`image_base64`), the system submits an async moderation job via `submit_image_job()` with `resource_type="chat_image"`. This does NOT block message creation — the job is processed by the `ModerationWorker` separately. See [ModerationWorker](../DEVELOPER.md#moderationworker-详细说明) for details.
+
+---
+
 ## 4. Known Issues
 
 ### CORS Configuration Required
@@ -698,6 +721,7 @@ The connection status is displayed in the app bar using `_ConnectionIndicator`:
 | `timestamp` | TIMESTAMPTZ | When message was sent |
 | `edited_at` | TIMESTAMPTZ | When message was last edited |
 | `status` | TEXT | `sending`, `sent`, `delivered`, `read`, or `failed` |
+| `moderation_status` | TEXT | Moderation status: `approved`, `pending`, `rejected` |
 
 ---
 

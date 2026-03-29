@@ -1,6 +1,6 @@
 # Good4NCU 用户文档
 
-> 版本：V1.0.0 RC | 更新日期：2026-03-27
+> 版本：V1.0.0 RC | 更新日期：2026-03-29
 > 
 > **免责声明：** 本产品仅做信息发布，无担保和资金中介，也不收手续费。
 
@@ -71,7 +71,28 @@
 - 个人中心 → 收藏列表
 - 支持移除收藏
 
-### 1.5 订单生命周期与自动处理
+### 1.5 内容审核
+
+**系统自动审核所有用户生成内容，违规内容将被拒绝：**
+
+| 内容类型 | 审核范围 | 违规处理 |
+|---------|---------|---------|
+| 商品标题/品牌/描述 | 敏感词、外部链接 | HTTP 422 直接拒绝 |
+| 聊天消息 | 敏感词、手机/微信/QQ/邮箱、外链 | HTTP 422 直接拒绝 |
+| 用户名 | 敏感词 | HTTP 422 直接拒绝 |
+| 头像图片 | 异步审核（阿里云 IMAN） | 延迟生效，最长数分钟 |
+
+**常见违规内容（系统自动拦截）：**
+- 敏感词 / 违禁品描述
+- 手机号：`138xxxx1234`
+- 微信号：`微信号 wxid_xxx`
+- QQ号：`QQ 12345678`
+- 邮箱地址
+- 外部链接（https://...）
+
+**头像审核说明：** 上传头像后，图片进入异步审核队列，审核通过后正式生效。在审核期间，其他用户可能暂时看到默认头像。
+
+### 1.6 订单生命周期与自动处理
 
 **支付超时自动取消**
 - 下单后需在 **30 分钟内** 完成支付操作。
@@ -243,6 +264,7 @@ POST /api/auth/register
 Body: { "username": "string", "password": "string" }
 201: { "token": "jwt", "refresh_token": "uuid", "user_id": "uuid", "username": "string", "message": "注册成功" }
 409: { "error": "Conflict", "message": "用户名已被使用" }
+422: { "error": "ContentViolation", "message": "用户名包含违规信息，请修改后重试" }
 ```
 
 #### 登录
@@ -292,6 +314,7 @@ POST /api/listings
 Header: Authorization: Bearer <token>
 Body: { "title", "category", "brand", "condition_score", "suggested_price_cny", "description", "defects" }
 201: { "id": "uuid", ... }
+422: { "error": "ContentViolation", "message": "内容包含违规信息（敏感词/联系方式/外链），请修改后重试" }
 ```
 
 #### 删除商品（仅 owner）
@@ -311,6 +334,7 @@ POST /api/chat
 Header: Authorization: Bearer <token>
 Body: { "listing_id": "uuid", "message": "string", "image_data": "base64?" }
 200: { "reply": "string", "agent": "marketplace" }
+422: { "error": "ContentViolation", "message": "内容包含违规信息（敏感词/联系方式/外链），请修改后重试" }
 ```
 
 #### 发起聊天连接
@@ -417,6 +441,9 @@ Header: Authorization: Bearer <token>（需 admin）
 | `RATE_LIMIT_WINDOW_SECS` | No | `60` | 限流时间窗口（秒） |
 | `VECTOR_DIM` | No | `768` | 向量维度（pgvector embedding） |
 | `CORS_ORIGINS` | No | `*` | 允许的跨域源，多个用逗号分隔 |
+| `BLOCKED_KEYWORDS` | No | — | 逗号分隔的敏感词列表 |
+| `MODERATION_IMAGE_API_KEY` | No | — | 阿里云 IMAN 图片审核 API Key |
+| `MODERATION_IMAGE_API_URL` | No | — | 阿里云 IMAN API 端点 |
 
 ### 5.2 Docker 部署
 
@@ -521,7 +548,7 @@ GET /api/metrics
 | Refresh Token | UUID v4，SHA-256 哈希存储，7天有效期 |
 | 权限控制 | `require_admin()` 中间件，role=admin 验证 |
 | 限流 | Token Bucket，20 req/min per IP（`/api/chat`） |
-| CORS | `CORS_ORIGINS=*` 支持，可配具体域名 |
+| 内容审核 | 文本同步审核（敏感词/联系方式/外链）；图片异步审核（IMAN stub） |
 | SQL 注入 | 完全使用 sqlx 参数化查询 |
 | Admin 审计 | 所有写操作记 Audit Log |
 

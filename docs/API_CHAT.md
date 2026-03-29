@@ -243,6 +243,8 @@ Send a message in a connected conversation.
 | `image_base64` | string | No | Base64 encoded image |
 | `audio_base64` | string | No | Base64 encoded audio |
 
+**Note on image moderation**: When `image_base64` is provided, an async moderation job is submitted via `submit_image_job()` with `resource_type="chat_image"`. The message is created immediately; the image is moderated by the background `ModerationWorker`.
+
 **Response** (201 Created):
 ```json
 {
@@ -266,6 +268,7 @@ Send a message in a connected conversation.
 | 400 | `{"error": "连接状态不是 connected，当前状态: {status}"}` | Connection not established |
 | 403 | `{"error": "您没有权限执行此操作"}` | Not part of connection |
 | 404 | `{"error": "资源不存在"}` | Connection not found |
+| 422 | `{"error": "内容审核未通过: {reason}"}` | Content violates moderation policy (profanity, contact info, external link) |
 
 **WebSocket Event**: Pushes `new_message` to the other party.
 
@@ -364,6 +367,7 @@ Edit a message within 15 minutes of sending.
 | 400 | `{"error": "连接状态不是 connected，当前状态: {status}"}` | Connection not established |
 | 403 | `{"error": "您没有权限执行此操作"}` | Not the sender |
 | 404 | `{"error": "资源不存在"}` | Message not found |
+| 422 | `{"error": "内容审核未通过: {reason}"}` | Content violates moderation policy |
 
 ---
 
