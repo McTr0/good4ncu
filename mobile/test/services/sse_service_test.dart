@@ -30,41 +30,53 @@ http.StreamedResponse _response(int statusCode, {String body = ''}) {
 
 void main() {
   group('SseService', () {
-    test('retries once with refreshed token when first response is 401', () async {
-      final client = _QueuedClient([
-        _response(401),
-        _response(
-          200,
-          body: 'data: {"token":"ok","conversation_id":"conv-1"}\\n\\n',
-        ),
-      ]);
+    test(
+      'retries once with refreshed token when first response is 401',
+      () async {
+        final client = _QueuedClient([
+          _response(401),
+          _response(
+            200,
+            body: 'data: {"token":"ok","conversation_id":"conv-1"}\\n\\n',
+          ),
+        ]);
 
-      var accessToken = 'expired-token';
-      var refreshCalls = 0;
+        var accessToken = 'expired-token';
+        var refreshCalls = 0;
 
-      final service = SseService(
-        baseUrl: 'https://api.test',
-        getAccessToken: () async => accessToken,
-        refreshAccessToken: () async {
-          refreshCalls += 1;
-          accessToken = 'fresh-token';
-          return true;
-        },
-        clientFactory: () => client,
-      );
+        final service = SseService(
+          baseUrl: 'https://api.test',
+          getAccessToken: () async => accessToken,
+          refreshAccessToken: () async {
+            refreshCalls += 1;
+            accessToken = 'fresh-token';
+            return true;
+          },
+          clientFactory: () => client,
+        );
 
-      await service.connect(message: 'hello', conversationId: 'conv-1');
+        await service.connect(message: 'hello', conversationId: 'conv-1');
 
-      expect(refreshCalls, 1);
-      expect(client.requests.length, 2);
-      expect(client.requests[0].headers['Authorization'], 'Bearer expired-token');
-      expect(client.requests[1].headers['Authorization'], 'Bearer fresh-token');
+        expect(refreshCalls, 1);
+        expect(client.requests.length, 2);
+        expect(
+          client.requests[0].headers['Authorization'],
+          'Bearer expired-token',
+        );
+        expect(
+          client.requests[1].headers['Authorization'],
+          'Bearer fresh-token',
+        );
 
-      expect(client.requests[0].url.queryParameters['message'], 'hello');
-      expect(client.requests[1].url.queryParameters['conversation_id'], 'conv-1');
+        expect(client.requests[0].url.queryParameters['message'], 'hello');
+        expect(
+          client.requests[1].url.queryParameters['conversation_id'],
+          'conv-1',
+        );
 
-      await service.disconnect();
-    });
+        await service.disconnect();
+      },
+    );
 
     test('throws auth error when 401 cannot be recovered by refresh', () async {
       final client = _QueuedClient([_response(401)]);
@@ -87,13 +99,40 @@ void main() {
       expect(service.isConnected, isFalse);
     });
 
-    test('fails fast when access token is empty after refresh attempt', () async {
-      final client = _QueuedClient([_response(200)]);
+    test(
+      'fails fast when access token is empty after refresh attempt',
+      () async {
+        final client = _QueuedClient([_response(200)]);
+
+        final service = SseService(
+          baseUrl: 'https://api.test',
+          getAccessToken: () async => '',
+          refreshAccessToken: () async => false,
+          clientFactory: () => client,
+        );
+
+        await expectLater(
+          service.connect(message: 'hello'),
+          throwsA(
+            predicate((error) {
+              return error.toString().contains('No JWT token');
+            }),
+          ),
+        );
+        expect(client.requests, isEmpty);
+        expect(service.isConnected, isFalse);
+      },
+    );
+
+    test('treats refresh exceptions as auth-expired on 401', () async {
+      final client = _QueuedClient([_response(401)]);
 
       final service = SseService(
         baseUrl: 'https://api.test',
-        getAccessToken: () async => '',
-        refreshAccessToken: () async => false,
+        getAccessToken: () async => 'expired-token',
+        refreshAccessToken: () async {
+          throw Exception('refresh exploded');
+        },
         clientFactory: () => client,
       );
 
@@ -101,12 +140,39 @@ void main() {
         service.connect(message: 'hello'),
         throwsA(
           predicate((error) {
-            return error.toString().contains('No JWT token');
+            return error.toString().contains('session expired');
           }),
         ),
       );
-      expect(client.requests, isEmpty);
+      expect(client.requests.length, 1);
       expect(service.isConnected, isFalse);
     });
+
+    test(
+      'fails fast when initial refresh throws and token is missing',
+      () async {
+        final client = _QueuedClient([_response(200)]);
+
+        final service = SseService(
+          baseUrl: 'https://api.test',
+          getAccessToken: () async => null,
+          refreshAccessToken: () async {
+            throw Exception('refresh exploded');
+          },
+          clientFactory: () => client,
+        );
+
+        await expectLater(
+          service.connect(message: 'hello'),
+          throwsA(
+            predicate((error) {
+              return error.toString().contains('No JWT token');
+            }),
+          ),
+        );
+        expect(client.requests, isEmpty);
+        expect(service.isConnected, isFalse);
+      },
+    );
   });
 }

@@ -39,21 +39,40 @@ class _FakeSseService extends SseService {
 
 void main() {
   group('AgentChatNotifier', () {
-    test('requestGreeting adds a local agent greeting without SSE connect', () async {
+    test(
+      'requestGreeting adds a local agent greeting without SSE connect',
+      () async {
+        final fakeSse = _FakeSseService();
+        final notifier = AgentChatNotifier(sseService: fakeSse);
+
+        await notifier.requestGreeting();
+
+        expect(fakeSse.lastConversationId, isNull);
+        expect(fakeSse.lastMessage, isNull);
+
+        final state = notifier.state;
+        expect(state, isA<AgentChatLoaded>());
+        final loaded = state as AgentChatLoaded;
+        expect(loaded.messages.length, 1);
+        expect(loaded.messages.first.isFromAgent, isTrue);
+        expect(loaded.messages.first.content.trim().isNotEmpty, isTrue);
+
+        notifier.dispose();
+      },
+    );
+
+    test('requestGreeting is idempotent when messages already exist', () async {
       final fakeSse = _FakeSseService();
       final notifier = AgentChatNotifier(sseService: fakeSse);
 
       await notifier.requestGreeting();
-
-      expect(fakeSse.lastConversationId, isNull);
-      expect(fakeSse.lastMessage, isNull);
+      await notifier.requestGreeting();
 
       final state = notifier.state;
       expect(state, isA<AgentChatLoaded>());
       final loaded = state as AgentChatLoaded;
       expect(loaded.messages.length, 1);
-      expect(loaded.messages.first.isFromAgent, isTrue);
-      expect(loaded.messages.first.content.trim().isNotEmpty, isTrue);
+      expect(fakeSse.lastMessage, isNull);
 
       notifier.dispose();
     });
