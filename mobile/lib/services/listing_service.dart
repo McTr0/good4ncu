@@ -1,0 +1,154 @@
+import 'dart:convert';
+import '../models/models.dart';
+import 'base_service.dart';
+
+/// Listing service — handles marketplace browse, detail, create, update, delete.
+class ListingService extends BaseService {
+  /// Get paginated listings with optional filters.
+  /// GET /api/listings
+  ///
+  /// Supports all backend filter parameters: [category], [categories] (multi),
+  /// [minPriceCny], [maxPriceCny], [sort], [search], plus pagination [limit]/[offset].
+  Future<ListingsResponse> getListings({
+    int limit = 20,
+    int offset = 0,
+    String? category,
+    String? search,
+    List<String>? categories,
+    double? minPriceCny,
+    double? maxPriceCny,
+    String sort = 'newest',
+  }) async {
+    final headers = await authHeaders();
+    final queryParams = <String, String>{
+      'limit': limit.toString(),
+      'offset': offset.toString(),
+    };
+    if (category != null) queryParams['category'] = category;
+    if (search != null && search.isNotEmpty) queryParams['search'] = search;
+    if (categories != null && categories.isNotEmpty) {
+      queryParams['categories'] = categories.join(',');
+    }
+    if (minPriceCny != null) {
+      queryParams['min_price_cny'] = minPriceCny.toString();
+    }
+    if (maxPriceCny != null) {
+      queryParams['max_price_cny'] = maxPriceCny.toString();
+    }
+    if (sort != 'newest') queryParams['sort'] = sort;
+
+    final uri = Uri.parse('$baseUrl/api/listings').replace(
+      queryParameters: queryParams,
+    );
+    final response = await get(uri, headers);
+    return handleResponse(response, (data) => ListingsResponse.fromJson(data));
+  }
+
+  /// Get single listing detail.
+  /// GET /api/listings/{id}
+  Future<Listing> getListingDetail(String id) async {
+    final headers = await authHeaders();
+    final response = await get(
+      Uri.parse('$baseUrl/api/listings/$id'),
+      headers,
+    );
+    return handleResponse(
+        response, (data) => Listing.fromJson(data as Map<String, dynamic>));
+  }
+
+  /// Create new listing.
+  /// POST /api/listings
+  Future<String> createListing({
+    required String title,
+    required String category,
+    required String brand,
+    required int conditionScore,
+    required double suggestedPriceCny,
+    required List<String> defects,
+    String? description,
+  }) async {
+    final headers = await authHeaders();
+    final response = await post(
+      Uri.parse('$baseUrl/api/listings'),
+      headers,
+      jsonEncode({
+        'title': title,
+        'category': category,
+        'brand': brand,
+        'condition_score': conditionScore,
+        'suggested_price_cny': suggestedPriceCny,
+        'defects': defects,
+        'description': description,
+      }),
+    );
+    return handleResponse(response, (data) => data['id'] ?? '');
+  }
+
+  /// Update existing listing.
+  /// PUT /api/listings/{id}
+  Future<void> updateListing(String id, Map<String, dynamic> updates) async {
+    final headers = await authHeaders();
+    final response = await put(
+      Uri.parse('$baseUrl/api/listings/$id'),
+      headers,
+      jsonEncode(updates),
+    );
+    handleResponse(response, (_) {});
+  }
+
+  /// Delete listing.
+  /// DELETE /api/listings/{id}
+  Future<void> deleteListing(String id) async {
+    final headers = await authHeaders();
+    final response = await delete(
+      Uri.parse('$baseUrl/api/listings/$id'),
+      headers,
+    );
+    handleResponse(response, (_) {});
+  }
+
+  /// Recognize item from image using AI.
+  /// POST /api/listings/recognize
+  Future<RecognizedItem> recognizeItem(String imageBase64) async {
+    final headers = await authHeaders();
+    final response = await post(
+      Uri.parse('$baseUrl/api/listings/recognize'),
+      headers,
+      jsonEncode({'image_base64': imageBase64}),
+    );
+    return handleResponse(response, (data) => RecognizedItem.fromJson(data));
+  }
+}
+
+/// Item recognized from image AI analysis.
+class RecognizedItem {
+  final String title;
+  final String category;
+  final String brand;
+  final int conditionScore;
+  final List<String> defects;
+  final String description;
+
+  RecognizedItem({
+    required this.title,
+    required this.category,
+    required this.brand,
+    required this.conditionScore,
+    required this.defects,
+    required this.description,
+  });
+
+  factory RecognizedItem.fromJson(Map<String, dynamic> json) {
+    return RecognizedItem(
+      title: json['title'] ?? '',
+      category: json['category'] ?? 'other',
+      brand: json['brand'] ?? '',
+      conditionScore: json['condition_score'] ?? 5,
+      defects: (json['defects'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          [],
+      description: json['description'] ?? '',
+    );
+  }
+}

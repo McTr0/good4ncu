@@ -1,7 +1,8 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/platform_utils.dart';
+import 'token_storage.dart';
 
 /// SSE token event parsed from `data: {...}\n\n` format.
 class SseToken {
@@ -32,7 +33,7 @@ class SseToken {
 /// Connects to `GET /api/chat/stream` with JWT auth.
 /// Each SSE `data:` line is parsed as JSON and emitted via `StreamController`.
 class SseService {
-  static const String _baseUrl = 'http://localhost:3000';
+  static String get _baseUrl => getApiBaseUrl();
 
   http.Client? _client;
   StreamController<SseToken>? _controller;
@@ -54,8 +55,7 @@ class SseService {
     // Disconnect any existing connection first.
     await disconnect();
 
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await TokenStorage.instance.getAccessToken();
     if (token == null) {
       throw Exception('SSE: No JWT token — not authenticated');
     }
@@ -63,23 +63,22 @@ class SseService {
     _client = http.Client();
     _controller = StreamController<SseToken>.broadcast();
 
-    // Build query params for GET /api/chat/stream
-    // Backend reads JWT from ?token= query param (ChatStreamQuery.token).
-    final queryParams = <String, String>{
-      'token': token,
-      'message': message,
-    };
+    // Build query params for GET /api/chat/stream.
+    // JWT is sent via Authorization header.
+    final queryParams = <String, String>{'message': message};
     if (conversationId != null) queryParams['conversation_id'] = conversationId;
     if (listingId != null) queryParams['listing_id'] = listingId;
     if (imageBase64 != null) queryParams['image'] = imageBase64;
     if (audioBase64 != null) queryParams['audio'] = audioBase64;
 
-    final uri = Uri.parse('$_baseUrl/api/chat/stream')
-        .replace(queryParameters: queryParams);
+    final uri = Uri.parse(
+      '$_baseUrl/api/chat/stream',
+    ).replace(queryParameters: queryParams);
 
     final request = http.Request('GET', uri);
     request.headers['Accept'] = 'text/event-stream';
     request.headers['Cache-Control'] = 'no-cache';
+    request.headers['Authorization'] = 'Bearer $token';
 
     // Start the request — this is a streaming response, not a regular HTTP call.
     // `send()` returns a Future<StreamedResponse> once headers are received.

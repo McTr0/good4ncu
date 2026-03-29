@@ -1,15 +1,15 @@
 import 'dart:convert';
 import 'package:http/http.dart' as http;
-import 'package:shared_preferences/shared_preferences.dart';
+import '../utils/platform_utils.dart';
 import '../models/models.dart';
+import 'token_storage.dart';
 
 /// Service for fetching personalized recommendations via embedding similarity.
 class RecommendationService {
-  static const String _baseUrl = 'http://localhost:3000';
+  static String get _baseUrl => getApiBaseUrl();
 
   Future<Map<String, String>> _authHeaders() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
+    final token = await TokenStorage.instance.getAccessToken();
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (token != null) {
       headers['Authorization'] = 'Bearer $token';

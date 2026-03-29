@@ -1,230 +1,178 @@
-import 'dart:convert';
-import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import '../models/models.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'base_service.dart';
+import 'auth_service.dart';
+import 'chat_service.dart';
+import 'user_service.dart';
+import 'listing_service.dart';
+import 'admin_service.dart';
+import 'negotiate_service.dart';
 
-/// Thrown when API returns 401 Unauthorized
-class AuthException implements Exception {
-  final String message;
-  AuthException([this.message = 'Session expired. Please login again.']);
-  @override
-  String toString() => message;
-}
+/// Remaining ApiService methods after domain split.
+/// Routes to split services internally; pages migrate to individual services over time.
+class ApiService extends BaseService {
+  // Static navigatorKey is inherited from BaseService — accessible as ApiService.navigatorKey
+  final ChatService _chatService = ChatService();
+  final AuthService _authService = AuthService();
+  final UserService _userService = UserService();
+  final ListingService _listingService = ListingService();
+  final AdminService _adminService = AdminService();
+  final NegotiateService _negotiateService = NegotiateService();
 
-/// Thrown when API returns 409 Conflict
-class ConflictException implements Exception {
-  final String message;
-  ConflictException([this.message = 'Resource conflict.']);
-  @override
-  String toString() => message;
-}
+  // -----------------------------------------------------------------
+  // Stats
+  // -----------------------------------------------------------------
 
-/// 网络不可达 / 超时
-class NetworkException implements Exception {
-  final String message;
-  NetworkException([this.message = '网络连接失败，请检查网络设置']);
-  @override
-  String toString() => message;
-}
-
-/// 服务器错误（5xx）
-class ServerException implements Exception {
-  final String message;
-  final int statusCode;
-  ServerException(this.statusCode, [this.message = '服务器异常，请稍后再试']);
-  @override
-  String toString() => message;
-}
-
-class ApiService {
-  // Global navigator key for programmatic navigation (e.g., force logout)
-  static final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
-
-  // Use localhost for Chrome/Web; use 10.0.2.2 for Android Emulator
-  static const String baseUrl = 'http://localhost:3000';
-
-  // Timeout-enabled client
-  final http.Client _client = http.Client();
-
-  /// Build headers with JWT token if available.
-  Future<Map<String, String>> _authHeaders() async {
-    final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('jwt_token');
-    final headers = <String, String>{
+  /// Get platform statistics (no auth required).
+  /// GET /api/stats
+  Future<Map<String, dynamic>> getStats() async {
+    final response = await get(Uri.parse('$baseUrl/api/stats'), {
       'Content-Type': 'application/json',
-    };
-    if (token != null) {
-      headers['Authorization'] = 'Bearer $token';
-    }
-    return headers;
+    });
+    return handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
-  /// Handle responses, throwing appropriate exceptions.
-  T _handleResponse<T>(http.Response response, T Function(dynamic) parse) {
-    if (response.statusCode == 401) {
-      // 自动清除 token 并跳转登录页
-      _clearAuthAndRedirect();
-      throw AuthException('Session expired. Please login again.');
-    }
-    if (response.statusCode == 409) {
-      String msg = 'Resource conflict.';
-      try {
-        final body = jsonDecode(response.body);
-        msg = body['error']?.toString() ?? body['message']?.toString() ?? msg;
-      } catch (_) {}
-      throw ConflictException(msg);
-    }
-    if (response.statusCode == 403) {
-      throw AuthException('Permission denied.');
-    }
-    if (response.statusCode >= 500) {
-      throw ServerException(response.statusCode);
-    }
-    if (response.statusCode != 200) {
-      String msg = 'Request failed: $response.statusCode';
-      try {
-        final body = jsonDecode(response.body);
-        msg = body['message']?.toString() ?? msg;
-      } catch (_) {}
-      throw NetworkException(msg);
-    }
-    try {
-      return parse(jsonDecode(response.body));
-    } catch (e) {
-      throw ServerException(response.statusCode, '服务器返回数据格式错误');
-    }
+  // -----------------------------------------------------------------
+  // Recommendations
+  // -----------------------------------------------------------------
+
+  /// Get personalized recommendations (no auth required).
+  /// GET /api/recommendations
+  Future<Map<String, dynamic>> getRecommendations() async {
+    final response = await get(Uri.parse('$baseUrl/api/recommendations'), {
+      'Content-Type': 'application/json',
+    });
+    return handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
-  Future<void> _clearAuthAndRedirect() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('jwt_token');
-    await prefs.remove('refresh_token');
-    if (navigatorKey.currentState != null) {
-      navigatorKey.currentState!.pushReplacementNamed('/login');
-    }
-  }
+  // -----------------------------------------------------------------
+  // Conversations (legacy — prefer ChatService)
+  // -----------------------------------------------------------------
 
-  /// GET request with 15s timeout.
-  Future<http.Response> _get(Uri url, Map<String, String> headers) async {
-    return _client.get(url, headers: headers).timeout(
-      const Duration(seconds: 15),
-      onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
-    );
-  }
-
-  /// POST request with 30s timeout.
-  Future<http.Response> _post(Uri url, Map<String, String> headers, String body) async {
-    return _client.post(url, headers: headers, body: body).timeout(
-      const Duration(seconds: 30),
-      onTimeout: () => throw NetworkException('请求超时，请稍后重试'),
-    );
-  }
-
-  Future<String> sendChatMessage(ChatMessage message) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat'),
-      headers,
-      jsonEncode(message.toJson()),
-    );
-
-    return _handleResponse(response, (data) => data['reply'] ?? 'Empty response');
-  }
-
-  Future<String> login(String username, String password) async {
-    final response = await _post(
-      Uri.parse('$baseUrl/api/auth/login'),
-      {'Content-Type': 'application/json'},
-      jsonEncode({'username': username, 'password': password}),
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final token = data['token'] ?? '';
-      if (token.isEmpty) {
-        throw Exception(data['message'] ?? 'Login failed');
-      }
-      return token;
-    } else {
-      throw Exception('Login error: ${response.statusCode}');
-    }
-  }
-
-  Future<String> register(String username, String password) async {
-    final response = await _post(
-      Uri.parse('$baseUrl/api/auth/register'),
-      {'Content-Type': 'application/json'},
-      jsonEncode({'username': username, 'password': password}),
-    );
-
-    if (response.statusCode == 200) {
-      final data = jsonDecode(response.body);
-      final token = data['token'] ?? '';
-      if (token.isEmpty) {
-        throw Exception(data['message'] ?? 'Registration failed');
-      }
-      return token;
-    } else {
-      throw Exception('Registration error: ${response.statusCode}');
-    }
-  }
-
-  Future<Map<String, dynamic>> getUserProfile() async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/user/profile'),
+  /// Get conversations (legacy endpoint — prefer ChatService.getConnections).
+  /// GET /api/conversations
+  Future<List<dynamic>> getConversations() async {
+    final headers = await authHeaders();
+    final response = await get(
+      Uri.parse('$baseUrl/api/conversations'),
       headers,
     );
-
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+    return handleResponse(response, (data) => data as List<dynamic>);
   }
 
-  Future<Map<String, dynamic>> getUserListings(
-      {int limit = 20, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/user/listings?limit=$limit&offset=$offset'),
+  /// Get conversation messages (legacy — prefer ChatService.getChatConversationMessages).
+  /// GET /api/conversations/{conversationId}/messages
+  Future<Map<String, dynamic>> getConversationMessages(
+    String conversationId, {
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final headers = await authHeaders();
+    final response = await get(
+      Uri.parse(
+        '$baseUrl/api/conversations/$conversationId/messages?limit=$limit&offset=$offset',
+      ),
       headers,
     );
-
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
+    return handleResponse(response, (data) => data as Map<String, dynamic>);
   }
 
-  // ---------------------------------------------------------------------------
-  // Marketplace browse / detail / create
-  // ---------------------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Backward-compatibility wrappers (delegate to ChatService)
+  // -----------------------------------------------------------------
+
+  Future<ConversationMessage> sendMessage(
+    String conversationId, {
+    required String content,
+    String? imageBase64,
+    String? audioBase64,
+  }) => _chatService.sendMessage(
+    conversationId,
+    content: content,
+    imageBase64: imageBase64,
+    audioBase64: audioBase64,
+  );
+
+  Future<ConversationMessage> editMessage(String messageId, String content) =>
+      _chatService.editMessage(messageId, content);
+
+  Future<void> markMessageRead(String messageId) =>
+      _chatService.markMessageRead(messageId);
+
+  Future<void> sendTyping(String conversationId) =>
+      _chatService.sendTyping(conversationId);
+
+  Future<void> markConnectionAsRead(String conversationId) =>
+      _chatService.markConnectionAsRead(conversationId);
+
+  Future<List<Conversation>> getConnections() => _chatService.getConnections();
+
+  Future<void> requestConnection(String receiverId, {String? listingId}) =>
+      _chatService.requestConnection(receiverId, listingId: listingId);
+
+  Future<void> acceptConnection(String connectionId) =>
+      _chatService.acceptConnection(connectionId);
+
+  Future<void> rejectConnection(String connectionId) =>
+      _chatService.rejectConnection(connectionId);
+
+  Future<List<ConversationMessage>> getChatConversationMessages(
+    String conversationId, {
+    int limit = 50,
+    int offset = 0,
+  }) => _chatService.getChatConversationMessages(
+    conversationId,
+    limit: limit,
+    offset: offset,
+  );
+
+  // -----------------------------------------------------------------
+  // Backward-compatibility wrappers (delegate to AuthService)
+  // -----------------------------------------------------------------
+
+  Future<String> login(String username, String password) =>
+      _authService.login(username, password);
+
+  Future<String> register(String username, String password) =>
+      _authService.register(username, password);
+
+  // -----------------------------------------------------------------
+  // Backward-compatibility wrappers (delegate to UserService)
+  // -----------------------------------------------------------------
+
+  Future<Map<String, dynamic>> getUserProfile() =>
+      _userService.getUserProfile();
+
+  Future<Map<String, dynamic>> getUserListings({
+    int limit = 20,
+    int offset = 0,
+  }) => _userService.getUserListings(limit: limit, offset: offset);
+
+  // -----------------------------------------------------------------
+  // Backward-compatibility wrappers (delegate to ListingService)
+  // -----------------------------------------------------------------
 
   Future<ListingsResponse> getListings({
     int limit = 20,
     int offset = 0,
     String? category,
     String? search,
-  }) async {
-    final headers = await _authHeaders();
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    };
-    if (category != null) queryParams['category'] = category;
-    if (search != null && search.isNotEmpty) queryParams['search'] = search;
+    List<String>? categories,
+    double? minPriceCny,
+    double? maxPriceCny,
+    String sort = 'newest',
+  }) => _listingService.getListings(
+    limit: limit,
+    offset: offset,
+    category: category,
+    search: search,
+    categories: categories,
+    minPriceCny: minPriceCny,
+    maxPriceCny: maxPriceCny,
+    sort: sort,
+  );
 
-    final uri = Uri.parse('$baseUrl/api/listings').replace(
-      queryParameters: queryParams,
-    );
-    final response = await _get(uri, headers);
-    return _handleResponse(response, (data) => ListingsResponse.fromJson(data));
-  }
-
-  Future<Listing> getListingDetail(String id) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/listings/$id'),
-      headers,
-    );
-    return _handleResponse(
-        response, (data) => Listing.fromJson(data as Map<String, dynamic>));
-  }
+  Future<Listing> getListingDetail(String id) =>
+      _listingService.getListingDetail(id);
 
   Future<String> createListing({
     required String title,
@@ -234,594 +182,87 @@ class ApiService {
     required double suggestedPriceCny,
     required List<String> defects,
     String? description,
-  }) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/listings'),
-      headers,
-      jsonEncode({
-        'title': title,
-        'category': category,
-        'brand': brand,
-        'condition_score': conditionScore,
-        'suggested_price_cny': suggestedPriceCny,
-        'defects': defects,
-        'description': description,
-      }),
-    );
-    return _handleResponse(response, (data) => data['id'] ?? '');
-  }
+  }) => _listingService.createListing(
+    title: title,
+    category: category,
+    brand: brand,
+    conditionScore: conditionScore,
+    suggestedPriceCny: suggestedPriceCny,
+    defects: defects,
+    description: description,
+  );
 
-  Future<RecognizedItem> recognizeItem(String imageBase64) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/listings/recognize'),
-      headers,
-      jsonEncode({'image_base64': imageBase64}),
-    );
-    return _handleResponse(response, (data) => RecognizedItem.fromJson(data));
-  }
+  Future<void> updateListing(String id, Map<String, dynamic> updates) =>
+      _listingService.updateListing(id, updates);
 
-  // ---------------------------------------------------------------------------
-  // Orders
-  // ---------------------------------------------------------------------------
+  Future<RecognizedItem> recognizeItem(String imageBase64) =>
+      _listingService.recognizeItem(imageBase64);
 
-  Future<Map<String, dynamic>> getOrders({String? role, int limit = 20, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    };
-    if (role != null) queryParams['role'] = role;
-    final uri = Uri.parse('$baseUrl/api/orders').replace(queryParameters: queryParams);
-    final response = await _get(uri, headers);
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
+  // -----------------------------------------------------------------
+  // Backward-compatibility wrappers (delegate to NegotiateService)
+  // -----------------------------------------------------------------
 
-  Future<Map<String, dynamic>> getOrder(String orderId) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/orders/$orderId'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
+  Future<List<HitlRequest>> getNegotiations() =>
+      _negotiateService.getNegotiations();
 
-  Future<Map<String, dynamic>> createOrder({
-    required String listingId,
-    required double offeredPriceCny,
-  }) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/orders'),
-      headers,
-      jsonEncode({
-        'listing_id': listingId,
-        'offered_price_cny': offeredPriceCny,
-      }),
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  Future<void> payOrder(String orderId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/orders/$orderId/pay'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<void> shipOrder(String orderId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/orders/$orderId/ship'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<void> confirmOrder(String orderId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/orders/$orderId/confirm'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<void> cancelOrder(String orderId, {String? reason}) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/orders/$orderId/cancel'),
-      headers,
-      jsonEncode({'reason': reason}),
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  // ---------------------------------------------------------------------------
-  // Watchlist
-  // ---------------------------------------------------------------------------
-
-  Future<List<dynamic>> getWatchlist() async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/watchlist'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as List<dynamic>);
-  }
-
-  Future<void> addToWatchlist(String listingId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/watchlist/$listingId'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<void> removeFromWatchlist(String listingId) async {
-    final headers = await _authHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/api/watchlist/$listingId'),
-      headers: headers,
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<bool> isWatched(String listingId) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/watchlist/$listingId'),
-      headers,
-    );
-    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
-    return data['watched'] ?? false;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Conversations
-  // ---------------------------------------------------------------------------
-
-  Future<List<dynamic>> getConversations() async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/conversations'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as List<dynamic>);
-  }
-
-  Future<Map<String, dynamic>> getConversationMessages(String conversationId, {int limit = 50, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/conversations/$conversationId/messages?limit=$limit&offset=$offset'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Users
-  // ---------------------------------------------------------------------------
-
-  Future<Map<String, dynamic>> getPublicUserProfile(String userId) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/users/$userId'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  Future<Map<String, dynamic>> searchUsers(String query, {int limit = 20, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/users/search?q=$query&limit=$limit&offset=$offset'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Admin endpoints (role = 'admin' required)
-  // ---------------------------------------------------------------------------
-
-  Future<void> banUser(String userId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/admin/users/$userId/ban'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) => null);
-  }
-
-  Future<void> unbanUser(String userId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/admin/users/$userId/unban'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) => null);
-  }
-
-  Future<void> updateAdminOrderStatus(String orderId, String status) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/admin/orders/$orderId/status'),
-      headers,
-      jsonEncode({'status': status}),
-    );
-    _handleResponse(response, (_) => null);
-  }
-
-  Future<void> updateUserRole(String userId, String role) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/admin/users/$userId/role'),
-      headers,
-      jsonEncode({'role': role}),
-    );
-    _handleResponse(response, (_) => null);
-  }
-
-  Future<void> takedownListing(String listingId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/admin/listings/$listingId/takedown'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) => null);
-  }
-
-  Future<Map<String, dynamic>> getAdminStats() async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/admin/stats'),
-      headers,
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  Future<Map<String, dynamic>> getAdminUsers({String? q, int limit = 20, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    };
-    if (q != null && q.isNotEmpty) queryParams['q'] = q;
-    final uri = Uri.parse('$baseUrl/api/admin/users').replace(queryParameters: queryParams);
-    final response = await _get(uri, headers);
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  Future<Map<String, dynamic>> getAdminListings({String? status, int limit = 50, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    };
-    if (status != null) queryParams['status'] = status;
-    final uri = Uri.parse('$baseUrl/api/admin/listings').replace(queryParameters: queryParams);
-    final response = await _get(uri, headers);
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  Future<Map<String, dynamic>> getAdminOrders({String? status, int limit = 50, int offset = 0}) async {
-    final headers = await _authHeaders();
-    final queryParams = <String, String>{
-      'limit': limit.toString(),
-      'offset': offset.toString(),
-    };
-    if (status != null) queryParams['status'] = status;
-    final uri = Uri.parse('$baseUrl/api/admin/orders').replace(queryParameters: queryParams);
-    final response = await _get(uri, headers);
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  Future<Map<String, dynamic>> impersonateUser(String userId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/admin/users/$userId/impersonate'),
-      headers,
-      '{}',
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Stats
-  // ---------------------------------------------------------------------------
-
-  Future<Map<String, dynamic>> getStats() async {
-    final response = await _get(
-      Uri.parse('$baseUrl/api/stats'),
-      {'Content-Type': 'application/json'},
-    );
-    return _handleResponse(response, (data) => data as Map<String, dynamic>);
-  }
-
-  // ---------------------------------------------------------------------------
-  // Listings management
-  // ---------------------------------------------------------------------------
-
-  Future<void> updateListing(String id, Map<String, dynamic> updates) async {
-    final headers = await _authHeaders();
-    final response = await http.put(
-      Uri.parse('$baseUrl/api/listings/$id'),
-      headers: headers,
-      body: jsonEncode(updates),
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<void> deleteListing(String id) async {
-    final headers = await _authHeaders();
-    final response = await http.delete(
-      Uri.parse('$baseUrl/api/listings/$id'),
-      headers: headers,
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  Future<void> changePassword(String currentPassword, String newPassword) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/auth/change-password'),
-      headers,
-      jsonEncode({
-        'current_password': currentPassword,
-        'new_password': newPassword,
-      }),
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  // ---------------------------------------------------------------------------
-  // Negotiations (HITL)
-  // ---------------------------------------------------------------------------
-
-  /// List pending negotiation requests for the current user.
-  /// Sellers see pending + expired; buyers see countered + approved + rejected + expired.
-  Future<List<HitlRequest>> getNegotiations() async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/negotiations'),
-      headers,
-    );
-    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
-    final items = data['items'] as List<dynamic>? ?? [];
-    return items
-        .map((e) => HitlRequest.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
-
-  /// Seller responds to a pending negotiation.
-  /// action: 'approve' | 'reject' | 'counter'
-  /// counter_price: required when action == 'counter' (in yuan, not cents)
   Future<Map<String, dynamic>> respondNegotiation(
     String id, {
     required String action,
     double? counterPrice,
-  }) async {
-    final headers = await _authHeaders();
-    final body = <String, dynamic>{'action': action};
-    if (counterPrice != null) body['counter_price'] = counterPrice;
-    final response = await http.patch(
-      Uri.parse('$baseUrl/api/negotiations/$id/respond'),
-      headers: headers,
-      body: jsonEncode(body),
-    );
-    return _handleResponse(response, (d) => d as Map<String, dynamic>);
-  }
+  }) => _negotiateService.respondNegotiation(
+    id,
+    action: action,
+    counterPrice: counterPrice,
+  );
 
-  /// Buyer accepts seller's counter-offer.
-  Future<Map<String, dynamic>> acceptCounterNegotiation(String id) async {
-    final headers = await _authHeaders();
-    final response = await http.patch(
-      Uri.parse('$baseUrl/api/negotiations/$id/accept'),
-      headers: headers,
-      body: '{}',
-    );
-    return _handleResponse(response, (d) => d as Map<String, dynamic>);
-  }
+  Future<Map<String, dynamic>> acceptCounterNegotiation(String id) =>
+      _negotiateService.acceptCounterNegotiation(id);
 
-  /// Buyer rejects seller's counter-offer.
-  Future<Map<String, dynamic>> rejectCounterNegotiation(String id) async {
-    final headers = await _authHeaders();
-    final response = await http.patch(
-      Uri.parse('$baseUrl/api/negotiations/$id/reject'),
-      headers: headers,
-      body: '{}',
-    );
-    return _handleResponse(response, (d) => d as Map<String, dynamic>);
-  }
+  Future<Map<String, dynamic>> rejectCounterNegotiation(String id) =>
+      _negotiateService.rejectCounterNegotiation(id);
 
-  // ---------------------------------------------------------------------------
-  // Chat connections (three-way handshake)
-  // ---------------------------------------------------------------------------
+  // -----------------------------------------------------------------
+  // Backward-compatibility wrappers (delegate to AdminService)
+  // -----------------------------------------------------------------
 
-  /// 获取会话列表
-  Future<List<Conversation>> getConnections() async {
-    final headers = await _authHeaders();
-    final response = await _get(
-      Uri.parse('$baseUrl/api/chat/connections'),
-      headers,
-    );
-    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
-    final items = data['items'] as List<dynamic>? ?? [];
-    return items
-        .map((e) => Conversation.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
+  Future<Map<String, dynamic>> getAdminStats() => _adminService.getAdminStats();
 
-  /// 请求建立连接
-  Future<void> requestConnection(String receiverId, {String? listingId}) async {
-    final headers = await _authHeaders();
-    final body = <String, dynamic>{'receiver_id': receiverId};
-    if (listingId != null) body['listing_id'] = listingId;
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat/connect/request'),
-      headers,
-      jsonEncode(body),
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  /// 接受连接
-  Future<void> acceptConnection(String connectionId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat/connect/accept'),
-      headers,
-      jsonEncode({'connection_id': connectionId}),
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  /// 拒绝连接
-  Future<void> rejectConnection(String connectionId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat/connect/reject'),
-      headers,
-      jsonEncode({'connection_id': connectionId}),
-    );
-    _handleResponse(response, (_) {});
-  }
-
-  /// 发送私聊消息
-  Future<ConversationMessage> sendMessage(
-    String conversationId, {
-    required String content,
-    String? imageBase64,
-    String? audioBase64,
-  }) async {
-    final headers = await _authHeaders();
-    final body = <String, dynamic>{'content': content};
-    if (imageBase64 != null) body['image_base64'] = imageBase64;
-    if (audioBase64 != null) body['audio_base64'] = audioBase64;
-
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat/conversations/$conversationId/messages'),
-      headers,
-      jsonEncode(body),
-    );
-    final data = _handleResponse(
-      response,
-      (d) => ConversationMessage.fromJson(d as Map<String, dynamic>),
-    );
-    return data;
-  }
-
-  /// 获取私聊消息列表
-  Future<List<ConversationMessage>> getChatConversationMessages(
-    String conversationId, {
+  Future<Map<String, dynamic>> getAdminListings({
+    String? status,
     int limit = 50,
     int offset = 0,
-  }) async {
-    final headers = await _authHeaders();
-    final uri = Uri.parse(
-      '$baseUrl/api/chat/conversations/$conversationId/messages?limit=$limit&offset=$offset',
-    );
-    final response = await _get(uri, headers);
-    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
-    final messages = data['messages'] as List<dynamic>? ?? [];
-    return messages
-        .map((e) => ConversationMessage.fromJson(e as Map<String, dynamic>))
-        .toList();
-  }
+  }) => _adminService.getAdminListings(
+    status: status,
+    limit: limit,
+    offset: offset,
+  );
 
-  /// 标记消息已读
-  Future<void> markMessageRead(String messageId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat/messages/$messageId/read'),
-      headers,
-      '{}',
-    );
-    _handleResponse(response, (_) {});
-  }
+  Future<void> takedownListing(String listingId) =>
+      _adminService.takedownListing(listingId);
 
-  /// 编辑消息（发送后15分钟内）
-  Future<ConversationMessage> editMessage(String messageId, String content) async {
-    final headers = await _authHeaders();
-    final response = await http.patch(
-      Uri.parse('$baseUrl/api/chat/messages/$messageId'),
-      headers: headers,
-      body: jsonEncode({'content': content}),
-    );
-    return _handleResponse(
-      response,
-      (d) => ConversationMessage.fromJson(d as Map<String, dynamic>),
-    );
-  }
+  Future<Map<String, dynamic>> getAdminOrders({
+    String? status,
+    int limit = 50,
+    int offset = 0,
+  }) => _adminService.getAdminOrders(
+    status: status,
+    limit: limit,
+    offset: offset,
+  );
 
-  /// 发送typing indicator
-  Future<void> sendTyping(String conversationId) async {
-    final headers = await _authHeaders();
-    final response = await _post(
-      Uri.parse('$baseUrl/api/chat/typing'),
-      headers,
-      jsonEncode({'conversation_id': conversationId}),
-    );
-    _handleResponse(response, (_) {});
-  }
+  Future<void> updateAdminOrderStatus(String orderId, String status) =>
+      _adminService.updateAdminOrderStatus(orderId, status);
 
-  /// 标记整个会话为已读（重置unread_count）
-  Future<void> markConnectionAsRead(String conversationId) async {
-    // The backend resets unread_count when any message in the conversation is marked as read.
-    // For simplicity, we just mark all unread messages as read.
-    final headers = await _authHeaders();
-    final uri = Uri.parse(
-      '$baseUrl/api/chat/conversations/$conversationId/messages?limit=50&offset=0',
-    );
-    final response = await _get(uri, headers);
-    final data = _handleResponse(response, (d) => d as Map<String, dynamic>);
-    final messages = data['messages'] as List<dynamic>? ?? [];
-    for (final msg in messages) {
-      final readAt = msg['read_at'];
-      if (readAt == null) {
-        await markMessageRead(msg['id'].toString()).catchError((_) {});
-      }
-    }
-  }
-}
+  Future<Map<String, dynamic>> getAdminUsers({
+    String? q,
+    int limit = 20,
+    int offset = 0,
+  }) => _adminService.getAllUsers(q: q, limit: limit, offset: offset);
 
-class RecognizedItem {
-  final String title;
-  final String category;
-  final String brand;
-  final int conditionScore;
-  final List<String> defects;
-  final String description;
+  Future<void> banUser(String userId) => _adminService.banUser(userId);
 
-  RecognizedItem({
-    required this.title,
-    required this.category,
-    required this.brand,
-    required this.conditionScore,
-    required this.defects,
-    required this.description,
-  });
+  Future<void> unbanUser(String userId) => _adminService.unbanUser(userId);
 
-  factory RecognizedItem.fromJson(Map<String, dynamic> json) {
-    return RecognizedItem(
-      title: json['title'] ?? '',
-      category: json['category'] ?? 'other',
-      brand: json['brand'] ?? '',
-      conditionScore: json['condition_score'] ?? 5,
-      defects: (json['defects'] as List<dynamic>?)?.map((e) => e.toString()).toList() ?? [],
-      description: json['description'] ?? '',
-    );
-  }
+  Future<String> impersonateUserToken(String userId) =>
+      _adminService.impersonateUserToken(userId);
 }

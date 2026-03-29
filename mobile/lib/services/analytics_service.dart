@@ -1,12 +1,13 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import '../utils/platform_utils.dart';
 
 /// User behavior analytics service.
 /// Tracks impressions, clicks, and negotiation events.
 /// Gracefully degrades if backend is not available.
 class AnalyticsService {
-  static const String _baseUrl = 'http://localhost:3000';
+  static String get _baseUrl => getApiBaseUrl();
   static const String _endpoint = '/api/analytics/events';
 
   /// Track a listing impression (浏览曝光).
