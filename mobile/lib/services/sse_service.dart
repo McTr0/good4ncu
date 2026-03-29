@@ -3,7 +3,12 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../utils/platform_utils.dart';
+import 'base_service.dart';
 import 'token_storage.dart';
+
+typedef AccessTokenProvider = Future<String?> Function();
+typedef RefreshAccessToken = Future<bool> Function();
+typedef HttpClientFactory = http.Client Function();
 
 /// SSE token event parsed from `data: {...}\n\n` format.
 class SseToken {
@@ -36,14 +41,37 @@ class SseToken {
 /// Connects to `GET /api/chat/stream` with JWT auth.
 /// Each SSE `data:` line is parsed as JSON and emitted via StreamController.
 class SseService {
-  static String get _baseUrl => getApiBaseUrl();
   static const int _maxPendingChars = 65536;
+
+  final String _baseUrl;
+  final AccessTokenProvider _getAccessToken;
+  final RefreshAccessToken _refreshAccessToken;
+  final HttpClientFactory _clientFactory;
 
   http.Client? _client;
   StreamController<SseToken>? _controller;
   StreamSubscription<String>? _streamSubscription;
   bool _isConnected = false;
   int _activeConnectionId = 0;
+
+  SseService({
+    String? baseUrl,
+    AccessTokenProvider? getAccessToken,
+    RefreshAccessToken? refreshAccessToken,
+    HttpClientFactory? clientFactory,
+  }) : _baseUrl = baseUrl ?? getApiBaseUrl(),
+       _getAccessToken = getAccessToken ?? _defaultGetAccessToken,
+       _refreshAccessToken =
+           refreshAccessToken ?? _defaultRefreshAccessToken,
+       _clientFactory = clientFactory ?? http.Client.new;
+
+  static Future<String?> _defaultGetAccessToken() {
+    return TokenStorage.instance.getAccessToken();
+  }
+
+  static Future<bool> _defaultRefreshAccessToken() async {
+    return BaseService().refreshAccessTokenIfNeeded();
+  }
 
   /// Stream of parsed SSE token events.
   Stream<SseToken> get stream => _controller?.stream ?? const Stream.empty();
@@ -61,12 +89,19 @@ class SseService {
     await disconnect();
     final connectionId = _activeConnectionId;
 
-    final token = await TokenStorage.instance.getAccessToken();
-    if (token == null) {
+    var token = await _getAccessToken();
+    if (token == null || token.isEmpty) {
+      final refreshed = await _refreshAccessToken();
+      if (refreshed) {
+        token = await _getAccessToken();
+      }
+    }
+
+    if (token == null || token.isEmpty) {
       throw Exception('SSE: No JWT token — not authenticated');
     }
 
-    final client = http.Client();
+    final client = _clientFactory();
     _client = client;
     // Single-subscription stream preserves events that arrive before UI listener attaches.
     _controller = StreamController<SseToken>();
@@ -81,20 +116,43 @@ class SseService {
       '$_baseUrl/api/chat/stream',
     ).replace(queryParameters: queryParams);
 
-    final request = http.Request('GET', uri);
-    request.headers['Accept'] = 'text/event-stream';
-    request.headers['Cache-Control'] = 'no-cache';
-    request.headers['Authorization'] = 'Bearer $token';
-
-    final streamedResponse = await client.send(request);
+    var streamedResponse = await _sendSseRequest(client, uri, token);
 
     if (connectionId != _activeConnectionId) {
       client.close();
+      if (identical(_client, client)) {
+        _client = null;
+      }
+      return;
+    }
+
+    if (streamedResponse.statusCode == 401) {
+      final refreshed = await _refreshAccessToken();
+      if (refreshed) {
+        final refreshedToken = await _getAccessToken();
+        if (refreshedToken != null && refreshedToken.isNotEmpty) {
+          streamedResponse = await _sendSseRequest(client, uri, refreshedToken);
+        }
+      }
+    }
+
+    if (connectionId != _activeConnectionId) {
+      client.close();
+      if (identical(_client, client)) {
+        _client = null;
+      }
       return;
     }
 
     if (streamedResponse.statusCode != 200) {
       await _closeController(connectionId: connectionId);
+      client.close();
+      if (identical(_client, client)) {
+        _client = null;
+      }
+      if (streamedResponse.statusCode == 401) {
+        throw Exception('SSE authentication failed: session expired');
+      }
       throw Exception('SSE connection failed: ${streamedResponse.statusCode}');
     }
 
@@ -135,6 +193,18 @@ class SseService {
         );
   }
 
+  Future<http.StreamedResponse> _sendSseRequest(
+    http.Client client,
+    Uri uri,
+    String token,
+  ) {
+    final request = http.Request('GET', uri);
+    request.headers['Accept'] = 'text/event-stream';
+    request.headers['Cache-Control'] = 'no-cache';
+    request.headers['Authorization'] = 'Bearer $token';
+    return client.send(request);
+  }
+
   void _emitToken(int connectionId, SseToken token) {
     if (connectionId != _activeConnectionId) {
       return;
@@ -172,6 +242,11 @@ class SseService {
     final controller = _controller;
     _controller = null;
     if (controller == null || controller.isClosed) {
+      return;
+    }
+    if (!controller.hasListener) {
+      // Single-subscription controllers may never complete close() if no listener attaches.
+      unawaited(controller.close());
       return;
     }
     await controller.close();

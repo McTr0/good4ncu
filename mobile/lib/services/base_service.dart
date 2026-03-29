@@ -141,6 +141,12 @@ class BaseService {
     }
   }
 
+  /// Shared token refresh entrypoint for services that need single-flight refresh
+  /// semantics without subclassing BaseService request helpers.
+  Future<bool> refreshAccessTokenIfNeeded() {
+    return _refreshAccessTokenSingleFlight();
+  }
+
   Future<bool> _performRefresh() async {
     final refreshToken = await _tokenStorage.getRefreshToken();
     if (refreshToken == null || refreshToken.isEmpty) {

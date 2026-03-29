@@ -62,6 +62,9 @@ class AgentChatError extends AgentChatState {
 /// - Streaming tokens accumulate in a partial bubble until stream closes.
 /// - Backend errors from SSE `{"error": "..."}` events are surfaced in the UI.
 class AgentChatNotifier extends ChangeNotifier {
+  static const String _defaultGreetingMessage =
+      '你好，我是小帮。我可以帮你发布商品、搜索商品、查看详情和交易流程问题。';
+
   final SseService _sseService;
   final ChatService _chatService;
   final UserService _userService;
@@ -153,8 +156,26 @@ class AgentChatNotifier extends ChangeNotifier {
   }
 
   /// Request an assistant greeting when there is no history.
-  Future<void> requestGreeting() {
-    return _sendMessageInternal('', addUserMessage: false);
+  Future<void> requestGreeting() async {
+    if (_isDisposed) return;
+    if (_state is AgentChatLoading) return;
+
+    final currentMessages = _state is AgentChatLoaded
+        ? (_state as AgentChatLoaded).messages
+        : <AgentMessage>[];
+    if (currentMessages.isNotEmpty) {
+      return;
+    }
+
+    final greeting = AgentMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      content: _defaultGreetingMessage,
+      isFromAgent: true,
+      timestamp: DateTime.now(),
+      isPartial: false,
+    );
+
+    _setState(AgentChatLoaded(messages: [greeting], isStreaming: false));
   }
 
   Future<void> _sendMessageInternal(
