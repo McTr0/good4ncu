@@ -53,5 +53,3 @@ config/good4ncu.toml
 # === Claude Code ===
 .claude/
 
-# === Internal Docs (never commit) ===
-docs/

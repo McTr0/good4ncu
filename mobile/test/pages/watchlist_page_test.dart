@@ -363,5 +363,60 @@ void main() {
 
       expect(tester.takeException(), isNull);
     });
+
+    testWidgets('ignores duplicate remove while request is pending', (
+      tester,
+    ) async {
+      final removeCompleter = Completer<void>();
+      final service = _StubWatchlistService(
+        onGetWatchlist: (limit, offset) async => const WatchlistResponse(
+          items: [
+            WatchlistItem(
+              listingId: 'listing-1',
+              title: 'MacBook Air',
+              category: 'electronics',
+              brand: 'Apple',
+              conditionScore: 8,
+              suggestedPriceCny: 5999,
+              status: 'active',
+              ownerId: 'owner-1',
+              createdAt: '2026-03-01T08:00:00Z',
+            ),
+          ],
+          total: 1,
+          limit: 20,
+          offset: 0,
+        ),
+        onRemove: (_) => removeCompleter.future,
+      );
+
+      await tester.pumpWidget(
+        _buildTestApp(WatchlistPage(watchlistService: service)),
+      );
+      await tester.pumpAndSettle();
+      final l = AppLocalizations.of(tester.element(find.byType(Scaffold)))!;
+
+      await tester.tap(find.byIcon(Icons.favorite));
+      await tester.pumpAndSettle();
+      await tester.tap(
+        find.descendant(
+          of: find.byType(AlertDialog),
+          matching: find.widgetWithText(ElevatedButton, l.delete),
+        ),
+      );
+      await tester.pump();
+
+      expect(service.removedIds, ['listing-1']);
+
+      final iconButton = tester.widget<IconButton>(
+        find.byType(IconButton).first,
+      );
+      expect(iconButton.onPressed, isNull);
+
+      removeCompleter.complete();
+      await tester.pumpAndSettle();
+
+      expect(service.removedIds, ['listing-1']);
+    });
   });
 }

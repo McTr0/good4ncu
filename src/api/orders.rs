@@ -443,7 +443,6 @@ mod tests {
             final_price: 499900, // 4999.00 CNY in cents
             status: "pending".into(),
             created_at: chrono::Utc::now(),
-            role: "buyer".into(),
             buyer_username: "buyeruser".into(),
             seller_username: "selleruser".into(),
         };

@@ -42,10 +42,10 @@ class RecommendationService {
 
   /// GET /api/recommendations/feed
   /// Returns personalized recommendation feed for the home page.
-  Future<List<Listing>> getRecommendationFeed({int limit = 10}) async {
+  Future<List<Listing>> getRecommendationFeed({int limit = 20, int offset = 0}) async {
     final headers = await _authHeaders();
     final response = await http.get(
-      Uri.parse('$_baseUrl/api/recommendations/feed?limit=$limit'),
+      Uri.parse('$_baseUrl/api/recommendations/feed?limit=$limit&offset=$offset'),
       headers: headers,
     );
 

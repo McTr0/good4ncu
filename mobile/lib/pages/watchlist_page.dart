@@ -29,6 +29,7 @@ class _WatchlistPageState extends State<WatchlistPage> {
   int _total = 0;
   int _offset = 0;
   int _activeRequestId = 0;
+  final Set<String> _pendingRemoveIds = <String>{};
 
   @override
   void initState() {
@@ -100,6 +101,7 @@ class _WatchlistPageState extends State<WatchlistPage> {
 
   Future<void> _removeFromWatchlist(WatchlistItem item) async {
     if (!mounted) return;
+    if (_pendingRemoveIds.contains(item.listingId)) return;
 
     final l = AppLocalizations.of(context)!;
     final messenger = ScaffoldMessenger.of(context);
@@ -107,14 +109,24 @@ class _WatchlistPageState extends State<WatchlistPage> {
       (it) => it.listingId == item.listingId,
     );
 
+    setState(() {
+      _pendingRemoveIds.add(item.listingId);
+    });
+
     try {
       await _watchlistService.removeFromWatchlist(item.listingId);
       if (!mounted) return;
       setState(() {
-        _items = _items.where((it) => it.listingId != item.listingId).toList();
-        if (_total > 0) {
-          _total -= 1;
+        final exists = _items.any((it) => it.listingId == item.listingId);
+        if (exists) {
+          _items = _items
+              .where((it) => it.listingId != item.listingId)
+              .toList();
+          if (_total > 0) {
+            _total -= 1;
+          }
         }
+        _pendingRemoveIds.remove(item.listingId);
       });
 
       messenger.hideCurrentSnackBar();
@@ -132,6 +144,9 @@ class _WatchlistPageState extends State<WatchlistPage> {
       );
     } catch (e) {
       if (!mounted) return;
+      setState(() {
+        _pendingRemoveIds.remove(item.listingId);
+      });
       messenger.showSnackBar(
         SnackBar(content: Text(l.operationFailed(e.toString()))),
       );
@@ -157,9 +172,13 @@ class _WatchlistPageState extends State<WatchlistPage> {
           _items.insert(targetIndex, item);
           _total += 1;
         }
+        _pendingRemoveIds.remove(item.listingId);
       });
     } catch (e) {
       if (!mounted) return;
+      setState(() {
+        _pendingRemoveIds.remove(item.listingId);
+      });
       messenger.showSnackBar(
         SnackBar(content: Text(l.operationFailed(e.toString()))),
       );
@@ -300,6 +319,7 @@ class _WatchlistPageState extends State<WatchlistPage> {
             formattedDate: _formatDate(item.createdAt),
             onTap: () => context.push('/listing/${item.listingId}'),
             onRemove: () => _confirmAndRemoveFromWatchlist(item),
+            removing: _pendingRemoveIds.contains(item.listingId),
           );
         },
       ),
@@ -312,12 +332,14 @@ class _WatchlistCard extends StatelessWidget {
   final String formattedDate;
   final VoidCallback onTap;
   final VoidCallback onRemove;
+  final bool removing;
 
   const _WatchlistCard({
     required this.item,
     required this.formattedDate,
     required this.onTap,
     required this.onRemove,
+    required this.removing,
   });
 
   @override
@@ -354,8 +376,14 @@ class _WatchlistCard extends StatelessWidget {
                   const SizedBox(width: AppTheme.sp8),
                   IconButton(
                     tooltip: AppLocalizations.of(context)!.myFavorites,
-                    onPressed: onRemove,
-                    icon: const Icon(Icons.favorite, color: AppTheme.error),
+                    onPressed: removing ? null : onRemove,
+                    icon: removing
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.favorite, color: AppTheme.error),
                   ),
                 ],
               ),

@@ -57,8 +57,6 @@ async fn run_admin_promote(username: &str) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn test_cli_args_parsing() {
         // Test admin promote parsing (cargo run -- admin promote testuser)

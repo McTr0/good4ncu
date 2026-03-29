@@ -23,6 +23,7 @@ pub struct SimilarQuery {
 #[derive(Deserialize)]
 pub struct FeedQuery {
     pub limit: Option<i64>,
+    pub offset: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -61,7 +62,7 @@ pub async fn get_similar_listings(
         Some(v) => v,
         None => {
             // No embedding for this listing — return newest active as fallback
-            return get_recommendation_feed(State(state), Query(FeedQuery { limit: Some(limit) }))
+            return get_recommendation_feed(State(state), Query(FeedQuery { limit: Some(limit), offset: None }))
                 .await;
         }
     };
@@ -115,7 +116,8 @@ pub async fn get_recommendation_feed(
     State(state): State<AppState>,
     Query(params): Query<FeedQuery>,
 ) -> Result<Json<RecommendationResponse>, ApiError> {
-    let limit = params.limit.unwrap_or(10).clamp(1, 20);
+    let limit = params.limit.unwrap_or(20).clamp(1, 50);
+    let offset = params.offset.unwrap_or(0).max(0);
 
     let rows = sqlx::query(
         r#"
@@ -124,10 +126,11 @@ pub async fn get_recommendation_feed(
         FROM inventory
         WHERE status = 'active'
         ORDER BY created_at DESC
-        LIMIT $1
+        LIMIT $1 OFFSET $2
         "#,
     )
     .bind(limit)
+    .bind(offset)
     .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;

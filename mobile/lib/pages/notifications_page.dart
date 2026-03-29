@@ -3,17 +3,21 @@ import 'package:go_router/go_router.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
+import '../services/notification_filter_storage.dart';
 import '../services/notification_service.dart';
 import '../theme/app_theme.dart';
-
-enum NotificationFilter { all, unread }
 
 enum NotificationsLoadResult { success, failed, superseded }
 
 class NotificationsPage extends StatefulWidget {
   final NotificationService? notificationService;
+  final NotificationFilterStorage? filterStorage;
 
-  const NotificationsPage({super.key, this.notificationService});
+  const NotificationsPage({
+    super.key,
+    this.notificationService,
+    this.filterStorage,
+  });
 
   @override
   State<NotificationsPage> createState() => _NotificationsPageState();
@@ -23,6 +27,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   static const int _limit = 20;
 
   late final NotificationService _notificationService;
+  late final NotificationFilterStorage _filterStorage;
 
   List<AppNotification> _items = [];
   bool _loading = true;
@@ -33,16 +38,32 @@ class _NotificationsPageState extends State<NotificationsPage> {
   int _offset = 0;
   int _unreadCount = 0;
   int _activeRequestId = 0;
-  NotificationFilter _filter = NotificationFilter.all;
+  NotificationFilterPreference _filter = NotificationFilterPreference.all;
 
   @override
   void initState() {
     super.initState();
     _notificationService = widget.notificationService ?? NotificationService();
-    _load(reset: true);
+    _filterStorage =
+        widget.filterStorage ?? SharedPrefsNotificationFilterStorage();
+    _initialize();
   }
 
   bool get _hasMore => _items.length < _total;
+
+  Future<void> _initialize() async {
+    try {
+      final storedFilter = await _filterStorage.readFilter();
+      if (!mounted) return;
+      setState(() {
+        _filter = storedFilter;
+      });
+    } catch (_) {
+      // Keep default filter when persisted preference cannot be read.
+    }
+    if (!mounted) return;
+    await _load(reset: true);
+  }
 
   Future<NotificationsLoadResult> _load({
     bool reset = false,
@@ -69,7 +90,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       final response = await _notificationService.getNotifications(
         limit: _limit,
         offset: effectiveOffset,
-        includeRead: _filter == NotificationFilter.all,
+        includeRead: _filter == NotificationFilterPreference.all,
       );
       if (!mounted || requestId != _activeRequestId) {
         return NotificationsLoadResult.superseded;
@@ -107,6 +128,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
   }
 
   Future<void> _onRefresh() async {
+    if (_loading) return;
     await _load(reset: true);
   }
 
@@ -138,7 +160,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       if (!mounted) return;
 
       setState(() {
-        if (_filter == NotificationFilter.unread) {
+        if (_filter == NotificationFilterPreference.unread) {
           _items = _items.where((n) => n.id != item.id).toList();
           if (_total > 0) {
             _total -= 1;
@@ -171,7 +193,7 @@ class _NotificationsPageState extends State<NotificationsPage> {
       if (!mounted) return;
 
       setState(() {
-        if (_filter == NotificationFilter.unread) {
+        if (_filter == NotificationFilterPreference.unread) {
           _items = [];
           _total = 0;
         } else {
@@ -226,15 +248,26 @@ class _NotificationsPageState extends State<NotificationsPage> {
     final previousUnreadCount = _unreadCount;
     final previousError = _error;
     final previousPaginationError = _paginationError;
-    final nextFilter = previousFilter == NotificationFilter.all
-        ? NotificationFilter.unread
-        : NotificationFilter.all;
+    final nextFilter = previousFilter == NotificationFilterPreference.all
+        ? NotificationFilterPreference.unread
+        : NotificationFilterPreference.all;
 
     setState(() {
       _filter = nextFilter;
     });
     final result = await _load(reset: true, clearOnReset: false);
-    if (result == NotificationsLoadResult.failed && mounted) {
+    if (!mounted) return;
+
+    if (result == NotificationsLoadResult.success) {
+      try {
+        await _filterStorage.writeFilter(nextFilter);
+      } catch (_) {
+        // Keep in-memory filter even if persistence write fails.
+      }
+      return;
+    }
+
+    if (result == NotificationsLoadResult.failed) {
       setState(() {
         _filter = previousFilter;
         _items = previousItems;
@@ -260,13 +293,13 @@ class _NotificationsPageState extends State<NotificationsPage> {
           TextButton.icon(
             onPressed: _toggleFilter,
             icon: Icon(
-              _filter == NotificationFilter.all
+              _filter == NotificationFilterPreference.all
                   ? Icons.mark_email_unread_outlined
                   : Icons.inbox_outlined,
               size: 18,
             ),
             label: Text(
-              _filter == NotificationFilter.all
+              _filter == NotificationFilterPreference.all
                   ? l.unreadOnly
                   : l.allNotifications,
             ),

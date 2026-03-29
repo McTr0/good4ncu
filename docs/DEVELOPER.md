@@ -16,6 +16,8 @@
 - [架构决策记录](#架构决策记录)
 - [Flutter开发指南](#flutter开发指南)
 - [Rust后端开发指南](#rust后端开发指南)
+- [后台 Worker 开发指南](#后台-worker-开发指南)
+- [安全编码规范（SQL与审计）](#安全编码规范sql与审计)
 
 ---
 
@@ -347,7 +349,7 @@ SERVER_PORT=3000
 2. `./good4ncu.toml`（项目根目录）
 3. `./config/good4ncu.toml`（配置目录）
 
-详见 [config.toml.example](../config.toml.example)
+详见 [config.toml.example](config.toml.example)
 
 ---
 
@@ -490,6 +492,36 @@ flutter test integration_test/
 
 ---
 
+### ADR-004: 引入分布式管理员审计追踪（Audit Logging）
+
+**Context:** 管理员拥有极高权限（封禁、冒充登录、强制下架），若缺乏操作追踪，将产生巨大的安全与内部合规风险。
+
+**Decision:** 建立 `admin_audit_logs` 表，并在 `AdminService` 中统一处理审计逻辑。所有 `admin.rs` 中的写操作必须调用 `log_action`。
+
+**Consequences:**
+- ✅ **不可抵赖性**：所有敏感操作均有时间戳、操作人、目标对象及变更详情。
+- ✅ **辅助复原**：记录了 `old_value` 和 `new_value`，便于在误操作后进行手动数据恢复。
+- ❌ 增加了一次数据库 I/O 开销（由于是后台管理操作，性能影响可忽略）。
+
+**状态：** 已实施（Phase 4）
+
+---
+
+### ADR-005: 订单状态机自动化（Order Lifecycle Workers）
+
+**Context:** 订单存在支付时效（30分钟）和收货确认时效（7天），依赖人工点击或前端逻辑是不靠谱的。
+
+**Decision:** 采用 `tokio::spawn` 启动独立后台协程，以 5 分钟为步长轮询数据库，通过 `FOR UPDATE SKIP LOCKED` 实现简单的多实例竞争避让。
+
+**Consequences:**
+- ✅ **资源及时释放**：未支付订单自动取消，关联商品自动恢复 `active` 状态。
+- ✅ **自动化结算**：到期自动收货，保障卖家资金周转。
+- ❌ 增加了数据库定期轮询的压力（可通过优化索引减轻）。
+
+**状态：** 已实施（Phase 4）
+
+---
+
 ## Flutter开发指南
 
 ### 状态管理
@@ -588,7 +620,7 @@ fn process() -> anyhow::Result<()> {
 ### 数据库操作
 
 ```rust
-// ✅ 参数化查询（防注入）
+// ✅ 参数化查询（防注入）- 强烈推荐
 let row = sqlx::query_as!(
     User,
     "SELECT * FROM users WHERE id = $1",
@@ -597,9 +629,37 @@ let row = sqlx::query_as!(
 .fetch_one(&pool)
 .await?;
 
-// ❌ 字符串拼接（危险！）
+// ✅ 使用 sqlx::query().bind() - 动态构建 SQL 时使用
+let query = "UPDATE orders SET status = $1 WHERE id = $2";
+sqlx::query(query)
+    .bind(new_status)
+    .bind(order_id)
+    .execute(&pool)
+    .await?;
+
+// ❌ 严禁使用 format! 拼接用户输入或 ID
 let query = format!("SELECT * FROM users WHERE id = '{}'", user_id);
 ```
+
+### 后台 Worker 开发指南
+
+项目在 `src/services/` 下维护了多个自动化 Worker：
+
+1. **`hitl_expire.rs`**: 处理议价请求超时（48小时）。
+2. **`order_worker.rs`**: 
+   - **支付超时**：`pending` -> `cancelled` (30m)。逻辑：取消订单 + 恢复商品 Inventory 为 `active`。
+   - **自动完成**：`shipped` -> `completed` (7d)。
+
+**开发要点：**
+- **幂等性**：Worker 逻辑必须支持无限次重复运行而不产生副作用。
+- **批量处理**：使用 `fetch_all` 配合 `FOR UPDATE SKIP LOCKED` 提高扫描效率。
+- **通知触发**：Worker 在变更状态后，必须调用 `broadcast` 推送 WebSocket 通知。
+
+### 安全编码规范（SQL与审计）
+
+- **参数化查询**：除表名/字段名等静态标识符外，所有动态变量必须通过 `.bind()` 传递。
+- **敏感操作审计**：凡涉及 `api/admin.rs` 中的 Handler，必须显式调用 `infra.admin_service.log_action`。
+- **软删除原则**：商品和订单记录不应物理删除，统一使用 `status = 'deleted' / 'cancelled'` 进行逻辑标记。
 
 ### 异步Runtime
 
@@ -650,7 +710,7 @@ flutter run --dart-define=API_BASE_URL=https://your-backend-domain.com
 
 ## 相关文档
 
-- [README.md](../README.md) — 用户文档、产品特性、快速启动
-- [CLAUDE.md](../CLAUDE.md) — Claude Code AI助手指南、项目架构概述
-- [AGENTS.md](../AGENTS.md) — Agent框架详细文档
-- [config.toml.example](../config.toml.example) — 配置文件参考
+- [README.md](README.md) — 用户文档、产品特性、快速启动
+- [CLAUDE.md](CLAUDE.md) — Claude Code AI助手指南、项目架构概述
+- [AGENTS.md](AGENTS.md) — Agent框架详细文档
+- [config.toml.example](config.toml.example) — 配置文件参考
