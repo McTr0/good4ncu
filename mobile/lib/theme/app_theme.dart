@@ -45,6 +45,23 @@ class AppTheme {
   static const double radiusLg = 16;
   static const double radiusXl = 24;
 
+  // Condition badge helpers
+  /// Returns the appropriate color for a condition score (1-10).
+  static Color conditionColor(int score) {
+    if (score >= 9) return success;
+    if (score >= 7) return info;
+    if (score >= 5) return warning;
+    return error;
+  }
+
+  /// Returns the Chinese label for a condition score.
+  static String conditionLabel(int score) {
+    if (score >= 9) return '几乎全新';
+    if (score >= 7) return '较好';
+    if (score >= 5) return '一般';
+    return '较差';
+  }
+
   static ThemeData get light => ThemeData(
         useMaterial3: true,
         colorScheme: ColorScheme.fromSeed(
@@ -53,7 +70,13 @@ class AppTheme {
           surface: surface,
         ),
         scaffoldBackgroundColor: surface,
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto',
+        fontFamilyFallback: const [
+          'PingFang SC',
+          'Heiti SC',
+          'Microsoft YaHei',
+          'Arial',
+        ],
         appBarTheme: const AppBarTheme(
           backgroundColor: primary,
           foregroundColor: Colors.white,
@@ -151,7 +174,13 @@ class AppTheme {
           surface: surfaceDark,
         ),
         scaffoldBackgroundColor: surfaceDark,
-        fontFamily: 'Inter',
+        fontFamily: 'Roboto', // Default for English
+        fontFamilyFallback: const [
+          'PingFang SC',
+          'Heiti SC',
+          'Microsoft YaHei',
+          'Arial',
+        ],
         appBarTheme: const AppBarTheme(
           backgroundColor: surfaceDark,
           foregroundColor: textPrimaryDark,

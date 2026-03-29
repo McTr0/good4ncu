@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../theme/app_theme.dart';
 
@@ -16,8 +18,10 @@ class PriceTag extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final formatter = NumberFormat.currency(symbol: '\u00A5', decimalDigits: 2);
     return Text(
-      '¥${priceCny.toStringAsFixed(2)}',
+      formatter.format(priceCny),
+      overflow: TextOverflow.ellipsis,
       style: TextStyle(
         fontSize: fontSize,
         fontWeight: fontWeight,
@@ -29,37 +33,27 @@ class PriceTag extends StatelessWidget {
 
 class ConditionBadge extends StatelessWidget {
   final int score;
-  final String label;
   final Color color;
 
   const ConditionBadge({
     super.key,
     required this.score,
-    required this.label,
     required this.color,
   });
 
-  factory ConditionBadge.fromScore(int score) {
-    Color color;
-    String label;
-    if (score >= 9) {
-      color = AppTheme.success;
-      label = '几乎全新';
-    } else if (score >= 7) {
-      color = AppTheme.info;
-      label = '较好';
-    } else if (score >= 5) {
-      color = AppTheme.warning;
-      label = '一般';
-    } else {
-      color = AppTheme.error;
-      label = '较差';
-    }
-    return ConditionBadge(score: score, label: label, color: color);
-  }
-
   @override
   Widget build(BuildContext context) {
+    final l = AppLocalizations.of(context)!;
+    String label;
+    if (score >= 9) {
+      label = l.conditionLikeNew;
+    } else if (score >= 7) {
+      label = l.conditionGood;
+    } else if (score >= 5) {
+      label = l.conditionFair;
+    } else {
+      label = l.conditionPoor;
+    }
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
       decoration: BoxDecoration(
@@ -76,6 +70,20 @@ class ConditionBadge extends StatelessWidget {
       ),
     );
   }
+}
+
+ConditionBadge conditionBadgeFromScore(int score) {
+  Color color;
+  if (score >= 9) {
+    color = AppTheme.success;
+  } else if (score >= 7) {
+    color = AppTheme.info;
+  } else if (score >= 5) {
+    color = AppTheme.warning;
+  } else {
+    color = AppTheme.error;
+  }
+  return ConditionBadge(score: score, color: color);
 }
 
 class ListingCard extends StatelessWidget {
@@ -140,13 +148,16 @@ class ListingCard extends StatelessWidget {
                     ),
                     const Spacer(),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        PriceTag(
-                          priceCny: listing.suggestedPriceCny,
-                          fontSize: 15,
+                        Flexible(
+                          child: PriceTag(
+                            priceCny: listing.suggestedPriceCny,
+                            fontSize: 15,
+                          ),
                         ),
-                        const Spacer(),
-                        ConditionBadge.fromScore(listing.conditionScore),
+                        const SizedBox(width: 4),
+                        conditionBadgeFromScore(listing.conditionScore),
                       ],
                     ),
                   ],

@@ -10,6 +10,7 @@
   "brandLabel": "Brand",
   "books": "Books",
   "buyNow": "Buy Now",
+  "buyer": "Buyer",
   "cancel": "Cancel",
   "category": "Category",
   "categoryLabel": "Category",
@@ -63,6 +64,7 @@
     }
   },
   "loading": "Loading...",
+  "loadMore": "Load more",
   "login": "Login",
   "loginError": "Login error",
   "loginSuccess": "Login successful",
@@ -78,15 +80,31 @@
     }
   },
   "messagesTab": "Messages",
+  "notificationsCenter": "Notifications",
+  "notificationsCenterSubtitle": "System messages and reminders",
   "myFavorites": "My Favorites",
   "myFavoritesSubtitle": "Your favorite items",
+  "watchlistEmpty": "No favorites yet",
+  "notificationsEmpty": "No notifications for now",
+  "markAllRead": "Mark all as read",
+  "markAllReadSuccess": "All notifications marked as read",
   "myListings": "My Listings",
   "myListingsMenu": "View and manage your listings",
   "myListingsTab": "My Listings",
   "myOrders": "My Orders",
   "myOrdersSubtitle": "View purchase history",
+  "allOrders": "All",
+  "buyerOrders": "As Buyer",
+  "sellerOrders": "As Seller",
+  "orderAsBuyer": "As Buyer",
+  "orderAsSeller": "As Seller",
+  "pay": "Pay",
+  "markPaid": "Paid",
+  "reason": "Reason (optional)",
   "negotiationDetails": "Negotiation details",
   "negotiationExpired": "Negotiation expired and cancelled",
+  "connectionAccepted": "Connection accepted",
+  "connectionRejected": "Connection rejected",
   "negotiationRejected": "Negotiation rejected",
   "noProducts": "No products available",
   "notFound": "Not found",
@@ -138,6 +156,15 @@
   "sessionExpired": "Session expired. Please login again.",
   "settings": "Settings",
   "settingsSubtitle": "App settings",
+  "nickname": "Nickname",
+  "nicknameChange": "Change nickname",
+  "nicknameChangeSuccess": "Nickname updated",
+  "nicknameChangeHint": "Others will see your new nickname after update",
+  "nicknameConflict": "This nickname is already taken",
+  "nicknameEmpty": "Nickname cannot be empty",
+  "userAgreement": "User Agreement",
+  "userAgreementTitle": "User Agreement & Terms",
+  "userAgreementSubtitle": "Understand platform rules and usage responsibilities.",
   "sold": "Sold",
   "status": "Status",
   "submit": "Submit",
@@ -196,21 +223,81 @@
   "adminLoginAsConfirm": "Confirm",
   "adminLoginAsWarning": "You are about to switch to this user's identity",
   "adminViewListings": "View Listings",
-  "myOrders": "My Orders",
   "orderId": "Order ID",
   "orderDetail": "Order Detail",
   "noOrders": "No orders",
+  "conditionLikeNew": "Like New",
+  "conditionGood": "Good",
+  "conditionFair": "Fair",
+  "conditionPoor": "Poor",
   "buyerInitiatedNegotiation": "Buyer initiated negotiation",
-  "cannotContactSeller": "无法联系卖家：缺少卖家信息",
-  "itemAlreadyPurchased": "哎呀，该商品太火爆，已经被别人抢先一步啦！",
+  "cannotContactSeller": "Unable to contact seller: missing seller info",
+  "itemAlreadyPurchased": "Oops, this item is too popular, someone beat you to it!",
   "@adminTakedownConfirmMessage": {
     "placeholders": {
-      "title": {"type": "String"}
+      "title": {
+        "type": "String"
+      }
     }
   },
   "@adminLoginAsSuccess": {
     "placeholders": {
-      "username": {"type": "String"}
+      "username": {
+        "type": "String"
+      }
     }
-  }
+  },
+  "unknown": "Unknown",
+  "idLabel": "ID:",
+  "ownerIdLabel": "Owner ID:",
+  "orderNumber": "Order #{id}",
+  "joinedLabel": "Joined:",
+  "roleLabel": "Role:",
+  "unbanConfirmMessage": "Are you sure you want to unban user \"{username}\"?",
+  "adminLoginAsAuditLogWarning": "This operation will log in as the selected user and leave an audit log. Continue?",
+  "impersonationFailed": "Impersonation failed: {error}",
+  "@orderNumber": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "@unbanConfirmMessage": {
+    "placeholders": {
+      "username": {
+        "type": "String"
+      }
+    }
+  },
+  "@impersonationFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "infoDisclaimer": "This product is for information publishing only, with no guarantee, no fund intermediary, and no transaction fees.",
+  "aboutPlatform": "About This Platform",
+  "aboutPlatformSubtitle": "How this platform works and key safety notice.",
+  "infoPublishing": "Information Publishing",
+  "infoPublishingDesc": "This platform is for information publishing only. Users share listing information through posts. No transactions or payments occur on this platform.",
+  "contactThroughChat": "Contact Through Chat",
+  "contactThroughChatDesc": "Contact sellers directly through the in-app chat feature. Communicate details and arrange transactions offline.",
+  "safetyTips": "Safety Tips",
+  "safetyTipsDesc": "Meet in safe public places when exchanging items. Verify item condition before completing any offline arrangement.",
+  "platformDisclaimer": "This platform serves as an information listing service only. Any offline transactions are at your own risk. Please stay vigilant and protect your personal safety and property.",
+  "recommendedForYou": "For You",
+  "similarRecommendations": "Similar Items",
+  "camera": "Camera",
+  "gallery": "Gallery",
+  "uploading": "Uploading",
+  "avatarUpdated": "Avatar updated",
+  "uploadFailed": "Upload failed",
+  "emailLabel": "Email",
+  "emailChange": "Change Email",
+  "emailChangeHint": "Enter @email.ncu.edu.cn email",
+  "emailDomainError": "Must use @email.ncu.edu.cn email",
+  "emailChangeSuccess": "Email updated",
+  "notSet": "Not set"
 }

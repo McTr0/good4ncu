@@ -39,6 +39,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get buyNow => '立即购买';
 
   @override
+  String get buyer => '买家';
+
+  @override
   String get cancel => '取消';
 
   @override
@@ -160,6 +163,9 @@ class AppLocalizationsZh extends AppLocalizations {
   String get loading => '加载中...';
 
   @override
+  String get loadMore => '加载更多';
+
+  @override
   String get login => '登录';
 
   @override
@@ -186,10 +192,28 @@ class AppLocalizationsZh extends AppLocalizations {
   String get messagesTab => '消息';
 
   @override
+  String get notificationsCenter => '通知中心';
+
+  @override
+  String get notificationsCenterSubtitle => '系统消息与提醒';
+
+  @override
   String get myFavorites => '我的收藏';
 
   @override
   String get myFavoritesSubtitle => '您收藏的商品';
+
+  @override
+  String get watchlistEmpty => '你还没有收藏商品';
+
+  @override
+  String get notificationsEmpty => '暂无通知';
+
+  @override
+  String get markAllRead => '全部已读';
+
+  @override
+  String get markAllReadSuccess => '已将全部通知标记为已读';
 
   @override
   String get myListings => '我的发布';
@@ -207,10 +231,40 @@ class AppLocalizationsZh extends AppLocalizations {
   String get myOrdersSubtitle => '查看购买记录';
 
   @override
+  String get allOrders => '全部';
+
+  @override
+  String get buyerOrders => '作为买家';
+
+  @override
+  String get sellerOrders => '作为卖家';
+
+  @override
+  String get orderAsBuyer => '作为买家';
+
+  @override
+  String get orderAsSeller => '作为卖家';
+
+  @override
+  String get pay => '支付';
+
+  @override
+  String get markPaid => '已支付';
+
+  @override
+  String get reason => '取消原因（选填）';
+
+  @override
   String get negotiationDetails => '议价详情';
 
   @override
   String get negotiationExpired => '议价已超时取消';
+
+  @override
+  String get connectionAccepted => '已接受连接';
+
+  @override
+  String get connectionRejected => '已拒绝连接';
 
   @override
   String get negotiationRejected => '议价已拒绝';
@@ -307,6 +361,33 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get settingsSubtitle => '应用设置';
+
+  @override
+  String get nickname => '昵称';
+
+  @override
+  String get nicknameChange => '修改昵称';
+
+  @override
+  String get nicknameChangeSuccess => '昵称已更新';
+
+  @override
+  String get nicknameChangeHint => '设置后其他人将看到你的新昵称';
+
+  @override
+  String get nicknameConflict => '该昵称已被使用';
+
+  @override
+  String get nicknameEmpty => '昵称不能为空';
+
+  @override
+  String get userAgreement => '用户协议';
+
+  @override
+  String get userAgreementTitle => '用户协议与条款';
+
+  @override
+  String get userAgreementSubtitle => '了解平台规则与使用责任范围。';
 
   @override
   String get sold => '已售';
@@ -477,6 +558,18 @@ class AppLocalizationsZh extends AppLocalizations {
   String get noOrders => '暂无订单';
 
   @override
+  String get conditionLikeNew => '几乎全新';
+
+  @override
+  String get conditionGood => '较好';
+
+  @override
+  String get conditionFair => '一般';
+
+  @override
+  String get conditionPoor => '较差';
+
+  @override
   String get buyerInitiatedNegotiation => '买家发起议价';
 
   @override
@@ -484,4 +577,107 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get itemAlreadyPurchased => '哎呀，该商品太火爆，已经被别人抢先一步啦！';
+
+  @override
+  String get unknown => '未知';
+
+  @override
+  String get idLabel => 'ID：';
+
+  @override
+  String get ownerIdLabel => '卖家ID：';
+
+  @override
+  String orderNumber(String id) {
+    return '订单 #$id';
+  }
+
+  @override
+  String get joinedLabel => '注册时间：';
+
+  @override
+  String get roleLabel => '角色：';
+
+  @override
+  String unbanConfirmMessage(String username) {
+    return '确定要解封用户 \"$username\" 吗？';
+  }
+
+  @override
+  String get adminLoginAsAuditLogWarning => '此操作将以选定用户的身份登录并留下审计日志，确定吗？';
+
+  @override
+  String impersonationFailed(String error) {
+    return '身份切换失败：$error';
+  }
+
+  @override
+  String get infoDisclaimer => '本产品仅做信息发布，无担保和资金中介，也不收手续费';
+
+  @override
+  String get aboutPlatform => '关于我们';
+
+  @override
+  String get aboutPlatformSubtitle => '了解平台定位、使用方式与安全提醒。';
+
+  @override
+  String get infoPublishing => '信息发布';
+
+  @override
+  String get infoPublishingDesc => '本平台仅提供信息发布服务，用户通过发帖分享商品信息。平台不参与任何交易或支付环节。';
+
+  @override
+  String get contactThroughChat => '通过聊天联系';
+
+  @override
+  String get contactThroughChatDesc => '可直接通过应用内聊天功能联系卖家，沟通细节并自行安排线下交易。';
+
+  @override
+  String get safetyTips => '安全提示';
+
+  @override
+  String get safetyTipsDesc => '交换物品时请选择安全的公共场所，交易前请仔细核实物品状况。';
+
+  @override
+  String get platformDisclaimer =>
+      '本平台仅作为信息发布服务提供方，任何线下交易行为风险自担。请保持警惕，注意人身和财产安全。';
+
+  @override
+  String get recommendedForYou => '为你推荐';
+
+  @override
+  String get similarRecommendations => '相似推荐';
+
+  @override
+  String get camera => '拍照';
+
+  @override
+  String get gallery => '相册';
+
+  @override
+  String get uploading => '上传中';
+
+  @override
+  String get avatarUpdated => '头像已更新';
+
+  @override
+  String get uploadFailed => '上传失败';
+
+  @override
+  String get emailLabel => '邮箱';
+
+  @override
+  String get emailChange => '修改邮箱';
+
+  @override
+  String get emailChangeHint => '输入 @email.ncu.edu.cn 邮箱';
+
+  @override
+  String get emailDomainError => '必须使用 @email.ncu.edu.cn 邮箱';
+
+  @override
+  String get emailChangeSuccess => '邮箱已更新';
+
+  @override
+  String get notSet => '未设置';
 }

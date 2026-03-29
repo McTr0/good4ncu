@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../pages/home_page.dart';
 import '../pages/listing_detail_page.dart';
 import '../pages/create_listing_page.dart';
@@ -11,16 +10,21 @@ import '../pages/chat_page.dart';
 import '../pages/conversation_list_page.dart';
 import '../pages/user_chat_page.dart';
 import '../pages/login_page.dart';
-import '../pages/admin_page.dart';
+import '../pages/my_orders_page.dart';
 import '../pages/order_detail_page.dart';
-import '../pages/orders_page.dart';
+import '../pages/admin_page.dart';
+import '../pages/settings_page.dart';
+import '../pages/watchlist_page.dart';
+import '../pages/notifications_page.dart';
+import '../services/base_service.dart';
 import '../pages/trust_page.dart';
+import '../services/token_storage.dart';
+import '../services/ws_service.dart';
 
-final GlobalKey<NavigatorState> _rootNavigatorKey = GlobalKey<NavigatorState>();
+final GlobalKey<NavigatorState> _rootNavigatorKey = BaseService.navigatorKey;
 
 Future<bool> _isLoggedIn() async {
-  final prefs = await SharedPreferences.getInstance();
-  final token = prefs.getString('jwt_token');
+  final token = await TokenStorage.instance.getAccessToken();
   return token != null && token.isNotEmpty;
 }
 
@@ -35,7 +39,13 @@ final GoRouter appRouter = GoRouter(
         return '/login';
       }
       if (loggedIn && onAuthRoute) {
+        // Connect global WS singleton on successful login redirect.
+        WsService.instance.connect();
         return '/';
+      }
+      // On initial load when already logged in, ensure WS is connected.
+      if (loggedIn) {
+        WsService.instance.connect();
       }
     } catch (e) {
       // If auth check fails, redirect to login
@@ -46,76 +56,72 @@ final GoRouter appRouter = GoRouter(
     return null;
   },
   routes: [
+    GoRoute(path: '/login', builder: (context, state) => const LoginPage()),
+    GoRoute(path: '/trust', builder: (context, state) => const TrustPage()),
     GoRoute(
-      path: '/login',
-      builder: (context, state) => const LoginPage(),
+      path: '/settings',
+      builder: (context, state) => const SettingsPage(),
+    ),
+    GoRoute(path: '/admin', builder: (context, state) => const AdminPage()),
+    GoRoute(
+      path: '/watchlist',
+      builder: (context, state) => const WatchlistPage(),
     ),
     GoRoute(
-      path: '/trust',
-      builder: (context, state) => const TrustPage(),
-    ),
-    GoRoute(
-      path: '/order/:id',
-      pageBuilder: (context, state) {
-        final id = state.pathParameters['id']!;
-        return NoTransitionPage(child: OrderDetailPage(orderId: id));
-      },
-    ),
-    GoRoute(
-      path: '/orders',
-      builder: (context, state) => const OrdersPage(),
-    ),
-    GoRoute(
-      path: '/admin',
-      builder: (context, state) => const AdminPage(),
+      path: '/notifications',
+      builder: (context, state) => const NotificationsPage(),
     ),
     ShellRoute(
       builder: (context, state, child) => _ShellScaffold(child: child),
       routes: [
         GoRoute(
           path: '/',
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: HomePage(),
-          ),
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: HomePage()),
         ),
         GoRoute(
           path: '/listing/:id',
           pageBuilder: (context, state) {
             final id = state.pathParameters['id']!;
-            return NoTransitionPage(
-              child: ListingDetailPage(listingId: id),
-            );
+            return NoTransitionPage(child: ListingDetailPage(listingId: id));
           },
         ),
         GoRoute(
           path: '/create',
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: CreateListingPage(),
-          ),
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: CreateListingPage()),
         ),
         GoRoute(
           path: '/my-listings',
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: MyListingsPage(),
-          ),
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: MyListingsPage()),
         ),
         GoRoute(
           path: '/profile',
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: ProfilePage(),
-          ),
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ProfilePage()),
+        ),
+        GoRoute(
+          path: '/orders',
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: MyOrdersPage()),
+        ),
+        GoRoute(
+          path: '/orders/:id',
+          pageBuilder: (context, state) {
+            final id = state.pathParameters['id']!;
+            return NoTransitionPage(child: OrderDetailPage(orderId: id));
+          },
         ),
         GoRoute(
           path: '/chat',
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: ChatPage(),
-          ),
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ChatPage()),
         ),
         GoRoute(
           path: '/conversations',
-          pageBuilder: (context, state) => const NoTransitionPage(
-            child: ConversationListPage(),
-          ),
+          pageBuilder: (context, state) =>
+              const NoTransitionPage(child: ConversationListPage()),
         ),
         GoRoute(
           path: '/chat/:conversationId',
@@ -149,15 +155,25 @@ class _ShellScaffold extends StatefulWidget {
 class _ShellScaffoldState extends State<_ShellScaffold> {
   int _currentIndex = 0;
 
-  static const _routes = ['/', '/conversations', '/create', '/my-listings', '/profile'];
+  static const _routes = [
+    '/',
+    '/conversations',
+    '/create',
+    '/my-listings',
+    '/profile',
+  ];
 
   @override
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context);
-    if (l == null) return const SizedBox.shrink(); // Guard against early context without localization
+    if (l == null) {
+      return const SizedBox.shrink(); // Guard against early context without localization
+    }
     final location = GoRouterState.of(context).matchedLocation;
     final idx = _routes.indexOf(location);
-    if (idx >= 0) _currentIndex = idx;
+    if (idx >= 0) {
+      _currentIndex = idx;
+    }
 
     return Scaffold(
       body: widget.child,

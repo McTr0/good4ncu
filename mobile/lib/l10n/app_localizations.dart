@@ -158,6 +158,12 @@ abstract class AppLocalizations {
   /// **'Buy Now'**
   String get buyNow;
 
+  /// No description provided for @buyer.
+  ///
+  /// In en, this message translates to:
+  /// **'Buyer'**
+  String get buyer;
+
   /// No description provided for @cancel.
   ///
   /// In en, this message translates to:
@@ -392,6 +398,12 @@ abstract class AppLocalizations {
   /// **'Loading...'**
   String get loading;
 
+  /// No description provided for @loadMore.
+  ///
+  /// In en, this message translates to:
+  /// **'Load more'**
+  String get loadMore;
+
   /// No description provided for @login.
   ///
   /// In en, this message translates to:
@@ -440,6 +452,18 @@ abstract class AppLocalizations {
   /// **'Messages'**
   String get messagesTab;
 
+  /// No description provided for @notificationsCenter.
+  ///
+  /// In en, this message translates to:
+  /// **'Notifications'**
+  String get notificationsCenter;
+
+  /// No description provided for @notificationsCenterSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'System messages and reminders'**
+  String get notificationsCenterSubtitle;
+
   /// No description provided for @myFavorites.
   ///
   /// In en, this message translates to:
@@ -451,6 +475,30 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Your favorite items'**
   String get myFavoritesSubtitle;
+
+  /// No description provided for @watchlistEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No favorites yet'**
+  String get watchlistEmpty;
+
+  /// No description provided for @notificationsEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'No notifications for now'**
+  String get notificationsEmpty;
+
+  /// No description provided for @markAllRead.
+  ///
+  /// In en, this message translates to:
+  /// **'Mark all as read'**
+  String get markAllRead;
+
+  /// No description provided for @markAllReadSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'All notifications marked as read'**
+  String get markAllReadSuccess;
 
   /// No description provided for @myListings.
   ///
@@ -482,6 +530,54 @@ abstract class AppLocalizations {
   /// **'View purchase history'**
   String get myOrdersSubtitle;
 
+  /// No description provided for @allOrders.
+  ///
+  /// In en, this message translates to:
+  /// **'All'**
+  String get allOrders;
+
+  /// No description provided for @buyerOrders.
+  ///
+  /// In en, this message translates to:
+  /// **'As Buyer'**
+  String get buyerOrders;
+
+  /// No description provided for @sellerOrders.
+  ///
+  /// In en, this message translates to:
+  /// **'As Seller'**
+  String get sellerOrders;
+
+  /// No description provided for @orderAsBuyer.
+  ///
+  /// In en, this message translates to:
+  /// **'As Buyer'**
+  String get orderAsBuyer;
+
+  /// No description provided for @orderAsSeller.
+  ///
+  /// In en, this message translates to:
+  /// **'As Seller'**
+  String get orderAsSeller;
+
+  /// No description provided for @pay.
+  ///
+  /// In en, this message translates to:
+  /// **'Pay'**
+  String get pay;
+
+  /// No description provided for @markPaid.
+  ///
+  /// In en, this message translates to:
+  /// **'Paid'**
+  String get markPaid;
+
+  /// No description provided for @reason.
+  ///
+  /// In en, this message translates to:
+  /// **'Reason (optional)'**
+  String get reason;
+
   /// No description provided for @negotiationDetails.
   ///
   /// In en, this message translates to:
@@ -493,6 +589,18 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'Negotiation expired and cancelled'**
   String get negotiationExpired;
+
+  /// No description provided for @connectionAccepted.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection accepted'**
+  String get connectionAccepted;
+
+  /// No description provided for @connectionRejected.
+  ///
+  /// In en, this message translates to:
+  /// **'Connection rejected'**
+  String get connectionRejected;
 
   /// No description provided for @negotiationRejected.
   ///
@@ -673,6 +781,60 @@ abstract class AppLocalizations {
   /// In en, this message translates to:
   /// **'App settings'**
   String get settingsSubtitle;
+
+  /// No description provided for @nickname.
+  ///
+  /// In en, this message translates to:
+  /// **'Nickname'**
+  String get nickname;
+
+  /// No description provided for @nicknameChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Change nickname'**
+  String get nicknameChange;
+
+  /// No description provided for @nicknameChangeSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Nickname updated'**
+  String get nicknameChangeSuccess;
+
+  /// No description provided for @nicknameChangeHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Others will see your new nickname after update'**
+  String get nicknameChangeHint;
+
+  /// No description provided for @nicknameConflict.
+  ///
+  /// In en, this message translates to:
+  /// **'This nickname is already taken'**
+  String get nicknameConflict;
+
+  /// No description provided for @nicknameEmpty.
+  ///
+  /// In en, this message translates to:
+  /// **'Nickname cannot be empty'**
+  String get nicknameEmpty;
+
+  /// No description provided for @userAgreement.
+  ///
+  /// In en, this message translates to:
+  /// **'User Agreement'**
+  String get userAgreement;
+
+  /// No description provided for @userAgreementTitle.
+  ///
+  /// In en, this message translates to:
+  /// **'User Agreement & Terms'**
+  String get userAgreementTitle;
+
+  /// No description provided for @userAgreementSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'Understand platform rules and usage responsibilities.'**
+  String get userAgreementSubtitle;
 
   /// No description provided for @sold.
   ///
@@ -998,6 +1160,30 @@ abstract class AppLocalizations {
   /// **'No orders'**
   String get noOrders;
 
+  /// No description provided for @conditionLikeNew.
+  ///
+  /// In en, this message translates to:
+  /// **'Like New'**
+  String get conditionLikeNew;
+
+  /// No description provided for @conditionGood.
+  ///
+  /// In en, this message translates to:
+  /// **'Good'**
+  String get conditionGood;
+
+  /// No description provided for @conditionFair.
+  ///
+  /// In en, this message translates to:
+  /// **'Fair'**
+  String get conditionFair;
+
+  /// No description provided for @conditionPoor.
+  ///
+  /// In en, this message translates to:
+  /// **'Poor'**
+  String get conditionPoor;
+
   /// No description provided for @buyerInitiatedNegotiation.
   ///
   /// In en, this message translates to:
@@ -1007,14 +1193,206 @@ abstract class AppLocalizations {
   /// No description provided for @cannotContactSeller.
   ///
   /// In en, this message translates to:
-  /// **'无法联系卖家：缺少卖家信息'**
+  /// **'Unable to contact seller: missing seller info'**
   String get cannotContactSeller;
 
   /// No description provided for @itemAlreadyPurchased.
   ///
   /// In en, this message translates to:
-  /// **'哎呀，该商品太火爆，已经被别人抢先一步啦！'**
+  /// **'Oops, this item is too popular, someone beat you to it!'**
   String get itemAlreadyPurchased;
+
+  /// No description provided for @unknown.
+  ///
+  /// In en, this message translates to:
+  /// **'Unknown'**
+  String get unknown;
+
+  /// No description provided for @idLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'ID:'**
+  String get idLabel;
+
+  /// No description provided for @ownerIdLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Owner ID:'**
+  String get ownerIdLabel;
+
+  /// No description provided for @orderNumber.
+  ///
+  /// In en, this message translates to:
+  /// **'Order #{id}'**
+  String orderNumber(String id);
+
+  /// No description provided for @joinedLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Joined:'**
+  String get joinedLabel;
+
+  /// No description provided for @roleLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Role:'**
+  String get roleLabel;
+
+  /// No description provided for @unbanConfirmMessage.
+  ///
+  /// In en, this message translates to:
+  /// **'Are you sure you want to unban user \"{username}\"?'**
+  String unbanConfirmMessage(String username);
+
+  /// No description provided for @adminLoginAsAuditLogWarning.
+  ///
+  /// In en, this message translates to:
+  /// **'This operation will log in as the selected user and leave an audit log. Continue?'**
+  String get adminLoginAsAuditLogWarning;
+
+  /// No description provided for @impersonationFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Impersonation failed: {error}'**
+  String impersonationFailed(String error);
+
+  /// No description provided for @infoDisclaimer.
+  ///
+  /// In en, this message translates to:
+  /// **'This product is for information publishing only, with no guarantee, no fund intermediary, and no transaction fees.'**
+  String get infoDisclaimer;
+
+  /// No description provided for @aboutPlatform.
+  ///
+  /// In en, this message translates to:
+  /// **'About This Platform'**
+  String get aboutPlatform;
+
+  /// No description provided for @aboutPlatformSubtitle.
+  ///
+  /// In en, this message translates to:
+  /// **'How this platform works and key safety notice.'**
+  String get aboutPlatformSubtitle;
+
+  /// No description provided for @infoPublishing.
+  ///
+  /// In en, this message translates to:
+  /// **'Information Publishing'**
+  String get infoPublishing;
+
+  /// No description provided for @infoPublishingDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'This platform is for information publishing only. Users share listing information through posts. No transactions or payments occur on this platform.'**
+  String get infoPublishingDesc;
+
+  /// No description provided for @contactThroughChat.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact Through Chat'**
+  String get contactThroughChat;
+
+  /// No description provided for @contactThroughChatDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Contact sellers directly through the in-app chat feature. Communicate details and arrange transactions offline.'**
+  String get contactThroughChatDesc;
+
+  /// No description provided for @safetyTips.
+  ///
+  /// In en, this message translates to:
+  /// **'Safety Tips'**
+  String get safetyTips;
+
+  /// No description provided for @safetyTipsDesc.
+  ///
+  /// In en, this message translates to:
+  /// **'Meet in safe public places when exchanging items. Verify item condition before completing any offline arrangement.'**
+  String get safetyTipsDesc;
+
+  /// No description provided for @platformDisclaimer.
+  ///
+  /// In en, this message translates to:
+  /// **'This platform serves as an information listing service only. Any offline transactions are at your own risk. Please stay vigilant and protect your personal safety and property.'**
+  String get platformDisclaimer;
+
+  /// No description provided for @recommendedForYou.
+  ///
+  /// In en, this message translates to:
+  /// **'For You'**
+  String get recommendedForYou;
+
+  /// No description provided for @similarRecommendations.
+  ///
+  /// In en, this message translates to:
+  /// **'Similar Items'**
+  String get similarRecommendations;
+
+  /// No description provided for @camera.
+  ///
+  /// In en, this message translates to:
+  /// **'Camera'**
+  String get camera;
+
+  /// No description provided for @gallery.
+  ///
+  /// In en, this message translates to:
+  /// **'Gallery'**
+  String get gallery;
+
+  /// No description provided for @uploading.
+  ///
+  /// In en, this message translates to:
+  /// **'Uploading'**
+  String get uploading;
+
+  /// No description provided for @avatarUpdated.
+  ///
+  /// In en, this message translates to:
+  /// **'Avatar updated'**
+  String get avatarUpdated;
+
+  /// No description provided for @uploadFailed.
+  ///
+  /// In en, this message translates to:
+  /// **'Upload failed'**
+  String get uploadFailed;
+
+  /// No description provided for @emailLabel.
+  ///
+  /// In en, this message translates to:
+  /// **'Email'**
+  String get emailLabel;
+
+  /// No description provided for @emailChange.
+  ///
+  /// In en, this message translates to:
+  /// **'Change Email'**
+  String get emailChange;
+
+  /// No description provided for @emailChangeHint.
+  ///
+  /// In en, this message translates to:
+  /// **'Enter @email.ncu.edu.cn email'**
+  String get emailChangeHint;
+
+  /// No description provided for @emailDomainError.
+  ///
+  /// In en, this message translates to:
+  /// **'Must use @email.ncu.edu.cn email'**
+  String get emailDomainError;
+
+  /// No description provided for @emailChangeSuccess.
+  ///
+  /// In en, this message translates to:
+  /// **'Email updated'**
+  String get emailChangeSuccess;
+
+  /// No description provided for @notSet.
+  ///
+  /// In en, this message translates to:
+  /// **'Not set'**
+  String get notSet;
 }
 
 class _AppLocalizationsDelegate

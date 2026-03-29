@@ -40,6 +40,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get buyNow => 'Buy Now';
 
   @override
+  String get buyer => 'Buyer';
+
+  @override
   String get cancel => 'Cancel';
 
   @override
@@ -164,6 +167,9 @@ class AppLocalizationsEn extends AppLocalizations {
   String get loading => 'Loading...';
 
   @override
+  String get loadMore => 'Load more';
+
+  @override
   String get login => 'Login';
 
   @override
@@ -190,10 +196,28 @@ class AppLocalizationsEn extends AppLocalizations {
   String get messagesTab => 'Messages';
 
   @override
+  String get notificationsCenter => 'Notifications';
+
+  @override
+  String get notificationsCenterSubtitle => 'System messages and reminders';
+
+  @override
   String get myFavorites => 'My Favorites';
 
   @override
   String get myFavoritesSubtitle => 'Your favorite items';
+
+  @override
+  String get watchlistEmpty => 'No favorites yet';
+
+  @override
+  String get notificationsEmpty => 'No notifications for now';
+
+  @override
+  String get markAllRead => 'Mark all as read';
+
+  @override
+  String get markAllReadSuccess => 'All notifications marked as read';
 
   @override
   String get myListings => 'My Listings';
@@ -211,10 +235,40 @@ class AppLocalizationsEn extends AppLocalizations {
   String get myOrdersSubtitle => 'View purchase history';
 
   @override
+  String get allOrders => 'All';
+
+  @override
+  String get buyerOrders => 'As Buyer';
+
+  @override
+  String get sellerOrders => 'As Seller';
+
+  @override
+  String get orderAsBuyer => 'As Buyer';
+
+  @override
+  String get orderAsSeller => 'As Seller';
+
+  @override
+  String get pay => 'Pay';
+
+  @override
+  String get markPaid => 'Paid';
+
+  @override
+  String get reason => 'Reason (optional)';
+
+  @override
   String get negotiationDetails => 'Negotiation details';
 
   @override
   String get negotiationExpired => 'Negotiation expired and cancelled';
+
+  @override
+  String get connectionAccepted => 'Connection accepted';
+
+  @override
+  String get connectionRejected => 'Connection rejected';
 
   @override
   String get negotiationRejected => 'Negotiation rejected';
@@ -311,6 +365,35 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get settingsSubtitle => 'App settings';
+
+  @override
+  String get nickname => 'Nickname';
+
+  @override
+  String get nicknameChange => 'Change nickname';
+
+  @override
+  String get nicknameChangeSuccess => 'Nickname updated';
+
+  @override
+  String get nicknameChangeHint =>
+      'Others will see your new nickname after update';
+
+  @override
+  String get nicknameConflict => 'This nickname is already taken';
+
+  @override
+  String get nicknameEmpty => 'Nickname cannot be empty';
+
+  @override
+  String get userAgreement => 'User Agreement';
+
+  @override
+  String get userAgreementTitle => 'User Agreement & Terms';
+
+  @override
+  String get userAgreementSubtitle =>
+      'Understand platform rules and usage responsibilities.';
 
   @override
   String get sold => 'Sold';
@@ -485,11 +568,134 @@ class AppLocalizationsEn extends AppLocalizations {
   String get noOrders => 'No orders';
 
   @override
+  String get conditionLikeNew => 'Like New';
+
+  @override
+  String get conditionGood => 'Good';
+
+  @override
+  String get conditionFair => 'Fair';
+
+  @override
+  String get conditionPoor => 'Poor';
+
+  @override
   String get buyerInitiatedNegotiation => 'Buyer initiated negotiation';
 
   @override
-  String get cannotContactSeller => '无法联系卖家：缺少卖家信息';
+  String get cannotContactSeller =>
+      'Unable to contact seller: missing seller info';
 
   @override
-  String get itemAlreadyPurchased => '哎呀，该商品太火爆，已经被别人抢先一步啦！';
+  String get itemAlreadyPurchased =>
+      'Oops, this item is too popular, someone beat you to it!';
+
+  @override
+  String get unknown => 'Unknown';
+
+  @override
+  String get idLabel => 'ID:';
+
+  @override
+  String get ownerIdLabel => 'Owner ID:';
+
+  @override
+  String orderNumber(String id) {
+    return 'Order #$id';
+  }
+
+  @override
+  String get joinedLabel => 'Joined:';
+
+  @override
+  String get roleLabel => 'Role:';
+
+  @override
+  String unbanConfirmMessage(String username) {
+    return 'Are you sure you want to unban user \"$username\"?';
+  }
+
+  @override
+  String get adminLoginAsAuditLogWarning =>
+      'This operation will log in as the selected user and leave an audit log. Continue?';
+
+  @override
+  String impersonationFailed(String error) {
+    return 'Impersonation failed: $error';
+  }
+
+  @override
+  String get infoDisclaimer =>
+      'This product is for information publishing only, with no guarantee, no fund intermediary, and no transaction fees.';
+
+  @override
+  String get aboutPlatform => 'About This Platform';
+
+  @override
+  String get aboutPlatformSubtitle =>
+      'How this platform works and key safety notice.';
+
+  @override
+  String get infoPublishing => 'Information Publishing';
+
+  @override
+  String get infoPublishingDesc =>
+      'This platform is for information publishing only. Users share listing information through posts. No transactions or payments occur on this platform.';
+
+  @override
+  String get contactThroughChat => 'Contact Through Chat';
+
+  @override
+  String get contactThroughChatDesc =>
+      'Contact sellers directly through the in-app chat feature. Communicate details and arrange transactions offline.';
+
+  @override
+  String get safetyTips => 'Safety Tips';
+
+  @override
+  String get safetyTipsDesc =>
+      'Meet in safe public places when exchanging items. Verify item condition before completing any offline arrangement.';
+
+  @override
+  String get platformDisclaimer =>
+      'This platform serves as an information listing service only. Any offline transactions are at your own risk. Please stay vigilant and protect your personal safety and property.';
+
+  @override
+  String get recommendedForYou => 'For You';
+
+  @override
+  String get similarRecommendations => 'Similar Items';
+
+  @override
+  String get camera => 'Camera';
+
+  @override
+  String get gallery => 'Gallery';
+
+  @override
+  String get uploading => 'Uploading';
+
+  @override
+  String get avatarUpdated => 'Avatar updated';
+
+  @override
+  String get uploadFailed => 'Upload failed';
+
+  @override
+  String get emailLabel => 'Email';
+
+  @override
+  String get emailChange => 'Change Email';
+
+  @override
+  String get emailChangeHint => 'Enter @email.ncu.edu.cn email';
+
+  @override
+  String get emailDomainError => 'Must use @email.ncu.edu.cn email';
+
+  @override
+  String get emailChangeSuccess => 'Email updated';
+
+  @override
+  String get notSet => 'Not set';
 }

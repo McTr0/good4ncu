@@ -131,13 +131,16 @@ class _RecommendationCard extends StatelessWidget {
                     ),
                     const Spacer(),
                     Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
                       children: [
-                        PriceTag(
-                          priceCny: listing.suggestedPriceCny,
-                          fontSize: 13,
+                        Flexible(
+                          child: PriceTag(
+                            priceCny: listing.suggestedPriceCny,
+                            fontSize: 13,
+                          ),
                         ),
-                        const Spacer(),
-                        ConditionBadge.fromScore(listing.conditionScore),
+                        const SizedBox(width: 4),
+                        conditionBadgeFromScore(listing.conditionScore),
                       ],
                     ),
                   ],

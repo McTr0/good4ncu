@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
+import '../services/token_storage.dart';
 import '../theme/app_theme.dart';
 import 'login_page.dart';
 
@@ -41,16 +41,15 @@ class _UserCenterPageState extends State<UserCenterPage> {
       if (mounted) {
         // If 401, the ApiService interceptor handles redirect
         setState(() => _isLoading = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Failed to load data: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Failed to load data: $e')));
       }
     }
   }
 
   Future<void> _logout() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.remove('jwt_token');
+    await TokenStorage.instance.clearTokens();
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const LoginPage()),
@@ -133,7 +132,10 @@ class _UserCenterPageState extends State<UserCenterPage> {
                   // My Listings Header
                   Row(
                     children: [
-                      const Icon(Icons.inventory_2_outlined, size: AppTheme.sp20),
+                      const Icon(
+                        Icons.inventory_2_outlined,
+                        size: AppTheme.sp20,
+                      ),
                       const SizedBox(width: 8),
                       Text(
                         'My Listings (${_listings.length})',
@@ -153,8 +155,11 @@ class _UserCenterPageState extends State<UserCenterPage> {
                         padding: const EdgeInsets.all(32),
                         child: Column(
                           children: [
-                            Icon(Icons.inbox_outlined,
-                                size: 48, color: AppTheme.textSecondary),
+                            Icon(
+                              Icons.inbox_outlined,
+                              size: 48,
+                              color: AppTheme.textSecondary,
+                            ),
                             const SizedBox(height: 8),
                             Text(
                               'No listings yet',
@@ -164,31 +169,39 @@ class _UserCenterPageState extends State<UserCenterPage> {
                             Text(
                               'Use the chat to post your first item!',
                               style: TextStyle(
-                                  color: AppTheme.textSecondary, fontSize: 12),
+                                color: AppTheme.textSecondary,
+                                fontSize: 12,
+                              ),
                             ),
                           ],
                         ),
                       ),
                     )
                   else
-                    ..._listings.map((item) => Card(
-                          margin: const EdgeInsets.only(bottom: 8),
-                          child: ListTile(
-                            leading: const Icon(Icons.shopping_bag_outlined,
-                                color: AppTheme.primary),
-                            title: Text(item['title'] ?? 'Untitled'),
-                            subtitle: Text(
-                              '${item['category']} · ${item['brand']} · ¥${item['suggested_price_cny']}',
+                    ..._listings.map(
+                      (item) => Card(
+                        margin: const EdgeInsets.only(bottom: 8),
+                        child: ListTile(
+                          leading: const Icon(
+                            Icons.shopping_bag_outlined,
+                            color: AppTheme.primary,
+                          ),
+                          title: Text(item['title'] ?? 'Untitled'),
+                          subtitle: Text(
+                            '${item['category']} · ${item['brand']} · ¥${item['suggested_price_cny']}',
+                          ),
+                          trailing: Chip(
+                            label: Text(
+                              item['status'] ?? 'active',
+                              style: const TextStyle(fontSize: 11),
                             ),
-                            trailing: Chip(
-                              label: Text(
-                                item['status'] ?? 'active',
-                                style: const TextStyle(fontSize: 11),
-                              ),
-                              backgroundColor: AppTheme.success.withValues(alpha: 0.1),
+                            backgroundColor: AppTheme.success.withValues(
+                              alpha: 0.1,
                             ),
                           ),
-                        )),
+                        ),
+                      ),
+                    ),
                 ],
               ),
             ),

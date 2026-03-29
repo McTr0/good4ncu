@@ -214,12 +214,7 @@ class _CreateListingPageState extends State<CreateListingPage> {
     return 'Poor';
   }
 
-  Color get _conditionColor {
-    if (_conditionScore >= 9) return AppTheme.success;
-    if (_conditionScore >= 7) return AppTheme.info;
-    if (_conditionScore >= 5) return AppTheme.warning;
-    return AppTheme.error;
-  }
+  Color get _conditionColor => AppTheme.conditionColor(_conditionScore);
 
   @override
   Widget build(BuildContext context) {

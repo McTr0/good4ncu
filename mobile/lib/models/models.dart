@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import '../theme/app_theme.dart';
 
 class Listing {
   final String id;
@@ -42,28 +43,20 @@ class Listing {
       description: json['description'],
       status: json['status'] ?? 'active',
       thumbnailHint: json['thumbnail_hint'],
-      defects: json['defects'] != null
-          ? List<String>.from(json['defects'])
-          : null,
+      defects: json['defect_hint'] != null
+          ? [json['defect_hint'] as String]
+          : (json['defects'] != null
+                ? List<String>.from(json['defects'])
+                : null),
       ownerId: json['owner_id'],
       ownerUsername: json['owner_username'],
       createdAt: json['created_at'],
     );
   }
 
-  String get conditionLabel {
-    if (conditionScore >= 9) return '几乎全新';
-    if (conditionScore >= 7) return '较好';
-    if (conditionScore >= 5) return '一般';
-    return '较差';
-  }
+  String get conditionLabel => AppTheme.conditionLabel(conditionScore);
 
-  Color get conditionColor {
-    if (conditionScore >= 9) return const Color(0xFF10B981);
-    if (conditionScore >= 7) return const Color(0xFF3B82F6);
-    if (conditionScore >= 5) return const Color(0xFFF59E0B);
-    return const Color(0xFFEF4444);
-  }
+  Color get conditionColor => AppTheme.conditionColor(conditionScore);
 }
 
 class ListingsResponse {
@@ -91,12 +84,161 @@ class ListingsResponse {
   }
 }
 
+class WatchlistItem {
+  final String listingId;
+  final String title;
+  final String category;
+  final String brand;
+  final int conditionScore;
+  final double suggestedPriceCny;
+  final String status;
+  final String ownerId;
+  final String createdAt;
+
+  const WatchlistItem({
+    required this.listingId,
+    required this.title,
+    required this.category,
+    required this.brand,
+    required this.conditionScore,
+    required this.suggestedPriceCny,
+    required this.status,
+    required this.ownerId,
+    required this.createdAt,
+  });
+
+  factory WatchlistItem.fromJson(Map<String, dynamic> json) {
+    return WatchlistItem(
+      listingId: json['listing_id']?.toString() ?? '',
+      title: json['title'] ?? '',
+      category: json['category'] ?? '',
+      brand: json['brand'] ?? '',
+      conditionScore: json['condition_score'] ?? 0,
+      suggestedPriceCny: (json['suggested_price_cny'] ?? 0).toDouble(),
+      status: json['status'] ?? 'active',
+      ownerId: json['owner_id']?.toString() ?? '',
+      createdAt: json['created_at'] ?? '',
+    );
+  }
+}
+
+class WatchlistResponse {
+  final List<WatchlistItem> items;
+  final int total;
+  final int limit;
+  final int offset;
+
+  const WatchlistResponse({
+    required this.items,
+    required this.total,
+    required this.limit,
+    required this.offset,
+  });
+
+  factory WatchlistResponse.fromJson(Map<String, dynamic> json) {
+    return WatchlistResponse(
+      items: (json['items'] as List<dynamic>? ?? [])
+          .map((e) => WatchlistItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      total: json['total'] ?? 0,
+      limit: json['limit'] ?? 20,
+      offset: json['offset'] ?? 0,
+    );
+  }
+}
+
+class AppNotification {
+  final String id;
+  final String eventType;
+  final String title;
+  final String body;
+  final String? relatedOrderId;
+  final String? relatedListingId;
+  final bool isRead;
+  final String createdAt;
+
+  const AppNotification({
+    required this.id,
+    required this.eventType,
+    required this.title,
+    required this.body,
+    this.relatedOrderId,
+    this.relatedListingId,
+    required this.isRead,
+    required this.createdAt,
+  });
+
+  factory AppNotification.fromJson(Map<String, dynamic> json) {
+    return AppNotification(
+      id: json['id']?.toString() ?? '',
+      eventType: json['event_type'] ?? '',
+      title: json['title'] ?? '',
+      body: json['body'] ?? '',
+      relatedOrderId: json['related_order_id']?.toString(),
+      relatedListingId: json['related_listing_id']?.toString(),
+      isRead: json['is_read'] ?? false,
+      createdAt: json['created_at'] ?? '',
+    );
+  }
+
+  AppNotification copyWith({
+    String? id,
+    String? eventType,
+    String? title,
+    String? body,
+    String? relatedOrderId,
+    String? relatedListingId,
+    bool? isRead,
+    String? createdAt,
+  }) {
+    return AppNotification(
+      id: id ?? this.id,
+      eventType: eventType ?? this.eventType,
+      title: title ?? this.title,
+      body: body ?? this.body,
+      relatedOrderId: relatedOrderId ?? this.relatedOrderId,
+      relatedListingId: relatedListingId ?? this.relatedListingId,
+      isRead: isRead ?? this.isRead,
+      createdAt: createdAt ?? this.createdAt,
+    );
+  }
+}
+
+class NotificationsResponse {
+  final List<AppNotification> items;
+  final int total;
+  final int unreadCount;
+  final int limit;
+  final int offset;
+
+  const NotificationsResponse({
+    required this.items,
+    required this.total,
+    required this.unreadCount,
+    required this.limit,
+    required this.offset,
+  });
+
+  factory NotificationsResponse.fromJson(Map<String, dynamic> json) {
+    return NotificationsResponse(
+      items: (json['items'] as List<dynamic>? ?? [])
+          .map((e) => AppNotification.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      total: json['total'] ?? 0,
+      unreadCount: json['unread_count'] ?? 0,
+      limit: json['limit'] ?? 20,
+      offset: json['offset'] ?? 0,
+    );
+  }
+}
+
 class ChatMessage {
   final String sender;
   final String content;
   final String? imageBase64;
   final String? audioBase64;
   final DateTime timestamp;
+
   /// True while the SSE stream is still delivering tokens (typing indicator).
   final bool isPartial;
 
@@ -128,43 +270,56 @@ class ChatMessage {
   }
 
   Map<String, dynamic> toJson() => {
-        'message': content,
-        'image': imageBase64,
-        'audio': audioBase64,
-      };
+    'message': content,
+    'image': imageBase64,
+    'audio': audioBase64,
+  };
 }
 
 /// 连接状态类型
 enum ConnectionStatusType {
-  online,   // connected + established
-  offline,  // connected but not established
-  pending,  // pending
+  online, // connected + established
+  offline, // connected but not established
+  pending, // pending
 }
 
 /// 会话信息
 class Conversation {
   final String id;
+
+  /// The user who initiated the connection request
+  final String requesterId;
   final String otherUserId;
   final String otherUsername;
   final String status; // 'connected' | 'pending' | 'established'
   final String? lastMessage;
   final DateTime? lastMessageAt;
+
   /// 未读消息数
   final int unreadCount;
 
+  /// Whether current user is the receiver of this connection request
+  final bool isReceiver;
+
   Conversation({
     required this.id,
+    required this.requesterId,
     required this.otherUserId,
     required this.otherUsername,
     required this.status,
     this.lastMessage,
     this.lastMessageAt,
     this.unreadCount = 0,
+    this.isReceiver = false,
   });
+
+  /// Current user can accept/reject this connection (true only for pending incoming requests)
+  bool get canRespond => status == 'pending' && isReceiver;
 
   factory Conversation.fromJson(Map<String, dynamic> json) {
     return Conversation(
       id: json['id']?.toString() ?? '',
+      requesterId: json['requester_id']?.toString() ?? '',
       otherUserId: json['other_user_id']?.toString() ?? '',
       otherUsername: json['other_username'] ?? '',
       status: json['status'] ?? 'pending',
@@ -173,14 +328,15 @@ class Conversation {
           ? DateTime.tryParse(json['last_message_at'].toString())
           : null,
       unreadCount: json['unread_count'] ?? 0,
+      isReceiver: json['is_receiver'] ?? false,
     );
   }
 
   ConnectionStatusType get connectionStatus {
     if (status == 'pending') return ConnectionStatusType.pending;
+    // 'connected' and 'established' both mean the connection is active
     if (status == 'connected' || status == 'established') {
-      if (status == 'established') return ConnectionStatusType.online;
-      return ConnectionStatusType.offline;
+      return ConnectionStatusType.online;
     }
     return ConnectionStatusType.offline;
   }
@@ -196,8 +352,10 @@ class ConversationMessage {
   final String? audioBase64;
   final DateTime sentAt;
   final DateTime? readAt;
+
   /// 消息状态: sending | sent | delivered | read | failed
   final String status;
+
   /// 已编辑时间
   final DateTime? editedAt;
 
@@ -225,8 +383,8 @@ class ConversationMessage {
       sentAt: json['sent_at'] != null
           ? DateTime.parse(json['sent_at'].toString())
           : json['timestamp'] != null
-              ? DateTime.parse(json['timestamp'].toString())
-              : DateTime.now(),
+          ? DateTime.parse(json['timestamp'].toString())
+          : DateTime.now(),
       readAt: json['read_at'] != null
           ? DateTime.tryParse(json['read_at'].toString())
           : null,
@@ -321,4 +479,203 @@ class HitlRequest {
   bool get isCountered => status == 'countered';
   bool get isExpired => status == 'expired';
   bool get isFinal => status == 'approved' || status == 'rejected';
+}
+
+/// Order summary for list view.
+class Order {
+  final String id;
+  final String listingId;
+  final String listingTitle;
+  final String buyerId;
+  final String sellerId;
+  final String buyerUsername;
+  final String sellerUsername;
+  final double finalPriceCny;
+  final String status;
+  final String createdAt;
+  final String role;
+
+  const Order({
+    required this.id,
+    required this.listingId,
+    required this.listingTitle,
+    required this.buyerId,
+    required this.sellerId,
+    required this.buyerUsername,
+    required this.sellerUsername,
+    required this.finalPriceCny,
+    required this.status,
+    required this.createdAt,
+    required this.role,
+  });
+
+  factory Order.fromJson(Map<String, dynamic> json) {
+    return Order(
+      id: json['id'] ?? '',
+      listingId: json['listing_id'] ?? '',
+      listingTitle: json['listing_title'] ?? '',
+      buyerId: json['buyer_id'] ?? '',
+      sellerId: json['seller_id'] ?? '',
+      buyerUsername: json['buyer_username'] ?? '',
+      sellerUsername: json['seller_username'] ?? '',
+      finalPriceCny: (json['final_price_cny'] ?? 0).toDouble(),
+      status: json['status'] ?? 'pending',
+      createdAt: json['created_at'] ?? '',
+      role: json['role'] ?? 'buyer',
+    );
+  }
+
+  String get statusLabel {
+    switch (status) {
+      case 'pending':
+        return '待支付';
+      case 'paid':
+        return '已支付';
+      case 'shipped':
+        return '已发货';
+      case 'completed':
+        return '已完成';
+      case 'cancelled':
+        return '已取消';
+      default:
+        return status;
+    }
+  }
+
+  Color get statusColor {
+    switch (status) {
+      case 'pending':
+        return const Color(0xFFF59E0B);
+      case 'paid':
+        return const Color(0xFF3B82F6);
+      case 'shipped':
+        return const Color(0xFF8B5CF6);
+      case 'completed':
+        return const Color(0xFF10B981);
+      case 'cancelled':
+        return const Color(0xFF6B7280);
+      default:
+        return Colors.grey;
+    }
+  }
+}
+
+class OrdersResponse {
+  final List<Order> items;
+  final int total;
+  final int limit;
+  final int offset;
+
+  const OrdersResponse({
+    required this.items,
+    required this.total,
+    required this.limit,
+    required this.offset,
+  });
+
+  factory OrdersResponse.fromJson(Map<String, dynamic> json) {
+    return OrdersResponse(
+      items: (json['items'] as List<dynamic>)
+          .map((e) => Order.fromJson(e as Map<String, dynamic>))
+          .toList(),
+      total: json['total'] ?? 0,
+      limit: json['limit'] ?? 20,
+      offset: json['offset'] ?? 0,
+    );
+  }
+}
+
+class OrderDetail {
+  final String id;
+  final String listingId;
+  final String listingTitle;
+  final String buyerId;
+  final String sellerId;
+  final String buyerUsername;
+  final String sellerUsername;
+  final double finalPriceCny;
+  final String status;
+  final String createdAt;
+  final String? paidAt;
+  final String? shippedAt;
+  final String? completedAt;
+  final String? cancelledAt;
+  final String? cancellationReason;
+
+  const OrderDetail({
+    required this.id,
+    required this.listingId,
+    required this.listingTitle,
+    required this.buyerId,
+    required this.sellerId,
+    required this.buyerUsername,
+    required this.sellerUsername,
+    required this.finalPriceCny,
+    required this.status,
+    required this.createdAt,
+    this.paidAt,
+    this.shippedAt,
+    this.completedAt,
+    this.cancelledAt,
+    this.cancellationReason,
+  });
+
+  factory OrderDetail.fromJson(Map<String, dynamic> json) {
+    return OrderDetail(
+      id: json['id'] ?? '',
+      listingId: json['listing_id'] ?? '',
+      listingTitle: json['listing_title'] ?? '',
+      buyerId: json['buyer_id'] ?? '',
+      sellerId: json['seller_id'] ?? '',
+      buyerUsername: json['buyer_username'] ?? '',
+      sellerUsername: json['seller_username'] ?? '',
+      finalPriceCny: (json['final_price_cny'] ?? 0).toDouble(),
+      status: json['status'] ?? 'pending',
+      createdAt: json['created_at'] ?? '',
+      paidAt: json['paid_at'],
+      shippedAt: json['shipped_at'],
+      completedAt: json['completed_at'],
+      cancelledAt: json['cancelled_at'],
+      cancellationReason: json['cancellation_reason'],
+    );
+  }
+
+  String get statusLabel {
+    switch (status) {
+      case 'pending':
+        return '待支付';
+      case 'paid':
+        return '已支付';
+      case 'shipped':
+        return '已发货';
+      case 'completed':
+        return '已完成';
+      case 'cancelled':
+        return '已取消';
+      default:
+        return status;
+    }
+  }
+
+  Color get statusColor {
+    switch (status) {
+      case 'pending':
+        return const Color(0xFFF59E0B);
+      case 'paid':
+        return const Color(0xFF3B82F6);
+      case 'shipped':
+        return const Color(0xFF8B5CF6);
+      case 'completed':
+        return const Color(0xFF10B981);
+      case 'cancelled':
+        return const Color(0xFF6B7280);
+      default:
+        return Colors.grey;
+    }
+  }
+
+  bool get canPay => status == 'pending';
+  bool get canShip => status == 'paid';
+  bool get canConfirm => status == 'shipped';
+  bool get canCancel => status == 'pending' || status == 'paid';
 }

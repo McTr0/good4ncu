@@ -460,11 +460,7 @@ class _ChatPageState extends State<ChatPage> {
   }
 
   void _connectWs() {
-    final ws = WsService();
-    ws.connect().catchError((e) {
-      debugPrint('WS connect failed: $e');
-    });
-    _wsSubscription = ws.stream.listen((notification) {
+    _wsSubscription = WsService.instance.stream.listen((notification) {
       _handleWsNotification(notification);
     });
   }
@@ -958,7 +954,7 @@ class _ChatBubble extends StatelessWidget {
             ),
           ),
         ),
-        if (trailingCard != null) trailingCard,
+        ?trailingCard,
       ],
     );
   }

@@ -3,6 +3,8 @@ import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/recommendation_service.dart';
+import '../components/recommendation_carousel.dart';
 import '../theme/app_theme.dart';
 import '../components/price_tag.dart';
 import '../components/shimmer_grid.dart';
@@ -16,6 +18,7 @@ class HomePage extends StatefulWidget {
 
 class _HomePageState extends State<HomePage> {
   final ApiService _apiService = ApiService();
+  final RecommendationService _recommendationService = RecommendationService();
   final TextEditingController _searchController = TextEditingController();
 
   List<Listing> _listings = [];
@@ -24,6 +27,10 @@ class _HomePageState extends State<HomePage> {
   String? _selectedCategory;
   int _offset = 0;
   bool _hasMore = true;
+
+  // Recommendation state
+  List<Listing> _recommendedListings = [];
+  bool _recommendationLoading = true;
 
   final _categories = [
     'allCategories',
@@ -61,6 +68,7 @@ class _HomePageState extends State<HomePage> {
   void initState() {
     super.initState();
     _loadListings();
+    _loadRecommendations();
   }
 
   @override
@@ -107,6 +115,28 @@ class _HomePageState extends State<HomePage> {
         setState(() {
           _loading = false;
           _error = e.toString();
+        });
+      }
+    }
+  }
+
+
+  Future<void> _loadRecommendations() async {
+    setState(() => _recommendationLoading = true);
+    try {
+      final recommendations = await _recommendationService.getRecommendationFeed(limit: 10);
+      if (mounted) {
+        setState(() {
+          _recommendedListings = recommendations;
+          _recommendationLoading = false;
+        });
+      }
+    } catch (e) {
+      // Gracefully degrade - hide carousel on error
+      if (mounted) {
+        setState(() {
+          _recommendedListings = [];
+          _recommendationLoading = false;
         });
       }
     }
@@ -160,7 +190,7 @@ class _HomePageState extends State<HomePage> {
               scrollDirection: Axis.horizontal,
               padding: const EdgeInsets.symmetric(horizontal: AppTheme.sp16),
               itemCount: _categories.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 8),
+              separatorBuilder: (context, index) => const SizedBox(width: 8),
               itemBuilder: (context, i) {
                 final cat = _categories[i];
                 final selected =
@@ -229,7 +259,10 @@ class _HomePageState extends State<HomePage> {
     }
 
     return RefreshIndicator(
-      onRefresh: () => _loadListings(reset: true),
+      onRefresh: () async {
+        await _loadListings(reset: true);
+        _loadRecommendations();
+      },
       child: NotificationListener<ScrollNotification>(
         onNotification: (notification) {
           if (notification is ScrollEndNotification &&
@@ -241,30 +274,60 @@ class _HomePageState extends State<HomePage> {
           }
           return false;
         },
-        child: GridView.builder(
-          padding: const EdgeInsets.all(AppTheme.sp16),
-          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-            crossAxisCount: 2,
-            childAspectRatio: 0.72,
-            crossAxisSpacing: 12,
-            mainAxisSpacing: 12,
-          ),
-          itemCount: _listings.length + (_hasMore ? 1 : 0),
-          itemBuilder: (context, i) {
-            if (i >= _listings.length) {
-              return const Center(
-                child: Padding(
-                  padding: EdgeInsets.all(16),
-                  child: CircularProgressIndicator(strokeWidth: 2),
+        child: CustomScrollView(
+          slivers: [
+            // Recommendation carousel
+            if (!_recommendationLoading && _recommendedListings.isNotEmpty)
+              SliverToBoxAdapter(
+                child: Builder(
+                  builder: (ctx) => Padding(
+                    padding: const EdgeInsets.only(top: AppTheme.sp8, bottom: AppTheme.sp16),
+                    child: RecommendationCarousel(
+                      listings: _recommendedListings,
+                      title: AppLocalizations.of(ctx)?.recommendedForYou ?? '为你推荐',
+                    ),
+                  ),
                 ),
-              );
-            }
-            final listing = _listings[i];
-            return ListingCard(
-              listing: listing,
-              onTap: () => context.push('/listing/${listing.id}'),
-            );
-          },
+              ),
+            // Loading indicator for recommendations
+            if (_recommendationLoading)
+              const SliverToBoxAdapter(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(vertical: AppTheme.sp16),
+                  child: Center(child: CircularProgressIndicator(strokeWidth: 2)),
+                ),
+              ),
+            // Listings grid
+            SliverPadding(
+              padding: const EdgeInsets.all(AppTheme.sp16),
+              sliver: SliverGrid(
+                gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: 2,
+                  childAspectRatio: 0.72,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                ),
+                delegate: SliverChildBuilderDelegate(
+                  (context, i) {
+                    if (i >= _listings.length) {
+                      return const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                      );
+                    }
+                    final listing = _listings[i];
+                    return ListingCard(
+                      listing: listing,
+                      onTap: () => context.push('/listing/${listing.id}'),
+                    );
+                  },
+                  childCount: _listings.length + (_hasMore ? 1 : 0),
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );

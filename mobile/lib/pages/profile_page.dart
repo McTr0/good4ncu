@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 import '../services/api_service.dart';
-import '../services/locale_service.dart';
+import '../services/ws_service.dart';
+import '../services/token_storage.dart';
 import '../theme/app_theme.dart';
 
 class ProfilePage extends StatefulWidget {
@@ -26,16 +26,25 @@ class _ProfilePageState extends State<ProfilePage> {
   }
 
   Future<void> _loadProfile() async {
-    final l = AppLocalizations.of(context)!;
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final profile = await _apiService.getUserProfile();
-      if (mounted) setState(() { _profile = profile; _loading = false; });
+      if (mounted) {
+        setState(() {
+          _profile = profile;
+          _loading = false;
+        });
+      }
     } catch (e) {
       if (mounted) {
         setState(() {
           _loading = false;
-          _error = l.profileLoadFailed;
+          _error =
+              AppLocalizations.of(context)?.profileLoadFailed ??
+              'Failed to load profile';
         });
       }
     }
@@ -63,8 +72,9 @@ class _ProfilePageState extends State<ProfilePage> {
     );
 
     if (confirmed == true) {
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.remove('jwt_token');
+      await TokenStorage.instance.clearTokens();
+      // Disconnect global WebSocket singleton on logout.
+      await WsService.instance.disconnect();
       if (mounted) context.go('/login');
     }
   }
@@ -82,9 +92,7 @@ class _ProfilePageState extends State<ProfilePage> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(l.profile),
-      ),
+      appBar: AppBar(title: Text(l.profile)),
       body: _buildBody(),
     );
   }
@@ -112,6 +120,7 @@ class _ProfilePageState extends State<ProfilePage> {
 
     final username = _profile?['username'] ?? l.profile;
     final createdAt = _profile?['created_at'];
+    final avatarUrl = _profile?['avatar_url'] as String?;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.all(AppTheme.sp16),
@@ -121,86 +130,54 @@ class _ProfilePageState extends State<ProfilePage> {
           CircleAvatar(
             radius: 52,
             backgroundColor: AppTheme.primary.withValues(alpha: 0.15),
-            child: Text(
-              username.isNotEmpty ? username[0].toUpperCase() : '?',
-              style: const TextStyle(
-                fontSize: 40,
-                fontWeight: FontWeight.bold,
-                color: AppTheme.primary,
-              ),
-            ),
+            backgroundImage: avatarUrl != null && avatarUrl.isNotEmpty
+                ? NetworkImage(avatarUrl)
+                : null,
+            child: avatarUrl == null || avatarUrl.isEmpty
+                ? Text(
+                    username.isNotEmpty ? username[0].toUpperCase() : '?',
+                    style: const TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.bold,
+                      color: AppTheme.primary,
+                    ),
+                  )
+                : null,
           ),
           const SizedBox(height: AppTheme.sp16),
           Text(
             username,
-            style: const TextStyle(
-              fontSize: 24,
-              fontWeight: FontWeight.bold,
-            ),
+            style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
           ),
           if (createdAt != null && createdAt.toString().isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(
               l.memberSince(_formatDate(createdAt.toString())),
-              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 13,
+              ),
             ),
           ],
           const SizedBox(height: AppTheme.sp32),
 
-          // Language switch
-          Card(
-            margin: const EdgeInsets.only(bottom: 12),
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(
-                horizontal: AppTheme.sp16,
-                vertical: AppTheme.sp8,
-              ),
-              leading: Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.primary.withValues(alpha: 0.1),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: const Icon(Icons.language, color: AppTheme.primary),
-              ),
-              title: Text(_getLanguageTitle(context), style: const TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: Text(_getLanguageSubtitle(context), style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
-              trailing: const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
-              onTap: () => _showLanguageDialog(context),
-            ),
-          ),
-
-          _MenuCard(
-            icon: Icons.inventory_2_outlined,
-            title: l.myListings,
-            subtitle: l.myListingsMenu,
-            onTap: () => context.go('/my-listings'),
-          ),
           _MenuCard(
             icon: Icons.shopping_bag_outlined,
             title: l.myOrders,
             subtitle: l.myOrdersSubtitle,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(l.comingSoon)),
-              );
-            },
-          ),
-          _MenuCard(
-            icon: Icons.verified_user_outlined,
-            title: l.tradeProtection,
-            subtitle: l.tradeProtectionSubtitle,
-            onTap: () => context.push('/trust'),
+            onTap: () => context.push('/orders'),
           ),
           _MenuCard(
             icon: Icons.favorite_border,
             title: l.myFavorites,
             subtitle: l.myFavoritesSubtitle,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(l.comingSoon)),
-              );
-            },
+            onTap: () => context.push('/watchlist'),
+          ),
+          _MenuCard(
+            icon: Icons.notifications_none,
+            title: l.notificationsCenter,
+            subtitle: l.notificationsCenterSubtitle,
+            onTap: () => context.push('/notifications'),
           ),
           _MenuCard(
             icon: Icons.admin_panel_settings_outlined,
@@ -210,7 +187,10 @@ class _ProfilePageState extends State<ProfilePage> {
               final isAdmin = _profile?['role'] == 'admin';
               if (!isAdmin) {
                 ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text(l.adminOnly), backgroundColor: Colors.orange),
+                  SnackBar(
+                    content: Text(l.adminOnly),
+                    backgroundColor: Colors.orange,
+                  ),
                 );
                 return;
               }
@@ -221,11 +201,7 @@ class _ProfilePageState extends State<ProfilePage> {
             icon: Icons.settings_outlined,
             title: l.settings,
             subtitle: l.settingsSubtitle,
-            onTap: () {
-              ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(content: Text(l.comingSoon)),
-              );
-            },
+            onTap: () => context.push('/settings'),
           ),
           const SizedBox(height: AppTheme.sp16),
           SizedBox(
@@ -243,46 +219,6 @@ class _ProfilePageState extends State<ProfilePage> {
           ),
           const SizedBox(height: AppTheme.sp32),
         ],
-      ),
-    );
-  }
-
-  String _getLanguageTitle(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
-    return l.language;
-  }
-
-  String _getLanguageSubtitle(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
-    final locale = context.localeNotifier().locale;
-    return locale.languageCode == 'zh' ? l.chinese : l.english;
-  }
-
-  void _showLanguageDialog(BuildContext context) {
-    final l = AppLocalizations.of(context)!;
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(l.language),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              title: Text(l.english),
-              onTap: () {
-                ctx.localeNotifier().setLocale(const Locale('en'));
-                Navigator.pop(ctx);
-              },
-            ),
-            ListTile(
-              title: Text(l.chinese),
-              onTap: () {
-                ctx.localeNotifier().setLocale(const Locale('zh'));
-                Navigator.pop(ctx);
-              },
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -323,7 +259,10 @@ class _MenuCard extends StatelessWidget {
           subtitle,
           style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
         ),
-        trailing: const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+        trailing: const Icon(
+          Icons.chevron_right,
+          color: AppTheme.textSecondary,
+        ),
         onTap: onTap,
       ),
     );

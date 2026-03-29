@@ -54,7 +54,6 @@ class _UserChatPageState extends State<UserChatPage> {
   String? _editingMessageId;
 
   StreamSubscription? _wsSubscription;
-  WsService? _wsService;
 
   @override
   void initState() {
@@ -70,7 +69,6 @@ class _UserChatPageState extends State<UserChatPage> {
     _textController.dispose();
     _scrollController.dispose();
     _wsSubscription?.cancel();
-    _wsService?.dispose();
     _typingTimer?.cancel();
     _recordingTimer?.cancel();
     _audioRecorder.dispose();
@@ -120,13 +118,7 @@ class _UserChatPageState extends State<UserChatPage> {
   }
 
   Future<void> _connectWs() async {
-    _wsService = WsService();
-    try {
-      await _wsService!.connect();
-      _wsSubscription = _wsService!.stream.listen(_handleWsNotification);
-    } catch (e) {
-      debugPrint('WS connect failed: $e');
-    }
+    _wsSubscription = WsService.instance.stream.listen(_handleWsNotification);
   }
 
   void _handleWsNotification(WsNotification notif) {
@@ -137,6 +129,13 @@ class _UserChatPageState extends State<UserChatPage> {
         setState(() => _connectionStatus = 'connected');
         _loadMessages();
         _showSnackBar('连接已建立');
+        break;
+
+      case 'connection_rejected':
+        if (notif.connectionId == widget.conversationId) {
+          setState(() => _connectionStatus = 'rejected');
+          _showSnackBar('连接已被对方拒绝');
+        }
         break;
 
       case 'new_message':
@@ -431,7 +430,7 @@ class _UserChatPageState extends State<UserChatPage> {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            _ConnectionIndicator(status: _connectionStatus),
+            ConnectionIndicator(status: _connectionStatus, isWsConnected: WsService.instance.isConnected),
             const SizedBox(width: 8),
             Text(widget.otherUsername),
           ],
@@ -496,7 +495,7 @@ class _UserChatPageState extends State<UserChatPage> {
       itemBuilder: (context, index) {
         final msg = _messages[index];
         final isMe = msg.isFrom(_currentUserId ?? '');
-        return _MessageBubble(
+        return MessageBubble(
           message: msg,
           isMe: isMe,
           isConnected: _connectionStatus == 'connected',
@@ -606,16 +605,17 @@ class _UserChatPageState extends State<UserChatPage> {
   }
 }
 
-class _ConnectionIndicator extends StatefulWidget {
+class ConnectionIndicator extends StatefulWidget {
   final String? status;
+  final bool isWsConnected;
 
-  const _ConnectionIndicator({this.status});
+  const ConnectionIndicator({super.key, this.status, this.isWsConnected = false});
 
   @override
-  State<_ConnectionIndicator> createState() => _ConnectionIndicatorState();
+  State<ConnectionIndicator> createState() => ConnectionIndicatorState();
 }
 
-class _ConnectionIndicatorState extends State<_ConnectionIndicator>
+class ConnectionIndicatorState extends State<ConnectionIndicator>
     with SingleTickerProviderStateMixin {
   late AnimationController _controller;
 
@@ -640,46 +640,72 @@ class _ConnectionIndicatorState extends State<_ConnectionIndicator>
     String label;
     Widget dot;
 
-    switch (widget.status) {
-      case 'connected':
-        color = AppTheme.success;
-        label = '在线';
-        dot = Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
-        );
-        break;
-      case 'connecting':
-        color = AppTheme.warning;
-        label = '连接中...';
-        dot = AnimatedBuilder(
-          animation: _controller,
-          builder: (context, child) => Container(
+    // If WebSocket is not connected, always show offline (grey)
+    if (!widget.isWsConnected) {
+      color = Colors.grey;
+      label = '离线';
+      dot = Container(
+        width: 8,
+        height: 8,
+        decoration: BoxDecoration(
+          color: color,
+          shape: BoxShape.circle,
+        ),
+      );
+    } else {
+      switch (widget.status) {
+        case 'connected':
+          color = AppTheme.success;
+          label = '在线';
+          dot = Container(
             width: 8,
             height: 8,
             decoration: BoxDecoration(
-              color: color.withValues(alpha: 0.5 + 0.5 * _controller.value),
+              color: color,
               shape: BoxShape.circle,
             ),
-          ),
-        );
-        break;
-      default:
-        color = Colors.grey;
-        label = '离线';
-        dot = Container(
-          width: 8,
-          height: 8,
-          decoration: BoxDecoration(
-            color: color,
-            shape: BoxShape.circle,
-          ),
-        );
-        break;
+          );
+          break;
+        case 'pending':
+          color = AppTheme.warning;
+          label = '待接受';
+          dot = Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
+          );
+          break;
+        case 'connecting':
+          color = AppTheme.warning;
+          label = '连接中...';
+          dot = AnimatedBuilder(
+            animation: _controller,
+            builder: (context, child) => Container(
+              width: 8,
+              height: 8,
+              decoration: BoxDecoration(
+                color: color.withValues(alpha: 0.5 + 0.5 * _controller.value),
+                shape: BoxShape.circle,
+              ),
+            ),
+          );
+          break;
+        default:
+          color = Colors.grey;
+          label = '离线';
+          dot = Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(
+              color: color,
+              shape: BoxShape.circle,
+            ),
+          );
+          break;
+      }
     }
 
     return Row(
@@ -699,13 +725,14 @@ class _ConnectionIndicatorState extends State<_ConnectionIndicator>
   }
 }
 
-class _MessageBubble extends StatelessWidget {
+class MessageBubble extends StatelessWidget {
   final ConversationMessage message;
   final bool isMe;
   final bool isConnected;
   final VoidCallback? onEdit;
 
-  const _MessageBubble({
+  const MessageBubble({
+    super.key,
     required this.message,
     required this.isMe,
     required this.isConnected,
@@ -717,7 +744,7 @@ class _MessageBubble extends StatelessWidget {
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
       child: GestureDetector(
-        onLongPress: onEdit != null ? onEdit! : null,
+        onLongPress: onEdit,
         child: Container(
           constraints: BoxConstraints(
             maxWidth: MediaQuery.of(context).size.width * 0.75,

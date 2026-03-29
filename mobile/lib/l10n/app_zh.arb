@@ -10,6 +10,7 @@
   "brandLabel": "品牌",
   "books": "图书",
   "buyNow": "立即购买",
+  "buyer": "买家",
   "cancel": "取消",
   "category": "分类",
   "categoryLabel": "分类",
@@ -63,6 +64,7 @@
     }
   },
   "loading": "加载中...",
+  "loadMore": "加载更多",
   "login": "登录",
   "loginError": "登录错误",
   "loginSuccess": "登录成功",
@@ -78,15 +80,31 @@
     }
   },
   "messagesTab": "消息",
+  "notificationsCenter": "通知中心",
+  "notificationsCenterSubtitle": "系统消息与提醒",
   "myFavorites": "我的收藏",
   "myFavoritesSubtitle": "您收藏的商品",
+  "watchlistEmpty": "你还没有收藏商品",
+  "notificationsEmpty": "暂无通知",
+  "markAllRead": "全部已读",
+  "markAllReadSuccess": "已将全部通知标记为已读",
   "myListings": "我的发布",
   "myListingsMenu": "查看和管理您的商品",
   "myListingsTab": "我的发布",
   "myOrders": "我的订单",
   "myOrdersSubtitle": "查看购买记录",
+  "allOrders": "全部",
+  "buyerOrders": "作为买家",
+  "sellerOrders": "作为卖家",
+  "orderAsBuyer": "作为买家",
+  "orderAsSeller": "作为卖家",
+  "pay": "支付",
+  "markPaid": "已支付",
+  "reason": "取消原因（选填）",
   "negotiationDetails": "议价详情",
   "negotiationExpired": "议价已超时取消",
+  "connectionAccepted": "已接受连接",
+  "connectionRejected": "已拒绝连接",
   "negotiationRejected": "议价已拒绝",
   "noProducts": "暂无商品",
   "notFound": "未找到",
@@ -138,6 +156,15 @@
   "sessionExpired": "会话已过期，请重新登录",
   "settings": "设置",
   "settingsSubtitle": "应用设置",
+  "nickname": "昵称",
+  "nicknameChange": "修改昵称",
+  "nicknameChangeSuccess": "昵称已更新",
+  "nicknameChangeHint": "设置后其他人将看到你的新昵称",
+  "nicknameConflict": "该昵称已被使用",
+  "nicknameEmpty": "昵称不能为空",
+  "userAgreement": "用户协议",
+  "userAgreementTitle": "用户协议与条款",
+  "userAgreementSubtitle": "了解平台规则与使用责任范围。",
   "sold": "已售",
   "status": "状态",
   "submit": "提交",
@@ -196,21 +223,81 @@
   "adminLoginAsConfirm": "确认登录",
   "adminLoginAsWarning": "即将切换到该用户身份",
   "adminViewListings": "查看商品",
-  "myOrders": "我的订单",
   "orderId": "订单号",
   "orderDetail": "订单详情",
   "noOrders": "暂无订单",
+  "conditionLikeNew": "几乎全新",
+  "conditionGood": "较好",
+  "conditionFair": "一般",
+  "conditionPoor": "较差",
   "buyerInitiatedNegotiation": "买家发起议价",
   "cannotContactSeller": "无法联系卖家：缺少卖家信息",
   "itemAlreadyPurchased": "哎呀，该商品太火爆，已经被别人抢先一步啦！",
   "@adminTakedownConfirmMessage": {
     "placeholders": {
-      "title": {"type": "String"}
+      "title": {
+        "type": "String"
+      }
     }
   },
   "@adminLoginAsSuccess": {
     "placeholders": {
-      "username": {"type": "String"}
+      "username": {
+        "type": "String"
+      }
     }
-  }
+  },
+  "unknown": "未知",
+  "idLabel": "ID：",
+  "ownerIdLabel": "卖家ID：",
+  "orderNumber": "订单 #{id}",
+  "joinedLabel": "注册时间：",
+  "roleLabel": "角色：",
+  "unbanConfirmMessage": "确定要解封用户 \"{username}\" 吗？",
+  "adminLoginAsAuditLogWarning": "此操作将以选定用户的身份登录并留下审计日志，确定吗？",
+  "impersonationFailed": "身份切换失败：{error}",
+  "@orderNumber": {
+    "placeholders": {
+      "id": {
+        "type": "String"
+      }
+    }
+  },
+  "@unbanConfirmMessage": {
+    "placeholders": {
+      "username": {
+        "type": "String"
+      }
+    }
+  },
+  "@impersonationFailed": {
+    "placeholders": {
+      "error": {
+        "type": "String"
+      }
+    }
+  },
+  "infoDisclaimer": "本产品仅做信息发布，无担保和资金中介，也不收手续费",
+  "aboutPlatform": "关于我们",
+  "aboutPlatformSubtitle": "了解平台定位、使用方式与安全提醒。",
+  "infoPublishing": "信息发布",
+  "infoPublishingDesc": "本平台仅提供信息发布服务，用户通过发帖分享商品信息。平台不参与任何交易或支付环节。",
+  "contactThroughChat": "通过聊天联系",
+  "contactThroughChatDesc": "可直接通过应用内聊天功能联系卖家，沟通细节并自行安排线下交易。",
+  "safetyTips": "安全提示",
+  "safetyTipsDesc": "交换物品时请选择安全的公共场所，交易前请仔细核实物品状况。",
+  "platformDisclaimer": "本平台仅作为信息发布服务提供方，任何线下交易行为风险自担。请保持警惕，注意人身和财产安全。",
+  "recommendedForYou": "为你推荐",
+  "similarRecommendations": "相似推荐",
+  "camera": "拍照",
+  "gallery": "相册",
+  "uploading": "上传中",
+  "avatarUpdated": "头像已更新",
+  "uploadFailed": "上传失败",
+  "emailLabel": "邮箱",
+  "emailChange": "修改邮箱",
+  "emailChangeHint": "输入 @email.ncu.edu.cn 邮箱",
+  "emailDomainError": "必须使用 @email.ncu.edu.cn 邮箱",
+  "emailChangeSuccess": "邮箱已更新",
+  "notSet": "未设置"
 }

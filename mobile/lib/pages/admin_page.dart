@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:fl_chart/fl_chart.dart';
 import '../services/api_service.dart';
 import '../l10n/app_localizations.dart';
+import 'package:go_router/go_router.dart';
+import '../services/token_storage.dart';
+import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
 
 class AdminPage extends StatefulWidget {
@@ -11,7 +14,8 @@ class AdminPage extends StatefulWidget {
   State<AdminPage> createState() => _AdminPageState();
 }
 
-class _AdminPageState extends State<AdminPage> with SingleTickerProviderStateMixin {
+class _AdminPageState extends State<AdminPage>
+    with SingleTickerProviderStateMixin {
   late TabController _tabController;
 
   @override
@@ -79,16 +83,26 @@ class _StatsTabState extends State<_StatsTab> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final stats = await ApiService().getAdminStats();
       final base = (stats['total_listings'] as num).toDouble();
       _listingTrend = List.generate(7, (i) => base * (0.85 + 0.15 * (i / 6)));
       final baseOrders = (stats['total_orders'] as num).toDouble();
       _orderTrend = List.generate(7, (i) => baseOrders * (0.7 + 0.3 * (i / 6)));
-      setState(() { _stats = stats; _loading = false; _chartLoaded = true; });
+      setState(() {
+        _stats = stats;
+        _loading = false;
+        _chartLoaded = true;
+      });
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
     }
   }
 
@@ -105,52 +119,66 @@ class _StatsTabState extends State<_StatsTab> {
       child: ListView(
         padding: const EdgeInsets.all(AppTheme.sp16),
         children: [
-          Row(children: [
-            _StatCard(
-              title: l.adminTotalListings,
-              value: '${_stats!['total_listings']}',
-              icon: Icons.inventory_2,
-              color: AppTheme.info,
-            ),
-            const SizedBox(width: 12),
-            _StatCard(
-              title: l.adminActive,
-              value: '${_stats!['active_listings']}',
-              icon: Icons.check_circle,
-              color: AppTheme.success,
-            ),
-          ]),
+          Row(
+            children: [
+              _StatCard(
+                title: l.adminTotalListings,
+                value: '${_stats!['total_listings']}',
+                icon: Icons.inventory_2,
+                color: AppTheme.info,
+              ),
+              const SizedBox(width: 12),
+              _StatCard(
+                title: l.adminActive,
+                value: '${_stats!['active_listings']}',
+                icon: Icons.check_circle,
+                color: AppTheme.success,
+              ),
+            ],
+          ),
           const SizedBox(height: 12),
-          Row(children: [
-            _StatCard(
-              title: l.adminUsers,
-              value: '${_stats!['total_users']}',
-              icon: Icons.people,
-              color: AppTheme.warning,
-            ),
-            const SizedBox(width: 12),
-            _StatCard(
-              title: l.adminOrders,
-              value: '${_stats!['total_orders']}',
-              icon: Icons.shopping_cart,
-              color: AppTheme.shipped,
-            ),
-          ]),
+          Row(
+            children: [
+              _StatCard(
+                title: l.adminUsers,
+                value: '${_stats!['total_users']}',
+                icon: Icons.people,
+                color: AppTheme.warning,
+              ),
+              const SizedBox(width: 12),
+              _StatCard(
+                title: l.adminOrders,
+                value: '${_stats!['total_orders']}',
+                icon: Icons.shopping_cart,
+                color: AppTheme.shipped,
+              ),
+            ],
+          ),
           const SizedBox(height: 24),
-          Text(l.adminTrend7Days, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(
+            l.adminTrend7Days,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
           SizedBox(
             height: 200,
-            child: _chartLoaded ? _buildTrendChart() : const Center(child: CircularProgressIndicator()),
+            child: _chartLoaded
+                ? _buildTrendChart()
+                : const Center(child: CircularProgressIndicator()),
           ),
           const SizedBox(height: 24),
-          Text(l.category, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          Text(
+            l.category,
+            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+          ),
           const SizedBox(height: 8),
-          ...categories.map((c) => ListTile(
-            leading: const Icon(Icons.category, color: AppTheme.primary),
-            title: Text(c['category'] ?? 'Unknown'),
-            trailing: Chip(label: Text('${c['count']}')),
-          )),
+          ...categories.map(
+            (c) => ListTile(
+              leading: const Icon(Icons.category, color: AppTheme.primary),
+              title: Text(c['category'] ?? l.unknown),
+              trailing: Chip(label: Text('${c['count']}')),
+            ),
+          ),
         ],
       ),
     );
@@ -161,7 +189,9 @@ class _StatsTabState extends State<_StatsTab> {
       LineChartData(
         gridData: const FlGridData(show: true),
         titlesData: const FlTitlesData(
-          leftTitles: AxisTitles(sideTitles: SideTitles(showTitles: true, reservedSize: 40)),
+          leftTitles: AxisTitles(
+            sideTitles: SideTitles(showTitles: true, reservedSize: 40),
+          ),
           bottomTitles: AxisTitles(sideTitles: SideTitles(showTitles: true)),
           topTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
           rightTitles: AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -169,14 +199,22 @@ class _StatsTabState extends State<_StatsTab> {
         borderData: FlBorderData(show: true),
         lineBarsData: [
           LineChartBarData(
-            spots: _listingTrend.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(),
+            spots: _listingTrend
+                .asMap()
+                .entries
+                .map((e) => FlSpot(e.key.toDouble(), e.value))
+                .toList(),
             isCurved: true,
             color: AppTheme.info,
             barWidth: 3,
             dotData: const FlDotData(show: true),
           ),
           LineChartBarData(
-            spots: _orderTrend.asMap().entries.map((e) => FlSpot(e.key.toDouble(), e.value)).toList(),
+            spots: _orderTrend
+                .asMap()
+                .entries
+                .map((e) => FlSpot(e.key.toDouble(), e.value))
+                .toList(),
             isCurved: true,
             color: AppTheme.shipped,
             barWidth: 3,
@@ -194,7 +232,12 @@ class _StatCard extends StatelessWidget {
   final IconData icon;
   final Color color;
 
-  const _StatCard({required this.title, required this.value, required this.icon, required this.color});
+  const _StatCard({
+    required this.title,
+    required this.value,
+    required this.icon,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -206,8 +249,21 @@ class _StatCard extends StatelessWidget {
             children: [
               Icon(icon, size: 32, color: color),
               const SizedBox(height: 8),
-              Text(value, style: TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: color)),
-              Text(title, style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary)),
+              Text(
+                value,
+                style: TextStyle(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
+              ),
+              Text(
+                title,
+                style: const TextStyle(
+                  fontSize: 12,
+                  color: AppTheme.textSecondary,
+                ),
+              ),
             ],
           ),
         ),
@@ -247,7 +303,8 @@ class _ListingsTabState extends State<_ListingsTab> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
       if (_hasMore && !_loadingMore && !_loading) {
         _loadMore();
       }
@@ -257,7 +314,10 @@ class _ListingsTabState extends State<_ListingsTab> {
   Future<void> _load() async {
     _offset = 0;
     _hasMore = true;
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final data = await ApiService().getAdminListings(limit: 20, offset: 0);
       final listings = (data['listings'] as List?) ?? [];
@@ -271,15 +331,23 @@ class _ListingsTabState extends State<_ListingsTab> {
         }
       });
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
     }
   }
 
   Future<void> _loadMore() async {
     if (!_hasMore || _loadingMore) return;
-    setState(() { _loadingMore = true; });
+    setState(() {
+      _loadingMore = true;
+    });
     try {
-      final data = await ApiService().getAdminListings(limit: 20, offset: _offset);
+      final data = await ApiService().getAdminListings(
+        limit: 20,
+        offset: _offset,
+      );
       final listings = (data['listings'] as List?) ?? [];
       setState(() {
         _listings = [...?_listings, ...listings];
@@ -291,7 +359,9 @@ class _ListingsTabState extends State<_ListingsTab> {
         }
       });
     } catch (e) {
-      setState(() { _loadingMore = false; });
+      setState(() {
+        _loadingMore = false;
+      });
     }
   }
 
@@ -322,7 +392,9 @@ class _ListingsTabState extends State<_ListingsTab> {
           final isActive = item['status'] == 'active';
           return ListTile(
             leading: CircleAvatar(
-              backgroundColor: isActive ? AppTheme.success : AppTheme.textSecondary,
+              backgroundColor: isActive
+                  ? AppTheme.success
+                  : AppTheme.textSecondary,
               child: Icon(
                 isActive ? Icons.check : Icons.archive,
                 color: Colors.white,
@@ -330,10 +402,21 @@ class _ListingsTabState extends State<_ListingsTab> {
               ),
             ),
             title: Text(item['title'] ?? ''),
-            subtitle: Text('${item['category']} · ¥${item['suggested_price_cny'] ?? 0} · ${item['status']}'),
+            subtitle: Text(
+              '${item['category']} · ¥${item['suggested_price_cny'] ?? 0} · ${item['status']}',
+            ),
             trailing: isTakedown
-                ? Chip(label: Text(l.adminTakedown, style: const TextStyle(color: Colors.white)), backgroundColor: AppTheme.error)
-                : const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+                ? Chip(
+                    label: Text(
+                      l.adminTakedown,
+                      style: const TextStyle(color: Colors.white),
+                    ),
+                    backgroundColor: AppTheme.error,
+                  )
+                : const Icon(
+                    Icons.chevron_right,
+                    color: AppTheme.textSecondary,
+                  ),
             onTap: isTakedown ? null : () => _showListingDetail(context, item),
           );
         },
@@ -351,15 +434,18 @@ class _ListingsTabState extends State<_ListingsTab> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(item['title'] ?? '', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(
+              item['title'] ?? '',
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
             const SizedBox(height: 8),
-            Text('ID: ${item['id']}'),
+            Text('${l.idLabel} ${item['id']}'),
             Text('${l.categoryLabel}: ${item['category']}'),
-            Text('${l.brandLabel}: ${item['brand'] ?? 'N/A'}'),
+            Text('${l.brandLabel}: ${item['brand'] ?? l.unknown}'),
             Text('${l.priceLabel}: ¥${item['suggested_price_cny'] ?? 0}'),
             Text('${l.conditionLabel}: ${item['condition_score'] ?? 0}'),
             Text('${l.status}: ${item['status']}'),
-            Text('Owner ID: ${item['owner_id']}'),
+            Text('${l.ownerIdLabel} ${item['owner_id']}'),
             const SizedBox(height: AppTheme.sp16),
             SizedBox(
               width: double.infinity,
@@ -369,7 +455,9 @@ class _ListingsTabState extends State<_ListingsTab> {
                     context: ctx,
                     builder: (dialogCtx) => AlertDialog(
                       title: Text(l.adminTakedownConfirm),
-                      content: Text(l.adminTakedownConfirmMessage(item['title'] ?? '')),
+                      content: Text(
+                        l.adminTakedownConfirmMessage(item['title'] ?? ''),
+                      ),
                       actions: [
                         TextButton(
                           onPressed: () => Navigator.pop(dialogCtx, false),
@@ -377,7 +465,9 @@ class _ListingsTabState extends State<_ListingsTab> {
                         ),
                         FilledButton(
                           onPressed: () => Navigator.pop(dialogCtx, true),
-                          style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppTheme.error,
+                          ),
                           child: Text(l.adminTakedown),
                         ),
                       ],
@@ -390,14 +480,20 @@ class _ListingsTabState extends State<_ListingsTab> {
                       await ApiService().takedownListing(item['id'] as String);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(l.adminTakedownSuccess), backgroundColor: AppTheme.success),
+                          SnackBar(
+                            content: Text(l.adminTakedownSuccess),
+                            backgroundColor: AppTheme.success,
+                          ),
                         );
                       }
                       _load();
                     } catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error),
+                          SnackBar(
+                            content: Text(l.operationFailed(e.toString())),
+                            backgroundColor: AppTheme.error,
+                          ),
                         );
                       }
                     }
@@ -414,11 +510,19 @@ class _ListingsTabState extends State<_ListingsTab> {
               child: OutlinedButton.icon(
                 onPressed: () async {
                   try {
-                    await ApiService().updateListing(item['id'] as String, {'status': item['status'] == 'active' ? 'sold' : 'active'});
+                    await ApiService().updateListing(item['id'] as String, {
+                      'status': item['status'] == 'active' ? 'sold' : 'active',
+                    });
                     if (ctx.mounted) Navigator.pop(ctx);
                     _load();
                   } catch (e) {
-                    if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e.toString())}')));
+                    if (ctx.mounted) {
+                      ScaffoldMessenger.of(ctx).showSnackBar(
+                        SnackBar(
+                          content: Text(l.operationFailed(e.toString())),
+                        ),
+                      );
+                    }
                   }
                 },
                 icon: const Icon(Icons.toggle_on),
@@ -452,12 +556,21 @@ class _OrdersTabState extends State<_OrdersTab> {
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final data = await ApiService().getAdminOrders(limit: 50);
-      setState(() { _orders = data; _loading = false; });
+      setState(() {
+        _orders = data;
+        _loading = false;
+      });
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
     }
   }
 
@@ -493,9 +606,21 @@ class _OrdersTabState extends State<_OrdersTab> {
                 style: const TextStyle(color: Colors.white, fontSize: 12),
               ),
             ),
-            title: Text('Order #${(item['id'] ?? '').toString().substring(0, (item['id'] ?? '').toString().length.clamp(0, 8))}'),
-            subtitle: Text('${item['status'] ?? 'unknown'} · ¥${item['final_price'] ?? 0}'),
-            trailing: const Icon(Icons.chevron_right, color: AppTheme.textSecondary),
+            title: Text(
+              l.orderNumber(
+                (item['id'] ?? '').toString().substring(
+                  0,
+                  (item['id'] ?? '').toString().length.clamp(0, 8),
+                ),
+              ),
+            ),
+            subtitle: Text(
+              '${item['status'] ?? l.unknown} · ¥${((item['final_price'] as num?)?.toDouble() ?? 0) / 100}',
+            ),
+            trailing: const Icon(
+              Icons.chevron_right,
+              color: AppTheme.textSecondary,
+            ),
             onTap: () => _showOrderDetail(context, item),
           );
         },
@@ -517,45 +642,74 @@ class _OrdersTabState extends State<_OrdersTab> {
           controller: scrollController,
           padding: const EdgeInsets.all(AppTheme.sp16),
           children: [
-            Text('Order #${item['id']}', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+            Text(
+              l.orderNumber(item['id'] ?? ''),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+            ),
             const Divider(),
-            ...item.entries.map((e) => ListTile(
-              dense: true,
-              title: Text(e.key),
-              trailing: Text('${e.value}'),
-            )),
-            const Divider(),
-            Row(children: [
-              Expanded(
-                child: OutlinedButton(
-                  onPressed: () async {
-                    try {
-                      await ApiService().cancelOrder(item['id']);
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _load();
-                    } catch (e) {
-                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e.toString())}')));
-                    }
-                  },
-                  child: Text(l.cancel),
+            ...item.entries.map(
+              (e) => ListTile(
+                dense: true,
+                title: Text(e.key),
+                trailing: Text(
+                  e.key == 'final_price'
+                      ? '${((e.value as num?)?.toDouble() ?? 0) / 100}'
+                      : '${e.value}',
                 ),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: FilledButton(
-                  onPressed: () async {
-                    try {
-                      await ApiService().confirmOrder(item['id']);
-                      if (ctx.mounted) Navigator.pop(ctx);
-                      _load();
-                    } catch (e) {
-                      if (ctx.mounted) ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(content: Text('${l.operationFailed(e.toString())}')));
-                    }
-                  },
-                  child: Text(l.confirm),
+            ),
+            const Divider(),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () async {
+                      try {
+                        await ApiService().updateAdminOrderStatus(
+                          item['id'],
+                          'cancelled',
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        _load();
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text(l.operationFailed(e.toString())),
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    child: Text(l.cancel),
+                  ),
                 ),
-              ),
-            ]),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () async {
+                      try {
+                        await ApiService().updateAdminOrderStatus(
+                          item['id'],
+                          'completed',
+                        );
+                        if (ctx.mounted) Navigator.pop(ctx);
+                        _load();
+                      } catch (e) {
+                        if (ctx.mounted) {
+                          ScaffoldMessenger.of(ctx).showSnackBar(
+                            SnackBar(
+                              content: Text(l.operationFailed(e.toString())),
+                            ),
+                          );
+                        }
+                      }
+                    },
+                    child: Text(l.confirm),
+                  ),
+                ),
+              ],
+            ),
           ],
         ),
       ),
@@ -595,7 +749,8 @@ class _UsersTabState extends State<_UsersTab> {
   }
 
   void _onScroll() {
-    if (_scrollController.position.pixels >= _scrollController.position.maxScrollExtent - 200) {
+    if (_scrollController.position.pixels >=
+        _scrollController.position.maxScrollExtent - 200) {
       if (_hasMore && !_loadingMore && !_loading) {
         _loadMore(_searchController.text);
       }
@@ -607,9 +762,16 @@ class _UsersTabState extends State<_UsersTab> {
       _offset = 0;
       _hasMore = true;
     }
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
-      final data = await ApiService().getAdminUsers(q: query.isEmpty ? null : query, limit: 20, offset: _offset);
+      final data = await ApiService().getAdminUsers(
+        q: query.isEmpty ? null : query,
+        limit: 20,
+        offset: _offset,
+      );
       final results = (data['users'] as List?) ?? [];
       setState(() {
         if (reset || _offset == 0) {
@@ -625,15 +787,24 @@ class _UsersTabState extends State<_UsersTab> {
         }
       });
     } catch (e) {
-      setState(() { _error = e.toString(); _loading = false; });
+      setState(() {
+        _error = e.toString();
+        _loading = false;
+      });
     }
   }
 
   Future<void> _loadMore(String query) async {
     if (!_hasMore || _loadingMore) return;
-    setState(() { _loadingMore = true; });
+    setState(() {
+      _loadingMore = true;
+    });
     try {
-      final data = await ApiService().getAdminUsers(q: query.isEmpty ? null : query, limit: 20, offset: _offset);
+      final data = await ApiService().getAdminUsers(
+        q: query.isEmpty ? null : query,
+        limit: 20,
+        offset: _offset,
+      );
       final results = (data['users'] as List?) ?? [];
       setState(() {
         _users = [...?_users, ...results];
@@ -645,7 +816,9 @@ class _UsersTabState extends State<_UsersTab> {
         }
       });
     } catch (e) {
-      setState(() { _loadingMore = false; });
+      setState(() {
+        _loadingMore = false;
+      });
     }
   }
 
@@ -661,7 +834,9 @@ class _UsersTabState extends State<_UsersTab> {
             decoration: InputDecoration(
               hintText: l.adminSearchUsersPlaceholder,
               prefixIcon: const Icon(Icons.search),
-              border: OutlineInputBorder(borderRadius: BorderRadius.circular(AppTheme.radiusSm)),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(AppTheme.radiusSm),
+              ),
               suffixIcon: IconButton(
                 icon: const Icon(Icons.clear),
                 onPressed: () {
@@ -677,40 +852,46 @@ class _UsersTabState extends State<_UsersTab> {
           child: _loading
               ? const Center(child: CircularProgressIndicator())
               : _error != null
-                  ? Center(child: Text('${l.error}: $_error'))
-                  : _users == null
-                      ? Center(child: Text(l.adminSearchUsersPlaceholder))
-                      : _users!.isEmpty
-                          ? Center(child: Text(l.adminNoUsersFound))
-                          : ListView.builder(
-                              controller: _scrollController,
-                              itemCount: _users!.length + (_loadingMore ? 1 : 0),
-                              itemBuilder: (context, i) {
-                                if (i >= _users!.length) {
-                                  return const Center(
-                                    child: Padding(
-                                      padding: EdgeInsets.all(16),
-                                      child: CircularProgressIndicator(),
-                                    ),
-                                  );
-                                }
-                                final u = _users![i];
-                                final isBanned = u['status'] == 'banned';
-                                return ListTile(
-                                  leading: CircleAvatar(
-                                    backgroundColor: isBanned ? AppTheme.error : AppTheme.primary,
-                                    child: Text(
-                                      (u['username'] ?? '?')[0].toUpperCase(),
-                                      style: const TextStyle(color: Colors.white),
-                                    ),
-                                  ),
-                                  title: Text(u['username'] ?? 'Unknown'),
-                                  subtitle: Text('${u['role']} · Joined: ${u['created_at'] ?? 'N/A'}'),
-                                  trailing: Text('${l.myListings}: ${u['listing_count'] ?? 0}'),
-                                  onTap: () => _showUserDetail(context, u),
-                                );
-                              },
-                            ),
+              ? Center(child: Text('${l.error}: $_error'))
+              : _users == null
+              ? Center(child: Text(l.adminSearchUsersPlaceholder))
+              : _users!.isEmpty
+              ? Center(child: Text(l.adminNoUsersFound))
+              : ListView.builder(
+                  controller: _scrollController,
+                  itemCount: _users!.length + (_loadingMore ? 1 : 0),
+                  itemBuilder: (context, i) {
+                    if (i >= _users!.length) {
+                      return const Center(
+                        child: Padding(
+                          padding: EdgeInsets.all(16),
+                          child: CircularProgressIndicator(),
+                        ),
+                      );
+                    }
+                    final u = _users![i];
+                    final isBanned = u['status'] == 'banned';
+                    return ListTile(
+                      leading: CircleAvatar(
+                        backgroundColor: isBanned
+                            ? AppTheme.error
+                            : AppTheme.primary,
+                        child: Text(
+                          (u['username'] ?? '?')[0].toUpperCase(),
+                          style: const TextStyle(color: Colors.white),
+                        ),
+                      ),
+                      title: Text(u['username'] ?? l.unknown),
+                      subtitle: Text(
+                        '${u['role']} · ${l.joinedLabel} ${u['created_at'] ?? l.unknown}',
+                      ),
+                      trailing: Text(
+                        '${l.myListings}: ${u['listing_count'] ?? 0}',
+                      ),
+                      onTap: () => _showUserDetail(context, u),
+                    );
+                  },
+                ),
         ),
       ],
     );
@@ -727,28 +908,38 @@ class _UsersTabState extends State<_UsersTab> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Row(children: [
-              CircleAvatar(
-                radius: 28,
-                backgroundColor: isBanned ? AppTheme.error : AppTheme.primary,
-                child: Text(
-                  (u['username'] ?? '?')[0].toUpperCase(),
-                  style: const TextStyle(color: Colors.white, fontSize: 24),
+            Row(
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: isBanned ? AppTheme.error : AppTheme.primary,
+                  child: Text(
+                    (u['username'] ?? '?')[0].toUpperCase(),
+                    style: const TextStyle(color: Colors.white, fontSize: 24),
+                  ),
                 ),
-              ),
-              const SizedBox(width: 12),
-              Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(u['username'] ?? 'Unknown', style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-                  Text('ID: ${u['id'] ?? u['user_id'] ?? 'N/A'}'),
-                ],
-              ),
-            ]),
+                const SizedBox(width: 12),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      u['username'] ?? l.unknown,
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    Text(
+                      '${l.idLabel} ${u['id'] ?? u['user_id'] ?? l.unknown}',
+                    ),
+                  ],
+                ),
+              ],
+            ),
             const Divider(),
             Text('${l.status}: ${u['status'] ?? 'active'}'),
             Text('${l.myListings}: ${u['listing_count'] ?? 0}'),
-            Text('Joined: ${u['created_at'] ?? 'N/A'}'),
+            Text('${l.joinedLabel} ${u['created_at'] ?? l.unknown}'),
             Text('Role: ${u['role'] ?? 'user'}'),
             const SizedBox(height: AppTheme.sp16),
             if (!isBanned)
@@ -768,7 +959,9 @@ class _UsersTabState extends State<_UsersTab> {
                           ),
                           FilledButton(
                             onPressed: () => Navigator.pop(dialogCtx, true),
-                            style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
+                            style: FilledButton.styleFrom(
+                              backgroundColor: AppTheme.error,
+                            ),
                             child: Text(l.adminBan),
                           ),
                         ],
@@ -781,20 +974,28 @@ class _UsersTabState extends State<_UsersTab> {
                         await ApiService().banUser(u['id'] ?? u['user_id']);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l.adminBanSuccess), backgroundColor: AppTheme.success),
+                            SnackBar(
+                              content: Text(l.adminBanSuccess),
+                              backgroundColor: AppTheme.success,
+                            ),
                           );
                         }
                         _search('', reset: true);
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error),
+                            SnackBar(
+                              content: Text(l.operationFailed(e.toString())),
+                              backgroundColor: AppTheme.error,
+                            ),
                           );
                         }
                       }
                     }
                   },
-                  style: FilledButton.styleFrom(backgroundColor: AppTheme.error),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.error,
+                  ),
                   icon: const Icon(Icons.block),
                   label: Text(l.adminBan),
                 ),
@@ -808,7 +1009,9 @@ class _UsersTabState extends State<_UsersTab> {
                       context: ctx,
                       builder: (dialogCtx) => AlertDialog(
                         title: Text(l.adminUnban),
-                        content: Text('Are you sure you want to unban user "${u['username']}"?'),
+                        content: Text(
+                          l.unbanConfirmMessage(u['username'] ?? l.unknown),
+                        ),
                         actions: [
                           TextButton(
                             onPressed: () => Navigator.pop(dialogCtx, false),
@@ -828,20 +1031,28 @@ class _UsersTabState extends State<_UsersTab> {
                         await ApiService().unbanUser(u['id'] ?? u['user_id']);
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l.adminUnbanSuccess), backgroundColor: AppTheme.success),
+                            SnackBar(
+                              content: Text(l.adminUnbanSuccess),
+                              backgroundColor: AppTheme.success,
+                            ),
                           );
                         }
                         _search('', reset: true);
                       } catch (e) {
                         if (context.mounted) {
                           ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error),
+                            SnackBar(
+                              content: Text(l.operationFailed(e.toString())),
+                              backgroundColor: AppTheme.error,
+                            ),
                           );
                         }
                       }
                     }
                   },
-                  style: FilledButton.styleFrom(backgroundColor: AppTheme.success),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: AppTheme.success,
+                  ),
                   icon: const Icon(Icons.check_circle),
                   label: Text(l.adminUnban),
                 ),
@@ -859,6 +1070,58 @@ class _UsersTabState extends State<_UsersTab> {
                 label: Text(l.adminViewListings),
               ),
             ),
+            if (u['role'] != 'admin' && u['is_banned'] != true)
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(ctx);
+                    final confirmed = await showDialog<bool>(
+                      context: ctx,
+                      builder: (dialogCtx) => AlertDialog(
+                        title: Text(l.adminLoginAsConfirm),
+                        content: Text(l.adminLoginAsAuditLogWarning),
+                        actions: [
+                          TextButton(
+                            onPressed: () => Navigator.pop(dialogCtx, false),
+                            child: Text(l.cancel),
+                          ),
+                          FilledButton(
+                            onPressed: () => Navigator.pop(dialogCtx, true),
+                            child: Text(l.adminLoginAsConfirm),
+                          ),
+                        ],
+                      ),
+                    );
+                    if (confirmed != true) return;
+                    try {
+                      final newToken = await ApiService().impersonateUserToken(
+                        u['id'] ?? u['user_id'],
+                      );
+                      await WsService.instance.disconnect();
+                      await TokenStorage.instance.setAccessToken(newToken);
+                      await TokenStorage.instance.removeRefreshToken();
+                      await WsService.instance.connect();
+                      if (ctx.mounted) {
+                        GoRouter.of(ctx).go('/');
+                      }
+                    } catch (e) {
+                      if (ctx.mounted) {
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          SnackBar(
+                            content: Text(l.impersonationFailed(e.toString())),
+                          ),
+                        );
+                      }
+                    }
+                  },
+                  icon: const Icon(Icons.login, color: Colors.purple),
+                  label: Text(l.adminLoginAs),
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: Colors.purple,
+                  ),
+                ),
+              ),
           ],
         ),
       ),
