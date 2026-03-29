@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../services/api_service.dart';
+import '../services/admin_role_cache.dart';
 import '../services/ws_service.dart';
 import '../services/token_storage.dart';
 import '../theme/app_theme.dart';
@@ -72,6 +73,7 @@ class _ProfilePageState extends State<ProfilePage> {
     );
 
     if (confirmed == true) {
+      AdminRoleCache.instance.invalidate();
       await TokenStorage.instance.clearTokens();
       // Disconnect global WebSocket singleton on logout.
       await WsService.instance.disconnect();
@@ -161,6 +163,12 @@ class _ProfilePageState extends State<ProfilePage> {
           ],
           const SizedBox(height: AppTheme.sp32),
 
+          _MenuCard(
+            icon: Icons.inventory_2_outlined,
+            title: l.myListings,
+            subtitle: l.myListingsMenu,
+            onTap: () => context.push('/my-listings'),
+          ),
           _MenuCard(
             icon: Icons.shopping_bag_outlined,
             title: l.myOrders,

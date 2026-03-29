@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
-import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
+import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../services/recommendation_service.dart';
 import '../theme/app_theme.dart';
@@ -33,10 +33,11 @@ class _HomePageState extends State<HomePage> {
       setState(() => _recommendationLoading = true);
     }
     try {
-      final recommendations = await _recommendationService.getRecommendationFeed(
-        limit: 20,
-        offset: reset ? 0 : _recommendedListings.length,
-      );
+      final recommendations = await _recommendationService
+          .getRecommendationFeed(
+            limit: 20,
+            offset: reset ? 0 : _recommendedListings.length,
+          );
       if (mounted) {
         setState(() {
           if (reset) {
@@ -58,6 +59,11 @@ class _HomePageState extends State<HomePage> {
         });
       }
     }
+  }
+
+  @override
+  void dispose() {
+    super.dispose();
   }
 
   @override
@@ -84,11 +90,18 @@ class _HomePageState extends State<HomePage> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            const Icon(Icons.recommend_outlined, size: 64, color: AppTheme.textSecondary),
+            const Icon(
+              Icons.recommend_outlined,
+              size: 64,
+              color: AppTheme.textSecondary,
+            ),
             const SizedBox(height: 16),
             Text(
               l.noProducts,
-              style: const TextStyle(fontSize: 16, color: AppTheme.textSecondary),
+              style: const TextStyle(
+                fontSize: 16,
+                color: AppTheme.textSecondary,
+              ),
             ),
           ],
         ),
@@ -137,7 +150,8 @@ class _HomePageState extends State<HomePage> {
                       onTap: () => context.push('/listing/${listing.id}'),
                     );
                   },
-                  childCount: _recommendedListings.length + (_feedHasMore ? 1 : 0),
+                  childCount:
+                      _recommendedListings.length + (_feedHasMore ? 1 : 0),
                 ),
               ),
             ),

@@ -3,7 +3,9 @@ import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/base_service.dart';
 import '../services/recommendation_service.dart';
+import '../services/order_service.dart';
 import '../theme/app_theme.dart';
 import '../components/price_tag.dart';
 import '../components/recommendation_carousel.dart';
@@ -20,6 +22,7 @@ class ListingDetailPage extends StatefulWidget {
 class _ListingDetailPageState extends State<ListingDetailPage> {
   final ApiService _apiService = ApiService();
   final RecommendationService _recommendationService = RecommendationService();
+  final OrderService _orderService = OrderService();
   Listing? _listing;
   bool _loading = true;
   String? _error;
@@ -40,18 +43,28 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     try {
       final listing = await _apiService.getListingDetail(widget.listingId);
       if (mounted) {
-        setState(() { _listing = listing; _loading = false; });
+        setState(() {
+          _listing = listing;
+          _loading = false;
+        });
         _loadSimilarListings();
       }
     } catch (e) {
-      if (mounted) setState(() { _loading = false; _error = e.toString(); });
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _error = e.toString();
+        });
+      }
     }
   }
 
   Future<void> _loadSimilarListings() async {
     setState(() => _similarLoading = true);
     try {
-      final similar = await _recommendationService.getSimilarListings(widget.listingId);
+      final similar = await _recommendationService.getSimilarListings(
+        widget.listingId,
+      );
       if (mounted) {
         setState(() {
           _similarListings = similar;
@@ -59,7 +72,6 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
         });
       }
     } catch (e) {
-      // Gracefully degrade - hide similar listings on error
       if (mounted) {
         setState(() {
           _similarListings = [];
@@ -77,63 +89,143 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
     final listing = _listing;
     if (listing == null || listing.ownerId == null) {
       messenger.showSnackBar(
-        SnackBar(content: Text(l.cannotContactSeller), backgroundColor: AppTheme.error),
+        SnackBar(
+          content: Text(l.cannotContactSeller),
+          backgroundColor: AppTheme.error,
+        ),
       );
-      setState(() => _isOperating = false);
       return;
     }
 
     setState(() => _isOperating = true);
 
-    // Can't chat with yourself
     try {
       final profile = await _apiService.getUserProfile();
       if (!mounted) return;
       final currentUserId = profile['user_id']?.toString();
       if (currentUserId == listing.ownerId) {
-        messenger.showSnackBar(
-          SnackBar(content: Text(l.chatWithSelf)),
-        );
+        messenger.showSnackBar(SnackBar(content: Text(l.chatWithSelf)));
         setState(() => _isOperating = false);
         return;
       }
-    } catch (e) {
-      if (!mounted) return;
-      messenger.showSnackBar(
-        SnackBar(content: Text(l.loadFailed(e.toString())), backgroundColor: AppTheme.error),
-      );
-      setState(() => _isOperating = false);
-      return;
-    }
 
-    try {
-      // Check existing connections
       final connections = await _apiService.getConnections();
       if (!mounted) return;
-      final existing = connections.where((c) => c.otherUserId == listing.ownerId).toList();
+      final existing = connections
+          .where((c) => c.otherUserId == listing.ownerId)
+          .toList();
 
       if (existing.isNotEmpty) {
-        // Already have a connection — go to chat
         final conv = existing.first;
-        router.push('/chat/${conv.id}', extra: {
-          'conversationId': conv.id,
-          'otherUserId': conv.otherUserId,
-          'otherUsername': conv.otherUsername,
-        });
+        router.push(
+          '/chat/${conv.id}',
+          extra: {
+            'conversationId': conv.id,
+            'otherUserId': conv.otherUserId,
+            'otherUsername': conv.otherUsername,
+          },
+        );
       } else {
-        // Send connection request
-        await _apiService.requestConnection(listing.ownerId!, listingId: listing.id);
+        await _apiService.requestConnection(
+          listing.ownerId!,
+          listingId: listing.id,
+        );
         if (!mounted) return;
         messenger.showSnackBar(
-          SnackBar(content: Text(l.connectionRequestSent), duration: const Duration(seconds: 3)),
+          SnackBar(
+            content: Text(l.connectionRequestSent),
+            duration: const Duration(seconds: 3),
+          ),
         );
-        // Navigate to conversation list so user can see the pending state
         router.push('/conversations');
       }
     } catch (e) {
       if (!mounted) return;
       messenger.showSnackBar(
-        SnackBar(content: Text(l.operationFailed(e.toString())), backgroundColor: AppTheme.error, duration: const Duration(seconds: 3)),
+        SnackBar(
+          content: Text(l.operationFailed(e.toString())),
+          backgroundColor: AppTheme.error,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isOperating = false);
+    }
+  }
+
+  Future<void> _handleBuyNow() async {
+    final l = AppLocalizations.of(context)!;
+    final messenger = ScaffoldMessenger.of(context);
+    final router = GoRouter.of(context);
+    if (_isOperating) return;
+    final listing = _listing;
+    if (listing == null) return;
+
+    setState(() => _isOperating = true);
+    try {
+      Map<String, dynamic> userProfile;
+      try {
+        userProfile = await _apiService.getUserProfile();
+      } on AuthException {
+        if (!mounted) return;
+        messenger.showSnackBar(SnackBar(content: Text(l.sessionExpired)));
+        return;
+      } catch (e) {
+        if (!mounted) return;
+        messenger.showSnackBar(
+          SnackBar(
+            content: Text(l.operationFailed(e.toString())),
+            backgroundColor: AppTheme.error,
+          ),
+        );
+        return;
+      }
+
+      if (userProfile['user_id'] == listing.ownerId) {
+        messenger.showSnackBar(SnackBar(content: Text(l.chatWithSelf)));
+        return;
+      }
+
+      if (!mounted) return;
+
+      final confirm = await showDialog<bool>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: Text(l.buyNow),
+          content: Text('${l.priceLabel}: ¥${listing.suggestedPriceCny}'),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: Text(l.cancel),
+            ),
+            ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: Text(l.confirm),
+            ),
+          ],
+        ),
+      );
+
+      if (confirm != true) return;
+
+      final res = await _orderService.createOrder(
+        listingId: listing.id,
+        offeredPriceCny: listing.suggestedPriceCny,
+      );
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(l.purchaseSuccess),
+          backgroundColor: AppTheme.success,
+        ),
+      );
+      router.push('/orders/${res['id']}');
+    } catch (e) {
+      if (!mounted) return;
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(l.operationFailed(e.toString())),
+          backgroundColor: AppTheme.error,
+        ),
       );
     } finally {
       if (mounted) setState(() => _isOperating = false);
@@ -171,10 +263,7 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
             const SizedBox(height: 16),
             Text(_error!, textAlign: TextAlign.center),
             const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadDetail,
-              child: Text(l.retry),
-            ),
+            ElevatedButton(onPressed: _loadDetail, child: Text(l.retry)),
           ],
         ),
       );
@@ -227,9 +316,15 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
           const SizedBox(height: AppTheme.sp20),
           const Divider(),
           const SizedBox(height: AppTheme.sp16),
-          _DetailRow(label: l.categoryLabel, value: _getCategoryDisplayName(context, listing.category)),
+          _DetailRow(
+            label: l.categoryLabel,
+            value: _getCategoryDisplayName(context, listing.category),
+          ),
           _DetailRow(label: l.brandLabel, value: listing.brand),
-          _DetailRow(label: l.conditionLabel, value: '${listing.conditionScore}/10'),
+          _DetailRow(
+            label: l.conditionLabel,
+            value: '${listing.conditionScore}/10',
+          ),
           if (listing.defects != null && listing.defects!.isNotEmpty) ...[
             const SizedBox(height: AppTheme.sp16),
             Text(
@@ -241,16 +336,19 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
               spacing: 8,
               runSpacing: 8,
               children: listing.defects!
-                  .map((d) => Chip(
-                        label: Text(d, style: const TextStyle(fontSize: 13)),
-                        backgroundColor: AppTheme.error.withValues(alpha: 0.1),
-                        labelStyle: const TextStyle(color: AppTheme.error),
-                        side: BorderSide.none,
-                      ))
+                  .map(
+                    (d) => Chip(
+                      label: Text(d, style: const TextStyle(fontSize: 13)),
+                      backgroundColor: AppTheme.error.withValues(alpha: 0.1),
+                      labelStyle: const TextStyle(color: AppTheme.error),
+                      side: BorderSide.none,
+                    ),
+                  )
                   .toList(),
             ),
           ],
-          if (listing.description != null && listing.description!.isNotEmpty) ...[
+          if (listing.description != null &&
+              listing.description!.isNotEmpty) ...[
             const SizedBox(height: AppTheme.sp16),
             Text(
               l.descriptionLabel,
@@ -282,7 +380,10 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
                   children: [
                     Text(
                       l.owner,
-                      style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppTheme.textSecondary,
+                      ),
                     ),
                     Text(
                       listing.ownerUsername!,
@@ -293,7 +394,6 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
               ],
             ),
           ],
-          // Disclaimer banner
           const SizedBox(height: AppTheme.sp20),
           Container(
             padding: const EdgeInsets.all(AppTheme.sp12),
@@ -315,7 +415,6 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
               ],
             ),
           ),
-          // Similar listings section
           const SizedBox(height: AppTheme.sp24),
           if (_similarLoading)
             const Center(child: CircularProgressIndicator(strokeWidth: 2))
@@ -352,6 +451,8 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
 
   Widget _buildBottomBar() {
     final l = AppLocalizations.of(context)!;
+    final isSold = _listing?.status == 'sold';
+
     return Container(
       padding: const EdgeInsets.all(AppTheme.sp16),
       decoration: BoxDecoration(
@@ -359,13 +460,36 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
         border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
       ),
       child: SafeArea(
-        child: SizedBox(
-          width: double.infinity,
-          child: ElevatedButton.icon(
-            onPressed: () => _handleContactSeller(context),
-            icon: const Icon(Icons.chat_bubble_outline),
-            label: Text(l.contactSeller),
-          ),
+        child: Row(
+          children: [
+            Expanded(
+              flex: 1,
+              child: OutlinedButton.icon(
+                onPressed: _isOperating
+                    ? null
+                    : () => _handleContactSeller(context),
+                icon: const Icon(Icons.chat_bubble_outline),
+                label: Text(l.contactSeller),
+                style: OutlinedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              flex: 1,
+              child: ElevatedButton.icon(
+                onPressed: (isSold || _isOperating) ? null : _handleBuyNow,
+                icon: Icon(isSold ? Icons.done : Icons.shopping_cart_checkout),
+                label: Text(isSold ? l.sold : l.buyNow),
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 12),
+                  backgroundColor: isSold ? Colors.grey : AppTheme.primary,
+                  foregroundColor: Colors.white,
+                ),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -389,7 +513,10 @@ class _DetailRow extends StatelessWidget {
             width: 80,
             child: Text(
               label,
-              style: const TextStyle(color: AppTheme.textSecondary, fontSize: 14),
+              style: const TextStyle(
+                color: AppTheme.textSecondary,
+                fontSize: 14,
+              ),
             ),
           ),
           Expanded(

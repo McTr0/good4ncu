@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import '../services/api_service.dart';
+import '../services/admin_role_cache.dart';
 import '../services/token_storage.dart';
 import '../theme/app_theme.dart';
 import 'login_page.dart';
@@ -49,6 +50,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
   }
 
   Future<void> _logout() async {
+    AdminRoleCache.instance.invalidate();
     await TokenStorage.instance.clearTokens();
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
