@@ -61,8 +61,7 @@ class SseService {
     HttpClientFactory? clientFactory,
   }) : _baseUrl = baseUrl ?? getApiBaseUrl(),
        _getAccessToken = getAccessToken ?? _defaultGetAccessToken,
-       _refreshAccessToken =
-           refreshAccessToken ?? _defaultRefreshAccessToken,
+       _refreshAccessToken = refreshAccessToken ?? _defaultRefreshAccessToken,
        _clientFactory = clientFactory ?? http.Client.new;
 
   static Future<String?> _defaultGetAccessToken() {
@@ -71,6 +70,15 @@ class SseService {
 
   static Future<bool> _defaultRefreshAccessToken() async {
     return BaseService().refreshAccessTokenIfNeeded();
+  }
+
+  Future<bool> _attemptRefresh() async {
+    try {
+      return await _refreshAccessToken();
+    } catch (error) {
+      debugPrint('SSE token refresh failed: $error');
+      return false;
+    }
   }
 
   /// Stream of parsed SSE token events.
@@ -91,7 +99,7 @@ class SseService {
 
     var token = await _getAccessToken();
     if (token == null || token.isEmpty) {
-      final refreshed = await _refreshAccessToken();
+      final refreshed = await _attemptRefresh();
       if (refreshed) {
         token = await _getAccessToken();
       }
@@ -127,7 +135,7 @@ class SseService {
     }
 
     if (streamedResponse.statusCode == 401) {
-      final refreshed = await _refreshAccessToken();
+      final refreshed = await _attemptRefresh();
       if (refreshed) {
         final refreshedToken = await _getAccessToken();
         if (refreshedToken != null && refreshedToken.isNotEmpty) {
