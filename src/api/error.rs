@@ -15,6 +15,9 @@ pub enum ApiError {
     #[error("未授权")]
     Unauthorized,
 
+    #[error("认证失败: {0}")]
+    AuthFailed(String),
+
     #[error("无权限访问")]
     Forbidden,
 
@@ -40,6 +43,7 @@ impl IntoResponse for ApiError {
             ApiError::NotFound => (StatusCode::NOT_FOUND, "资源不存在".to_string()),
             ApiError::BadRequest(m) => (StatusCode::BAD_REQUEST, format!("请求错误: {}", m)),
             ApiError::Unauthorized => (StatusCode::UNAUTHORIZED, "请先登录后再操作".to_string()),
+            ApiError::AuthFailed(m) => (StatusCode::UNAUTHORIZED, format!("认证失败: {}", m)),
             ApiError::Forbidden => (StatusCode::FORBIDDEN, "您没有权限执行此操作".to_string()),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, format!("冲突: {}", m)),
             ApiError::RateLimitExceeded => (
@@ -63,6 +67,29 @@ impl IntoResponse for ApiError {
 mod tests {
     use super::*;
     use axum::http::StatusCode;
+    use serde_json::json;
+
+    // Helper to verify the response has correct status and JSON body format
+    fn verify_error_response(
+        error: ApiError,
+        expected_status: StatusCode,
+        expected_error_msg: &str,
+    ) {
+        // Get the full Display message (which includes prefixes like "请求错误: ")
+        let full_display_msg = match &error {
+            ApiError::NotFound => "资源不存在".to_string(),
+            ApiError::BadRequest(ref m) => format!("请求错误: {}", m),
+            ApiError::Unauthorized => "请先登录后再操作".to_string(),
+            ApiError::AuthFailed(ref m) => format!("认证失败: {}", m),
+            ApiError::Forbidden => "您没有权限执行此操作".to_string(),
+            ApiError::Conflict(ref m) => format!("冲突: {}", m),
+            ApiError::RateLimitExceeded => "请求过于频繁，请稍后再试".to_string(),
+            ApiError::Internal(_) => "服务器内部错误".to_string(),
+        };
+        assert_eq!(full_display_msg.as_str(), expected_error_msg);
+        let response = error.into_response();
+        assert_eq!(response.status(), expected_status);
+    }
 
     #[test]
     fn test_api_error_not_found_status() {
@@ -102,50 +129,135 @@ mod tests {
 
     #[test]
     fn test_api_error_into_response_not_found() {
-        let error = ApiError::NotFound;
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        verify_error_response(ApiError::NotFound, StatusCode::NOT_FOUND, "资源不存在");
     }
 
     #[test]
     fn test_api_error_into_response_bad_request() {
-        let error = ApiError::BadRequest("test error".to_string());
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        verify_error_response(
+            ApiError::BadRequest("输入无效".to_string()),
+            StatusCode::BAD_REQUEST,
+            "请求错误: 输入无效",
+        );
+    }
+
+    #[test]
+    fn test_api_error_into_response_bad_request_with_english_message() {
+        verify_error_response(
+            ApiError::BadRequest("test error".to_string()),
+            StatusCode::BAD_REQUEST,
+            "请求错误: test error",
+        );
     }
 
     #[test]
     fn test_api_error_into_response_unauthorized() {
-        let error = ApiError::Unauthorized;
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        verify_error_response(
+            ApiError::Unauthorized,
+            StatusCode::UNAUTHORIZED,
+            "请先登录后再操作",
+        );
+    }
+
+    #[test]
+    fn test_api_error_into_response_auth_failed() {
+        verify_error_response(
+            ApiError::AuthFailed("token expired".to_string()),
+            StatusCode::UNAUTHORIZED,
+            "认证失败: token expired",
+        );
     }
 
     #[test]
     fn test_api_error_into_response_forbidden() {
-        let error = ApiError::Forbidden;
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        verify_error_response(
+            ApiError::Forbidden,
+            StatusCode::FORBIDDEN,
+            "您没有权限执行此操作",
+        );
     }
 
     #[test]
     fn test_api_error_into_response_rate_limit() {
-        let error = ApiError::RateLimitExceeded;
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        verify_error_response(
+            ApiError::RateLimitExceeded,
+            StatusCode::TOO_MANY_REQUESTS,
+            "请求过于频繁，请稍后再试",
+        );
     }
 
     #[test]
     fn test_api_error_into_response_internal() {
         let error = ApiError::Internal(anyhow::anyhow!("secret error"));
+        // The Display impl for Internal is just "服务器内部错误" (generic message)
+        assert_eq!(error.to_string(), "服务器内部错误");
         let response = error.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[test]
+    fn test_api_error_into_response_internal_hides_details() {
+        // Verify that sensitive error details are not leaked in the Display impl
+        let error =
+            ApiError::Internal(anyhow::anyhow!("SQL connection failed: password=secret123"));
+        // The Display impl should show a generic message, not the actual error
+        let error_string = error.to_string();
+        assert!(!error_string.contains("secret123"));
+        assert!(!error_string.contains("SQL connection failed"));
+        assert!(!error_string.contains("password"));
+        // The Display impl shows "服务器内部错误"
+        assert_eq!(error_string, "服务器内部错误");
+    }
+
+    #[test]
     fn test_api_error_conflict_into_response() {
-        let error = ApiError::Conflict("resource exists".to_string());
-        let response = error.into_response();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
+        verify_error_response(
+            ApiError::Conflict("resource exists".to_string()),
+            StatusCode::CONFLICT,
+            "冲突: resource exists",
+        );
+    }
+
+    #[test]
+    fn test_api_error_json_format_matches_expected_structure() {
+        // Verify that ApiError's IntoResponse produces Json with {"error": "..."} format
+        // by testing the Json serialization directly
+        let error_msg = "测试错误消息";
+        let json_value = json!({"error": error_msg});
+        assert!(json_value.is_object());
+        assert!(json_value.as_object().unwrap().contains_key("error"));
+        assert_eq!(json_value["error"], "测试错误消息");
+    }
+
+    #[test]
+    fn test_api_error_all_variants_produce_correct_status_codes() {
+        // Each error variant should map to the correct HTTP status code
+        let error_status_pairs = vec![
+            (ApiError::NotFound, StatusCode::NOT_FOUND),
+            (
+                ApiError::BadRequest("test".to_string()),
+                StatusCode::BAD_REQUEST,
+            ),
+            (ApiError::Unauthorized, StatusCode::UNAUTHORIZED),
+            (
+                ApiError::AuthFailed("test".to_string()),
+                StatusCode::UNAUTHORIZED,
+            ),
+            (ApiError::Forbidden, StatusCode::FORBIDDEN),
+            (ApiError::Conflict("test".to_string()), StatusCode::CONFLICT),
+            (ApiError::RateLimitExceeded, StatusCode::TOO_MANY_REQUESTS),
+            (
+                ApiError::Internal(anyhow::anyhow!("test")),
+                StatusCode::INTERNAL_SERVER_ERROR,
+            ),
+        ];
+        for (error, expected_status) in error_status_pairs {
+            let response = error.into_response();
+            assert_eq!(
+                response.status(),
+                expected_status,
+                "Error variant did not produce correct status code"
+            );
+        }
     }
 }

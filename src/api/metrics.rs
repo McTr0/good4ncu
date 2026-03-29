@@ -21,11 +21,16 @@ pub struct MetricsService {
     // HTTP
     pub http_requests_total: CounterVec,
     pub http_request_duration_seconds: HistogramVec,
-    // Business
+    // Business (order metrics are disabled but fields remain for API compatibility)
+    #[allow(dead_code)]
     pub orders_created_total: Counter,
+    #[allow(dead_code)]
     pub orders_paid_total: Counter,
+    #[allow(dead_code)]
     pub orders_shipped_total: Counter,
+    #[allow(dead_code)]
     pub orders_completed_total: Counter,
+    #[allow(dead_code)]
     pub orders_cancelled_total: Counter,
     pub chat_messages_total: Counter,
     // Infrastructure
@@ -147,29 +152,34 @@ impl MetricsService {
             .observe(duration.as_secs_f64());
     }
 
-    /// Record an order created event.
+    /// Record an order created event (DISABLED - orders are disabled).
+    #[allow(dead_code)]
     pub fn record_order_created(&self) {
-        self.orders_created_total.inc();
+        // Orders are disabled - no-op
     }
 
-    /// Record an order paid event.
+    /// Record an order paid event (DISABLED - orders are disabled).
+    #[allow(dead_code)]
     pub fn record_order_paid(&self) {
-        self.orders_paid_total.inc();
+        // Orders are disabled - no-op
     }
 
-    /// Record an order shipped event.
+    /// Record an order shipped event (DISABLED - orders are disabled).
+    #[allow(dead_code)]
     pub fn record_order_shipped(&self) {
-        self.orders_shipped_total.inc();
+        // Orders are disabled - no-op
     }
 
-    /// Record an order completed event.
+    /// Record an order completed event (DISABLED - orders are disabled).
+    #[allow(dead_code)]
     pub fn record_order_completed(&self) {
-        self.orders_completed_total.inc();
+        // Orders are disabled - no-op
     }
 
-    /// Record an order cancelled event.
+    /// Record an order cancelled event (DISABLED - orders are disabled).
+    #[allow(dead_code)]
     pub fn record_order_cancelled(&self) {
-        self.orders_cancelled_total.inc();
+        // Orders are disabled - no-op
     }
 
     /// Record a chat message processed.

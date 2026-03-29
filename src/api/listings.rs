@@ -4,12 +4,11 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
-use uuid::Uuid;
 
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
+use crate::repositories::{CreateListingInput, ListingRepository, UpdateListingInput};
 use crate::utils::cents_to_yuan;
 
 /// Valid marketplace categories for listings.
@@ -115,11 +114,6 @@ pub struct UpdateListingRequest {
     pub description: Option<String>,
 }
 
-/// Parses a JSON-encoded defects array string into a Vec<String>.
-fn parse_defects(defects_text: &str) -> Vec<String> {
-    serde_json::from_str(defects_text).unwrap_or_else(|_| vec![])
-}
-
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
@@ -132,148 +126,48 @@ pub async fn get_listings(
 ) -> Result<Json<ListingsResponse>, ApiError> {
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
+    let sort = params.sort.as_deref().unwrap_or("newest");
 
-    // Determine sort order
-    let order_by = match params.sort.as_deref() {
-        Some("price_asc") => "suggested_price_cny ASC",
-        Some("price_desc") => "suggested_price_cny DESC",
-        Some("condition_desc") => "condition_score DESC",
-        _ => "created_at DESC", // default: newest
-    };
-
-    // Build WHERE conditions and collect bound parameter values in the same order.
-    let mut conds = vec!["status = 'active'".to_string()];
-    let mut binds: Vec<String> = Vec::new(); // tracks type info only, not used for binding
-
-    // Single category (preferred when both are provided)
-    let use_single_cat = params.category.is_some() && params.categories.is_none();
-    if let Some(ref cat) = params.category {
-        if params.categories.is_none() {
-            conds.push(format!("category = ${}", binds.len() + 1));
-            binds.push(cat.clone());
-        }
-    }
-
-    // Multi-category: comma-separated, e.g. "electronics,books" → category IN ('electronics','books')
-    if let Some(ref cats) = params.categories {
-        if !cats.is_empty() && params.category.is_none() {
-            let parts: Vec<String> = cats
-                .split(',')
-                .map(|s| format!("'{}'", s.trim().replace('\'', "''")))
-                .collect();
-            conds.push(format!("category IN ({})", parts.join(",")));
-        }
-    }
-
-    // Full-text search
+    // Validate search query length
     if let Some(ref srch) = params.search {
         if srch.len() > 200 {
             return Err(ApiError::BadRequest(
                 "搜索关键词不能超过200个字符".to_string(),
             ));
         }
-        if !srch.is_empty() {
-            conds.push(format!(
-                "(title ILIKE ${} OR brand ILIKE ${} OR description ILIKE ${})",
-                binds.len() + 1,
-                binds.len() + 1,
-                binds.len() + 1
-            ));
-            binds.push(srch.clone());
-        }
     }
 
-    // Price range (prices stored as cents, params are in yuan)
-    let min_cents = params
-        .min_price_cny
-        .filter(|&p| p > 0.0)
-        .map(|p| (p * 100.0) as i32);
-    let max_cents = params
-        .max_price_cny
-        .filter(|&p| p > 0.0)
-        .map(|p| (p * 100.0) as i32);
-    if min_cents.is_some() {
-        conds.push(format!("suggested_price_cny >= ${}", binds.len() + 1));
-        binds.push("min_price".to_string());
-    }
-    if max_cents.is_some() {
-        conds.push(format!("suggested_price_cny <= ${}", binds.len() + 1));
-        binds.push("max_price".to_string());
-    }
+    let (listings, total) = state
+        .listing_repo
+        .find_listings(
+            params.category.as_deref(),
+            params.categories.as_deref(),
+            params.search.as_deref(),
+            params.min_price_cny,
+            params.max_price_cny,
+            sort,
+            limit,
+            offset,
+        )
+        .await?;
 
-    let where_clause = conds.join(" AND ");
-
-    // Count query
-    let count_sql = format!(
-        "SELECT COUNT(*) as cnt FROM inventory WHERE {}",
-        where_clause
-    );
-    let mut count_q = sqlx::query(&count_sql);
-    if use_single_cat {
-        count_q = count_q.bind(params.category.as_deref().unwrap());
-    }
-    if let Some(ref srch) = params.search {
-        if !srch.is_empty() {
-            count_q = count_q.bind(format!("%{}%", srch));
-        }
-    }
-    if let Some(mc) = min_cents {
-        count_q = count_q.bind(mc);
-    }
-    if let Some(mc) = max_cents {
-        count_q = count_q.bind(mc);
-    }
-
-    let count_row = count_q
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    let total: i64 = count_row.get("cnt");
-
-    // Select query
-    let select_sql =
-        format!(
-        "SELECT id, title, category, brand, condition_score, suggested_price_cny, status, defects \
-         FROM inventory WHERE {} ORDER BY {} LIMIT ${} OFFSET ${}",
-        where_clause, order_by, binds.len() + 1, binds.len() + 2
-    );
-    let mut select_q = sqlx::query(&select_sql);
-    if use_single_cat {
-        select_q = select_q.bind(params.category.as_deref().unwrap());
-    }
-    if let Some(ref srch) = params.search {
-        if !srch.is_empty() {
-            select_q = select_q.bind(format!("%{}%", srch));
-        }
-    }
-    if let Some(mc) = min_cents {
-        select_q = select_q.bind(mc);
-    }
-    if let Some(mc) = max_cents {
-        select_q = select_q.bind(mc);
-    }
-    select_q = select_q.bind(limit).bind(offset);
-
-    let rows = select_q
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let items: Vec<ListingSummary> = rows
-        .iter()
-        .map(|row| {
-            let defects_text: String = row.get("defects");
-            let defects = parse_defects(&defects_text);
+    let items: Vec<ListingSummary> = listings
+        .into_iter()
+        .map(|listing| {
+            let defects = listing
+                .defects
+                .as_ref()
+                .and_then(|t| serde_json::from_str::<Vec<String>>(t).ok())
+                .unwrap_or_default();
             let defect_hint = defects.first().cloned();
             ListingSummary {
-                id: row.get("id"),
-                title: row.get("title"),
-                category: row.get("category"),
-                brand: row.get("brand"),
-                condition_score: row.get("condition_score"),
-                // stored as integer cents, display as yuan
-                suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
-                status: row.get("status"),
+                id: listing.id,
+                title: listing.title,
+                category: listing.category,
+                brand: listing.brand.unwrap_or_default(),
+                condition_score: listing.condition_score,
+                suggested_price_cny: cents_to_yuan(listing.suggested_price_cny as i64),
+                status: listing.status,
                 defect_hint,
             }
         })
@@ -295,45 +189,36 @@ pub async fn get_listing(
 ) -> Result<Json<ListingDetail>, ApiError> {
     // Auth optional — guests can browse listing details. The only owner info
     // exposed is username (no email/phone), which is appropriate for a marketplace.
-    let viewer_id = extract_user_id_from_token(&headers, &state.jwt_secret).ok();
+    let viewer_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret).ok();
 
-    let row = sqlx::query(
-        r#"
-        SELECT i.id, i.title, i.category, i.brand, i.condition_score,
-               i.suggested_price_cny, i.defects, i.description,
-               i.owner_id, i.status, i.created_at,
-               u.username as owner_username
-        FROM inventory i
-        JOIN users u ON i.owner_id = u.id
-        WHERE i.id = $1
-        "#,
-    )
-    .bind(&id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-    .ok_or(ApiError::NotFound)?;
+    // Single query with JOIN to fetch listing and owner username together (avoids N+1)
+    let (listing, owner_username) = state
+        .listing_repo
+        .find_by_id_with_owner(&id)
+        .await?
+        .ok_or(ApiError::NotFound)?;
 
-    let defects_text: String = row.get("defects");
-    let defects = parse_defects(&defects_text);
-    let created_at: String = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|_| String::new());
+    let defects = listing
+        .defects
+        .as_ref()
+        .and_then(|t| serde_json::from_str::<Vec<String>>(t).ok())
+        .unwrap_or_default();
+
+    let created_at = listing.created_at.to_rfc3339();
 
     Ok(Json(ListingDetail {
-        id: row.get("id"),
-        title: row.get("title"),
-        category: row.get("category"),
-        brand: row.get("brand"),
-        condition_score: row.get("condition_score"),
-        suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
+        id: listing.id,
+        title: listing.title,
+        category: listing.category,
+        brand: listing.brand.unwrap_or_default(),
+        condition_score: listing.condition_score,
+        suggested_price_cny: cents_to_yuan(listing.suggested_price_cny as i64),
         defects,
-        description: row.try_get("description").ok(),
+        description: listing.description,
         // Reveal owner_id to all authenticated users so they can contact the seller via chat
-        owner_id: viewer_id.as_ref().map(|_| row.get::<String, _>("owner_id")),
-        owner_username: row.try_get("owner_username").ok(),
-        status: row.get("status"),
+        owner_id: viewer_id.as_ref().map(|_| listing.owner_id.clone()),
+        owner_username,
+        status: listing.status,
         created_at,
     }))
 }
@@ -344,7 +229,7 @@ pub async fn create_listing(
     headers: HeaderMap,
     Json(payload): Json<CreateListingRequest>,
 ) -> Result<Json<CreateListingResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Validate input
@@ -387,31 +272,20 @@ pub async fn create_listing(
         ));
     }
 
-    let listing_id = Uuid::new_v4().to_string();
-    // Convert yuan to cents for storage
-    let price_cents = (payload.suggested_price_cny * 100.0).round() as i32;
-    let defects_json = serde_json::to_string(&payload.defects)
-        .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO inventory (id, title, category, brand, condition_score,
-                               suggested_price_cny, defects, description, owner_id, status)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
-        "#,
-    )
-    .bind(&listing_id)
-    .bind(&payload.title)
-    .bind(&payload.category)
-    .bind(&payload.brand)
-    .bind(payload.condition_score)
-    .bind(price_cents)
-    .bind(&defects_json)
-    .bind(&payload.description)
-    .bind(&user_id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    let listing_id = state
+        .listing_repo
+        .create(CreateListingInput {
+            title: payload.title,
+            category: payload.category,
+            brand: Some(payload.brand),
+            condition_score: payload.condition_score,
+            suggested_price_cny: payload.suggested_price_cny,
+            defects: payload.defects,
+            description: payload.description.unwrap_or_default(),
+            owner_id: user_id,
+        })
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     Ok(Json(CreateListingResponse {
         id: listing_id,
@@ -426,33 +300,10 @@ pub async fn update_listing(
     Path(id): Path<String>,
     Json(payload): Json<UpdateListingRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    // Check listing exists and belongs to user
-    let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-    let owner_id: String = row.get("owner_id");
-    let status: String = row.get("status");
-
-    if owner_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    if status == "sold" {
-        return Err(ApiError::BadRequest("无法修改已售出的商品".to_string()));
-    }
-
-    // Build dynamic update query
-    let mut set_clauses: Vec<String> = Vec::new();
-    let mut params: Vec<String> = Vec::new();
-    let mut param_idx = 1;
-
+    // Validate individual fields before building update input
     if let Some(ref title) = payload.title {
         if title.is_empty() {
             return Err(ApiError::BadRequest("title cannot be empty".to_string()));
@@ -462,9 +313,6 @@ pub async fn update_listing(
                 "title must be 200 characters or fewer".to_string(),
             ));
         }
-        set_clauses.push(format!("title = ${}", param_idx));
-        params.push(title.clone());
-        param_idx += 1;
     }
     if let Some(ref category) = payload.category {
         if !MARKETPLACE_CATEGORIES.contains(&category.as_str()) {
@@ -473,9 +321,6 @@ pub async fn update_listing(
                 MARKETPLACE_CATEGORIES.join(", ")
             )));
         }
-        set_clauses.push(format!("category = ${}", param_idx));
-        params.push(category.clone());
-        param_idx += 1;
     }
     if let Some(ref brand) = payload.brand {
         if brand.is_empty() {
@@ -486,9 +331,6 @@ pub async fn update_listing(
                 "brand must be 100 characters or fewer".to_string(),
             ));
         }
-        set_clauses.push(format!("brand = ${}", param_idx));
-        params.push(brand.clone());
-        param_idx += 1;
     }
     if let Some(score) = payload.condition_score {
         if !(1..=10).contains(&score) {
@@ -496,9 +338,6 @@ pub async fn update_listing(
                 "condition_score must be between 1 and 10".to_string(),
             ));
         }
-        set_clauses.push(format!("condition_score = ${}", param_idx));
-        params.push(score.to_string());
-        param_idx += 1;
     }
     if let Some(price) = payload.suggested_price_cny {
         if price < 0.0 {
@@ -511,41 +350,28 @@ pub async fn update_listing(
                 "suggested_price_cny cannot exceed 10,000,000 CNY".to_string(),
             ));
         }
-        set_clauses.push(format!("suggested_price_cny = ${}", param_idx));
-        params.push(((price * 100.0).round() as i32).to_string());
-        param_idx += 1;
     }
     if let Some(ref defects) = payload.defects {
-        let defects_json = serde_json::to_string(defects)
+        let _ = serde_json::to_string(defects)
             .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
-        set_clauses.push(format!("defects = ${}", param_idx));
-        params.push(defects_json);
-        param_idx += 1;
-    }
-    if payload.description.is_some() {
-        set_clauses.push(format!("description = ${}", param_idx));
-        params.push(payload.description.clone().unwrap_or_default());
-        param_idx += 1;
     }
 
-    if set_clauses.is_empty() {
-        return Err(ApiError::BadRequest("没有要更新的字段".to_string()));
-    }
-
-    let sql = format!(
-        "UPDATE inventory SET {} WHERE id = ${}",
-        set_clauses.join(", "),
-        param_idx
-    );
-
-    let mut query = sqlx::query(&sql);
-    for param in &params {
-        query = query.bind(param);
-    }
-    query = query.bind(&id);
-
-    query
-        .execute(&state.db)
+    state
+        .listing_repo
+        .update(
+            &id,
+            &user_id,
+            UpdateListingInput {
+                title: payload.title,
+                category: payload.category,
+                brand: payload.brand,
+                condition_score: payload.condition_score,
+                suggested_price_cny: payload.suggested_price_cny,
+                defects: payload.defects,
+                description: payload.description,
+                status: None, // status updates should go through specific endpoints
+            },
+        )
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -563,32 +389,12 @@ pub async fn delete_listing(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    // Check listing exists and belongs to user
-    let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-    let owner_id: String = row.get("owner_id");
-    let status: String = row.get("status");
-
-    if owner_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    if status == "sold" {
-        return Err(ApiError::BadRequest("无法删除已售出的商品".to_string()));
-    }
-
-    // Delete the listing (cascade deletes related records)
-    sqlx::query("DELETE FROM inventory WHERE id = $1")
-        .bind(&id)
-        .execute(&state.db)
+    state
+        .listing_repo
+        .delete(&id, &user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -606,45 +412,16 @@ pub async fn relist_listing(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    // Check listing exists and belongs to user
-    let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-    let owner_id: String = row.get("owner_id");
-    let status: String = row.get("status");
-
-    if owner_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    if status == "active" {
-        return Err(ApiError::BadRequest(
-            "商品已经是上架状态，无需重复操作".to_string(),
-        ));
-    }
-
-    if status != "sold" && status != "deleted" {
-        return Err(ApiError::BadRequest(format!(
-            "无法重新上架，当前状态为'{}'，只能重新上架已售出或已删除的商品",
-            status
-        )));
-    }
-
-    // Reactivate the listing
-    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = $1")
-        .bind(&id)
-        .execute(&state.db)
+    state
+        .listing_repo
+        .relist(&id, &user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
-    tracing::info!(listing_id = %id, relisted_by = %user_id, previous_status = %status, "Listing relisted");
+    tracing::info!(listing_id = %id, relisted_by = %user_id, "Listing relisted");
 
     Ok(Json(serde_json::json!({
         "message": "商品已重新上架",
@@ -678,7 +455,7 @@ pub async fn recognize_item(
     headers: HeaderMap,
     Json(payload): Json<RecognizeRequest>,
 ) -> Result<Json<RecognizedItem>, ApiError> {
-    let _ = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let _ = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     if payload.image_base64.is_empty() {
@@ -734,7 +511,7 @@ Be honest about defects. If you cannot identify the item, return category="other
 
     let url = format!(
         "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-flash-preview:generateContent?key={}",
-        state.gemini_api_key
+        state.secrets.gemini_api_key
     );
 
     let client = reqwest::Client::new();

@@ -9,7 +9,7 @@ use sqlx::Row;
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::services::chat::{ChatService, ConversationSummary};
+use crate::repositories::{ChatRepository, ConversationSummary};
 
 #[derive(Deserialize)]
 pub struct ConversationListQuery {
@@ -55,17 +55,16 @@ pub async fn list_conversations(
     headers: HeaderMap,
     Query(params): Query<ConversationListQuery>,
 ) -> Result<Json<ConversationListResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let chat_svc = ChatService::new(state.db.clone());
-    let (conversations, total) = chat_svc
+    let (conversations, total) = state
+        .chat_repo
         .list_conversations(&user_id, limit, offset)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+        .await?;
 
     Ok(Json(ConversationListResponse {
         items: conversations,
@@ -82,7 +81,7 @@ pub async fn get_conversation_messages(
     Path(conversation_id): Path<String>,
     Query(params): Query<ConversationMessagesQuery>,
 ) -> Result<Json<ConversationMessagesResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
@@ -99,7 +98,7 @@ pub async fn get_conversation_messages(
     )
     .bind(&conversation_id)
     .bind(&user_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -107,49 +106,30 @@ pub async fn get_conversation_messages(
         return Err(ApiError::Forbidden);
     }
 
-    let rows = sqlx::query(
-        r#"
-        SELECT sender, content, is_agent, timestamp, image_data, audio_data
-        FROM chat_messages
-        WHERE conversation_id = $1
-        ORDER BY id DESC
-        LIMIT $2 OFFSET $3
-        "#,
-    )
-    .bind(&conversation_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let total: i64 =
-        sqlx::query("SELECT COUNT(*) as cnt FROM chat_messages WHERE conversation_id = $1")
-            .bind(&conversation_id)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-            .try_get("cnt")
-            .unwrap_or(0);
+    // Use repository for messages and total count
+    let (messages, total): (Vec<crate::repositories::ChatMessage>, i64) = state
+        .chat_repo
+        .get_conversation_messages(&conversation_id, None, limit)
+        .await?;
 
     // Collect unique sender IDs for batch username lookup (skip "assistant" sentinel)
-    let sender_ids: Vec<String> = rows
+    let sender_ids: Vec<String> = messages
         .iter()
-        .filter_map(|row| {
-            let sender: String = row.get("sender");
-            if sender == "assistant" {
+        .filter_map(|msg| {
+            if msg.sender == "assistant" {
                 None
             } else {
-                Some(sender)
+                Some(msg.sender.clone())
             }
         })
         .collect();
+
     let sender_usernames: std::collections::HashMap<String, String> = if sender_ids.is_empty() {
         std::collections::HashMap::new()
     } else {
         sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
             .bind(&sender_ids)
-            .fetch_all(&state.db)
+            .fetch_all(&state.infra.db)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
             .into_iter()
@@ -157,30 +137,28 @@ pub async fn get_conversation_messages(
             .collect()
     };
 
-    let messages: Vec<MessageEntry> = rows
+    let messages: Vec<MessageEntry> = messages
         .into_iter()
-        .map(|row| {
-            let sender: String = row.get("sender");
-            let timestamp: String = row
-                .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("timestamp")
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_default();
-            let sender_username = if sender == "assistant" {
+        .map(|msg| {
+            let sender_username = if msg.sender == "assistant" {
                 None
             } else {
-                sender_usernames.get(&sender).cloned()
+                sender_usernames.get(&msg.sender).cloned()
             };
             MessageEntry {
-                sender,
+                sender: msg.sender,
                 sender_username,
-                content: row.get("content"),
-                is_agent: row.get("is_agent"),
-                timestamp,
-                image_data: row.try_get("image_data").ok(),
-                audio_data: row.try_get("audio_data").ok(),
+                content: msg.content,
+                is_agent: msg.is_agent,
+                timestamp: msg.created_at.to_rfc3339(),
+                image_data: None,
+                audio_data: None,
             }
         })
         .collect();
+
+    // Apply offset: skip the first 'offset' messages
+    let messages: Vec<MessageEntry> = messages.into_iter().skip(offset as usize).collect();
 
     Ok(Json(ConversationMessagesResponse {
         conversation_id,

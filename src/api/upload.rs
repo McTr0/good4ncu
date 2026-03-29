@@ -22,21 +22,26 @@ pub async fn get_upload_token(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<StsResponse>, ApiError> {
-    let _user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let _user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Read OSS config from AppState (passed from AppConfig at startup).
     let role_arn = state
+        .secrets
         .oss_role_arn
         .as_ref()
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("OSS_ROLE_ARN not configured")))?;
-    let access_key_id = state
-        .oss_access_key_id
+    let access_key_id =
+        state.secrets.oss_access_key_id.as_ref().ok_or_else(|| {
+            ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_ID not configured"))
+        })?;
+    let access_key_secret = state
+        .secrets
+        .oss_access_key_secret
         .as_ref()
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_ID not configured")))?;
-    let access_key_secret = state.oss_access_key_secret.as_ref().ok_or_else(|| {
-        ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_SECRET not configured"))
-    })?;
+        .ok_or_else(|| {
+            ApiError::Internal(anyhow::anyhow!("OSS_ACCESS_KEY_SECRET not configured"))
+        })?;
 
     let sts_credentials = assume_role_sts(
         access_key_id,
@@ -53,8 +58,8 @@ pub async fn get_upload_token(
         access_key_secret: sts_credentials.access_key_secret,
         security_token: sts_credentials.security_token,
         expiration: sts_credentials.expiration,
-        endpoint: state.oss_endpoint.clone(),
-        bucket: state.oss_bucket.clone(),
+        endpoint: state.secrets.oss_endpoint.clone(),
+        bucket: state.secrets.oss_bucket.clone(),
     }))
 }
 

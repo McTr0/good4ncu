@@ -7,16 +7,18 @@ use axum::{extract::State, Json};
 use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use sqlx::Row;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
 use crate::api::error::ApiError;
 use crate::api::AppState;
+use crate::repositories::traits::{AuthRepository, UserRepository};
+use crate::repositories::{PostgresAuthRepository, PostgresUserRepository};
 
 #[derive(Deserialize)]
 pub struct AuthRequest {
     pub username: String,
+    pub email: Option<String>,
     pub password: String,
 }
 
@@ -38,8 +40,8 @@ struct Claims {
 
 /// Refresh token: 7 days validity
 const REFRESH_TOKEN_TTL_SECS: u64 = 7 * 24 * 3600;
-/// Access token: 1 hour validity
-pub const ACCESS_TOKEN_TTL_SECS: u64 = 3600;
+/// Access token: 24 hours validity (long enough for persistent WS connections)
+pub const ACCESS_TOKEN_TTL_SECS: u64 = 24 * 3600;
 
 /// Generate a secure random refresh token (UUID v4)
 fn generate_refresh_token() -> String {
@@ -80,9 +82,9 @@ pub fn generate_access_token(
     )
 }
 
-/// Store a refresh token in the database (hash only, never plaintext)
+/// Store a refresh token using the auth repository.
 async fn store_refresh_token(
-    db: &sqlx::PgPool,
+    auth_repo: &PostgresAuthRepository,
     user_id: &str,
     token: &str,
     ttl_secs: u64,
@@ -90,93 +92,88 @@ async fn store_refresh_token(
     let token_hash = hash_token(token);
     let expires_at = chrono::Utc::now() + chrono::Duration::seconds(ttl_secs as i64);
 
-    sqlx::query("INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)")
-        .bind(user_id)
-        .bind(&token_hash)
-        .bind(expires_at)
-        .execute(db)
-        .await?;
-
+    auth_repo
+        .store_refresh_token(user_id, &token_hash, expires_at)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to store refresh token: {}", e))?;
     Ok(())
 }
 
 /// Validate a refresh token: returns user_id if valid, None if invalid/revoked/expired
 /// On success, atomically revokes the presented token and issues a new one.
 async fn rotate_refresh_token(
-    db: &sqlx::PgPool,
+    auth_repo: &PostgresAuthRepository,
+    user_repo: &PostgresUserRepository,
     token: &str,
     jwt_secret: &str,
 ) -> anyhow::Result<(String, String)> {
     let token_hash = hash_token(token);
 
     // Find the token
-    let row = sqlx::query(
-        "SELECT id, user_id, expires_at, revoked_at FROM refresh_tokens WHERE token_hash = $1",
-    )
-    .bind(&token_hash)
-    .fetch_optional(db)
-    .await?;
+    let token_data = auth_repo
+        .find_refresh_token(&token_hash)
+        .await
+        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
 
-    let row = match row {
-        Some(r) => r,
+    let (user_id, revoked_at, expires_at) = match token_data {
+        Some(data) => data,
         None => return Err(anyhow::anyhow!("Invalid refresh token")),
     };
 
     // Check revoked
-    let revoked_at: Option<chrono::DateTime<chrono::Utc>> = row.get("revoked_at");
     if revoked_at.is_some() {
         return Err(anyhow::anyhow!("Refresh token has been revoked"));
     }
 
     // Check expiry
-    let expires_at: chrono::DateTime<chrono::Utc> = row.get("expires_at");
     if expires_at < chrono::Utc::now() {
         return Err(anyhow::anyhow!("Refresh token has expired"));
     }
 
-    let user_id: String = row.get("user_id");
-
     // Revoke old token
-    sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1")
-        .bind(&token_hash)
-        .execute(db)
-        .await?;
+    auth_repo
+        .revoke_refresh_token(&token_hash)
+        .await
+        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
 
     // Fetch user role
-    let user_row = sqlx::query("SELECT role FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_one(db)
-        .await?;
-    let role: String = user_row.get("role");
+    let user = user_repo
+        .find_by_id(&user_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?
+        .ok_or_else(|| anyhow::anyhow!("User not found"))?;
+    let role = user.role;
 
     // Issue new tokens
     let new_refresh = generate_refresh_token();
-    store_refresh_token(db, &user_id, &new_refresh, REFRESH_TOKEN_TTL_SECS).await?;
+    store_refresh_token(auth_repo, &user_id, &new_refresh, REFRESH_TOKEN_TTL_SECS).await?;
     let new_access = generate_access_token(&user_id, &role, jwt_secret, ACCESS_TOKEN_TTL_SECS)?;
 
     Ok((new_access, new_refresh))
 }
 
 /// Revoke all refresh tokens for a user
-async fn revoke_all_refresh_tokens(db: &sqlx::PgPool, user_id: &str) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(user_id)
-    .execute(db)
-    .await?;
+async fn revoke_all_refresh_tokens(
+    auth_repo: &PostgresAuthRepository,
+    user_id: &str,
+) -> anyhow::Result<()> {
+    auth_repo
+        .revoke_all_user_tokens(user_id)
+        .await
+        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
     Ok(())
 }
 
 /// Revoke a specific refresh token
-async fn revoke_refresh_token(db: &sqlx::PgPool, token: &str) -> anyhow::Result<()> {
+async fn revoke_refresh_token(
+    auth_repo: &PostgresAuthRepository,
+    token: &str,
+) -> anyhow::Result<()> {
     let token_hash = hash_token(token);
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL",
-    )
-    .bind(&token_hash)
-    .execute(db)
-    .await?;
+    auth_repo
+        .revoke_refresh_token(&token_hash)
+        .await
+        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
     Ok(())
 }
 
@@ -218,6 +215,19 @@ pub async fn register(
         return Err(ApiError::BadRequest("密码至少需要8个字符".to_string()));
     }
 
+    // Validate email domain (optional but validated if provided)
+    if let Some(ref email) = payload.email {
+        if email.is_empty() {
+            return Err(ApiError::BadRequest("邮箱不能为空".to_string()));
+        }
+        if !email.ends_with("@email.ncu.edu.cn") {
+            return Err(ApiError::BadRequest("必须使用 @email.ncu.edu.cn 邮箱注册".to_string()));
+        }
+        if email.len() > 100 {
+            return Err(ApiError::BadRequest("邮箱不能超过100个字符".to_string()));
+        }
+    }
+
     let password = payload.password.clone();
 
     // Hash password in a blocking task to avoid starving the tokio runtime
@@ -245,25 +255,22 @@ pub async fn register(
         }
     };
 
-    let user_id = Uuid::new_v4().to_string();
+    // Create user via repository
+    let user_id = state
+        .auth_repo
+        .create_user(&payload.username, payload.email.as_deref(), &password_hash)
+        .await;
 
-    // Insert into database — unique constraint on username will trigger CONFLICT
-    let result = sqlx::query(
-        "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)",
-    )
-    .bind(&user_id)
-    .bind(&payload.username)
-    .bind(&password_hash)
-    .bind("user")
-    .execute(&state.db)
-    .await;
-
-    match result {
-        Ok(_) => {
-            let token =
-                generate_access_token(&user_id, "user", &state.jwt_secret, ACCESS_TOKEN_TTL_SECS)?;
+    match user_id {
+        Ok(user_id) => {
+            let token = generate_access_token(
+                &user_id,
+                "user",
+                &state.secrets.jwt_secret,
+                ACCESS_TOKEN_TTL_SECS,
+            )?;
             let refresh = generate_refresh_token();
-            store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
+            store_refresh_token(&state.auth_repo, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
                 .await
                 .map_err(|e| {
                     ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e))
@@ -278,16 +285,8 @@ pub async fn register(
         }
         Err(e) => {
             tracing::warn!(err = %e, username = %payload.username, "Registration failed");
-            // PostgreSQL unique violation code = "23505"
-            if let sqlx::Error::Database(db_err) = &e {
-                if db_err.code().as_deref() == Some("23505") {
-                    return Err(ApiError::Conflict("用户名已被使用，请换一个".to_string()));
-                }
-            }
-            Err(ApiError::Internal(anyhow::anyhow!(
-                "Registration failed: {}",
-                e
-            )))
+            // AuthRepository::create_user returns ApiError::Conflict for duplicate username
+            Err(e)
         }
     }
 }
@@ -297,27 +296,26 @@ pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<AuthRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
+    tracing::info!(username = %payload.username, "LOGIN ATTEMPT");
     // Sanity check before hitting the database — prevents wasteful full-table scans.
     if payload.username.is_empty() || payload.password.is_empty() {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::AuthFailed("用户名或密码错误".to_string()));
     }
     if payload.username.len() > 50 || payload.password.len() > 128 {
-        return Err(ApiError::Unauthorized);
+        return Err(ApiError::AuthFailed("用户名或密码错误".to_string()));
     }
 
-    // Fetch user from database
-    let user_row = match sqlx::query(
-        "SELECT id, username, password_hash, role FROM users WHERE username = $1",
-    )
-    .bind(&payload.username)
-    .fetch_optional(&state.db)
-    .await
+    // Fetch user from database using repository
+    let user = match state
+        .auth_repo
+        .find_user_by_username(&payload.username)
+        .await
     {
-        Ok(Some(row)) => row,
+        Ok(Some(user)) => user,
         Ok(None) => {
             // Return 401 to prevent username enumeration
             tracing::warn!(username = %payload.username, "Login failed — user not found");
-            return Err(ApiError::Unauthorized);
+            return Err(ApiError::AuthFailed("用户名或密码错误".to_string()));
         }
         Err(e) => {
             tracing::error!(err = %e, "Database error during login");
@@ -325,13 +323,8 @@ pub async fn login(
         }
     };
 
-    let user_id: String = user_row.get("id");
-    let username: String = user_row.get("username");
-    let stored_hash: String = user_row.get("password_hash");
-    let role: String = user_row.get("role");
-
     let password = payload.password.clone();
-    let hash_clone = stored_hash.clone();
+    let hash_clone = user.password_hash.clone();
 
     // Verify password in a blocking task
     let verify_result = tokio::task::spawn_blocking(move || -> bool {
@@ -347,10 +340,14 @@ pub async fn login(
 
     match verify_result {
         Ok(true) => {
-            let token =
-                generate_access_token(&user_id, &role, &state.jwt_secret, ACCESS_TOKEN_TTL_SECS)?;
+            let token = generate_access_token(
+                &user.id,
+                &user.role,
+                &state.secrets.jwt_secret,
+                ACCESS_TOKEN_TTL_SECS,
+            )?;
             let refresh = generate_refresh_token();
-            store_refresh_token(&state.db, &user_id, &refresh, REFRESH_TOKEN_TTL_SECS)
+            store_refresh_token(&state.auth_repo, &user.id, &refresh, REFRESH_TOKEN_TTL_SECS)
                 .await
                 .map_err(|e| {
                     ApiError::Internal(anyhow::anyhow!("Failed to store refresh token: {}", e))
@@ -358,15 +355,15 @@ pub async fn login(
             Ok(Json(AuthResponse {
                 token,
                 refresh_token: refresh,
-                user_id,
-                username: username.clone(),
+                user_id: user.id,
+                username: user.username.clone(),
                 message: "登录成功".to_string(),
             }))
         }
         Ok(false) => {
             // Return 401 for wrong password — do NOT distinguish from wrong username
             tracing::warn!(username = %payload.username, "Login failed — wrong password");
-            Err(ApiError::Unauthorized)
+            Err(ApiError::AuthFailed("用户名或密码错误".to_string()))
         }
         Err(e) => {
             tracing::error!(err = %e, "Password verification task failed");
@@ -380,13 +377,17 @@ pub async fn refresh_token(
     State(state): State<AppState>,
     Json(payload): Json<RefreshTokenRequest>,
 ) -> Result<Json<RefreshResponse>, ApiError> {
-    let (new_access, new_refresh) =
-        rotate_refresh_token(&state.db, &payload.refresh_token, &state.jwt_secret)
-            .await
-            .map_err(|e| {
-                tracing::warn!(err = %e, "Refresh token rotation failed");
-                ApiError::Unauthorized
-            })?;
+    let (new_access, new_refresh) = rotate_refresh_token(
+        &state.auth_repo,
+        &state.user_repo,
+        &payload.refresh_token,
+        &state.secrets.jwt_secret,
+    )
+    .await
+    .map_err(|e| {
+        tracing::warn!(err = %e, "Refresh token rotation failed");
+        ApiError::Unauthorized
+    })?;
 
     Ok(Json(RefreshResponse {
         token: new_access,
@@ -400,13 +401,13 @@ pub async fn logout(
     headers: HeaderMap,
     Json(payload): Json<LogoutRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     if let Some(ref token) = payload.refresh_token {
-        revoke_refresh_token(&state.db, token).await?;
+        revoke_refresh_token(&state.auth_repo, token).await?;
     }
-    revoke_all_refresh_tokens(&state.db, &user_id).await?;
+    revoke_all_refresh_tokens(&state.auth_repo, &user_id).await?;
 
     tracing::info!(user_id = %user_id, "User logged out, all sessions revoked");
 
@@ -427,7 +428,7 @@ pub async fn change_password(
     headers: HeaderMap,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     if payload.current_password.is_empty() {
@@ -443,17 +444,16 @@ pub async fn change_password(
         return Err(ApiError::BadRequest("新密码不能超过128个字符".to_string()));
     }
 
-    let user_row = sqlx::query("SELECT password_hash FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&state.db)
+    // Fetch user via repository
+    let user = state
+        .user_repo
+        .find_by_id(&user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .ok_or(ApiError::Unauthorized)?;
 
-    let stored_hash: String = user_row.get("password_hash");
-
     let verify_result = tokio::task::spawn_blocking(move || -> bool {
-        let parsed_hash = match PasswordHash::new(&stored_hash) {
+        let parsed_hash = match PasswordHash::new(&user.password_hash) {
             Ok(h) => h,
             Err(_) => return false,
         };
@@ -467,7 +467,7 @@ pub async fn change_password(
         Ok(true) => {}
         Ok(false) => {
             tracing::warn!(user_id = %user_id, "Password change failed — wrong current password");
-            return Err(ApiError::Unauthorized);
+            return Err(ApiError::AuthFailed("当前密码错误".to_string()));
         }
         Err(e) => {
             tracing::error!(err = %e, "Password verification task failed");
@@ -488,7 +488,7 @@ pub async fn change_password(
     sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
         .bind(&new_hash)
         .bind(&user_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 

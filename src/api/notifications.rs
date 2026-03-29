@@ -45,7 +45,7 @@ pub async fn get_notifications(
     headers: HeaderMap,
     Query(query): Query<NotificationQuery>,
 ) -> Result<Json<NotificationResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = query.limit.unwrap_or(20).min(100);
@@ -53,6 +53,7 @@ pub async fn get_notifications(
     let include_read = query.include_read.unwrap_or(false);
 
     let unread_count = state
+        .infra
         .notification
         .count_unread(&user_id)
         .await
@@ -60,12 +61,14 @@ pub async fn get_notifications(
 
     let (notifications, total) = if include_read {
         state
+            .infra
             .notification
             .list_all(&user_id, limit, offset)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     } else {
         state
+            .infra
             .notification
             .list_unread(&user_id, limit, offset)
             .await
@@ -101,10 +104,11 @@ pub async fn mark_notification_read(
     headers: HeaderMap,
     Path(notification_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let marked = state
+        .infra
         .notification
         .mark_read(&notification_id, &user_id)
         .await
@@ -122,10 +126,11 @@ pub async fn mark_all_notifications_read(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let count = state
+        .infra
         .notification
         .mark_all_read(&user_id)
         .await

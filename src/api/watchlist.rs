@@ -44,7 +44,7 @@ pub async fn get_watchlist(
     headers: HeaderMap,
     Query(params): Query<WatchlistQuery>,
 ) -> Result<Json<WatchlistResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
@@ -56,7 +56,7 @@ pub async fn get_watchlist(
          WHERE w.user_id = $1 AND i.status = 'active'",
     )
     .bind(&user_id)
-    .fetch_one(&state.db)
+    .fetch_one(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     let total: i64 = count_row.try_get("cnt").unwrap_or(0);
@@ -75,7 +75,7 @@ pub async fn get_watchlist(
     .bind(&user_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -90,7 +90,7 @@ pub async fn get_watchlist(
                 listing_id: row.get("listing_id"),
                 title: row.get("title"),
                 category: row.get("category"),
-                brand: row.get("brand"),
+                brand: row.try_get("brand").ok().flatten().unwrap_or_default(),
                 condition_score: row.get("condition_score"),
                 suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
                 status: row.get("status"),
@@ -114,13 +114,13 @@ pub async fn add_to_watchlist(
     headers: HeaderMap,
     Path(listing_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Verify listing exists
     let exists = sqlx::query("SELECT id FROM inventory WHERE id = $1")
         .bind(&listing_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .is_some();
@@ -135,7 +135,7 @@ pub async fn add_to_watchlist(
     )
     .bind(&user_id)
     .bind(&listing_id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -151,13 +151,13 @@ pub async fn remove_from_watchlist(
     headers: HeaderMap,
     Path(listing_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     sqlx::query("DELETE FROM watchlist WHERE user_id = $1 AND listing_id = $2")
         .bind(&user_id)
         .bind(&listing_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -173,13 +173,13 @@ pub async fn check_watchlist(
     headers: HeaderMap,
     Path(listing_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let exists = sqlx::query("SELECT 1 FROM watchlist WHERE user_id = $1 AND listing_id = $2")
         .bind(&user_id)
         .bind(&listing_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .is_some();

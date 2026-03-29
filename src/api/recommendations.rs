@@ -51,9 +51,9 @@ pub async fn get_similar_listings(
     let limit = params.limit.unwrap_or(10).clamp(1, 20);
 
     let source_embedding: Option<Vec<f32>> =
-        sqlx::query_scalar("SELECT embedding FROM documents WHERE listing_id = $1")
+        sqlx::query_scalar("SELECT embedding FROM documents WHERE id = $1")
             .bind(&params.listing_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&state.infra.db)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -72,7 +72,7 @@ pub async fn get_similar_listings(
         SELECT i.id, i.title, i.category, i.brand,
                i.condition_score, i.suggested_price_cny, i.status, i.defects
         FROM inventory i
-        JOIN documents d ON d.listing_id = i.id
+        JOIN documents d ON d.id = i.id
         WHERE i.id != $1 AND i.status = 'active'
         ORDER BY d.embedding <=> $2
         LIMIT $3
@@ -81,7 +81,7 @@ pub async fn get_similar_listings(
     .bind(&params.listing_id)
     .bind(&source_vec)
     .bind(limit)
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -95,7 +95,7 @@ pub async fn get_similar_listings(
                 id: row.get("id"),
                 title: row.get("title"),
                 category: row.get("category"),
-                brand: row.get("brand"),
+                brand: row.try_get("brand").ok().flatten().unwrap_or_default(),
                 condition_score: row.get("condition_score"),
                 suggested_price_cny: crate::utils::cents_to_yuan(
                     row.get::<i32, _>("suggested_price_cny") as i64,
@@ -128,7 +128,7 @@ pub async fn get_recommendation_feed(
         "#,
     )
     .bind(limit)
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -142,7 +142,7 @@ pub async fn get_recommendation_feed(
                 id: row.get("id"),
                 title: row.get("title"),
                 category: row.get("category"),
-                brand: row.get("brand"),
+                brand: row.try_get("brand").ok().flatten().unwrap_or_default(),
                 condition_score: row.get("condition_score"),
                 suggested_price_cny: crate::utils::cents_to_yuan(
                     row.get::<i32, _>("suggested_price_cny") as i64,

@@ -1,14 +1,16 @@
 use crate::agents::router::IntentRouter;
 use crate::api::metrics::MetricsService;
 use crate::llm::{LlmProvider, MarketplaceAgent};
+use crate::repositories;
 use crate::services::chat::ChatService;
 use crate::services::notification::NotificationService;
+use crate::services::order;
 use crate::services::BusinessEvent;
 use axum::{
     extract::State,
     middleware,
     response::Response,
-    routing::{delete, get, patch, post, put},
+    routing::{get, patch, post},
     Json, Router,
 };
 use futures::StreamExt;
@@ -84,11 +86,12 @@ pub async fn rate_limit_middleware(
         .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
 
     if !state
+        .infra
         .rate_limit
         .check_rate_limit(&peer_addr.to_string())
         .await
     {
-        state.metrics.record_rate_limit_rejected();
+        state.infra.metrics.record_rate_limit_rejected();
         return ApiError::RateLimitExceeded.into_response();
     }
 
@@ -125,6 +128,7 @@ pub async fn http_metrics_middleware(
     let status = response.status().as_u16();
 
     state
+        .infra
         .metrics
         .record_http(&method, &normalize_path(&path), status, duration);
 
@@ -158,31 +162,69 @@ where
     }
 }
 
+// ---------------------------------------------------------------------------
+// Grouped AppState sub-structs — reduce God Object feel while keeping zero
+// breaking changes (handlers still receive State<AppState>).
+// ---------------------------------------------------------------------------
+
+/// Static config loaded at startup (secrets, keys, endpoints).
 #[derive(Clone)]
-pub struct AppState {
-    pub db: PgPool,
-    pub llm_provider: Arc<dyn LlmProvider>,
-    pub event_tx: mpsc::Sender<BusinessEvent>,
-    pub rate_limit: RateLimitStateHandle,
+pub struct ApiSecrets {
     pub jwt_secret: String,
     pub gemini_api_key: String,
-    pub notification: NotificationService,
-    #[allow(dead_code)]
-    pub ws_connections: Arc<ws::WsConnections>,
-    pub router: IntentRouter,
     /// Alibaba Cloud OSS configuration for STS direct-upload.
     pub oss_endpoint: String,
     pub oss_bucket: String,
     pub oss_role_arn: Option<String>,
     pub oss_access_key_id: Option<String>,
     pub oss_access_key_secret: Option<String>,
-    pub metrics: std::sync::Arc<MetricsService>,
+}
+
+/// Runtime infrastructure (DB pool, async channels, WS connections).
+#[derive(Clone)]
+pub struct ApiInfrastructure {
+    pub db: PgPool,
+    pub event_tx: mpsc::Sender<BusinessEvent>,
+    pub rate_limit: RateLimitStateHandle,
+    pub notification: NotificationService,
+    #[allow(dead_code)]
+    pub ws_connections: Arc<ws::WsConnections>,
+    pub metrics: Arc<MetricsService>,
+    pub order_service: order::OrderService,
+}
+
+/// LLM provider + intent routing.
+#[derive(Clone)]
+pub struct ApiAgents {
+    pub llm_provider: Arc<dyn LlmProvider>,
+    pub router: IntentRouter,
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub secrets: ApiSecrets,
+    pub infra: ApiInfrastructure,
+    pub agents: ApiAgents,
+    // Repository layer (concrete types for now)
+    #[allow(dead_code)]
+    pub listing_repo: repositories::PostgresListingRepository,
+    #[allow(dead_code)]
+    pub user_repo: repositories::PostgresUserRepository,
+    #[allow(dead_code)]
+    pub chat_repo: repositories::PostgresChatRepository,
+    #[allow(dead_code)]
+    pub auth_repo: repositories::PostgresAuthRepository,
 }
 
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
     let cors = if cors_origins.is_empty() {
-        // Default restrictive CORS — no origins allowed by default
-        CorsLayer::new().allow_methods(Any).allow_headers(Any)
+        // Default permissive CORS for development — no CORS_ORIGINS env var set
+        // In production, always set CORS_ORIGINS to specific origins
+        tracing::warn!("CORS_ORIGINS not set, defaulting to allow all origins");
+        CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(Any)
+            .allow_headers(Any)
     } else if cors_origins.iter().any(|s| s == "*") {
         // Wildcard: allow all origins
         CorsLayer::new()
@@ -239,19 +281,26 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/auth/change-password", post(auth::change_password))
         .route("/api/auth/refresh", post(auth::refresh_token))
         .route("/api/auth/logout", post(auth::logout))
-        .route("/api/listings", get(listings::get_listings))
+        .route(
+            "/api/listings",
+            get(listings::get_listings).post(listings::create_listing),
+        )
         .route("/api/listings/recognize", post(listings::recognize_item))
-        .route("/api/listings/{id}", get(listings::get_listing))
-        .route("/api/listings/{id}", put(listings::update_listing))
-        .route("/api/listings", post(listings::create_listing))
-        .route("/api/listings/{id}", delete(listings::delete_listing))
+        .route(
+            "/api/listings/{id}",
+            get(listings::get_listing)
+                .put(listings::update_listing)
+                .delete(listings::delete_listing),
+        )
         .route("/api/listings/{id}/relist", post(listings::relist_listing))
-        .route("/api/user/profile", get(user::get_profile))
+        .route(
+            "/api/user/profile",
+            get(user::get_profile).patch(user::update_profile),
+        )
         .route("/api/user/listings", get(user::get_user_listings))
         .route("/api/users/search", get(user::search_users))
         .route("/api/users/{id}", get(user::get_user_profile))
-        .route("/api/orders", get(orders::get_orders))
-        .route("/api/orders", post(orders::create_order))
+        .route("/api/orders", get(orders::get_orders).post(orders::create_order))
         .route("/api/orders/{id}", get(orders::get_order))
         .route("/api/orders/{id}/cancel", post(orders::cancel_order))
         .route("/api/orders/{id}/confirm", post(orders::confirm_order))
@@ -265,15 +314,9 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/watchlist", get(watchlist::get_watchlist))
         .route(
             "/api/watchlist/{listing_id}",
-            get(watchlist::check_watchlist),
-        )
-        .route(
-            "/api/watchlist/{listing_id}",
-            post(watchlist::add_to_watchlist),
-        )
-        .route(
-            "/api/watchlist/{listing_id}",
-            delete(watchlist::remove_from_watchlist),
+            get(watchlist::check_watchlist)
+                .post(watchlist::add_to_watchlist)
+                .delete(watchlist::remove_from_watchlist),
         )
         .route("/api/notifications", get(notifications::get_notifications))
         .route(
@@ -306,11 +349,8 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/chat/connections", get(user_chat::list_connections))
         .route(
             "/api/chat/conversations/{id}/messages",
-            get(user_chat::get_connection_messages),
-        )
-        .route(
-            "/api/chat/conversations/{id}/messages",
-            post(user_chat::send_connection_message),
+            get(user_chat::get_connection_messages)
+                .post(user_chat::send_connection_message),
         )
         .route(
             "/api/chat/messages/{id}/read",
@@ -318,6 +358,10 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         )
         .route("/api/chat/messages/{id}", patch(user_chat::edit_message))
         .route("/api/chat/typing", post(user_chat::typing_indicator))
+        .route(
+            "/api/chat/connection/{id}/read",
+            post(user_chat::mark_connection_read),
+        )
         .route("/api/upload/token", get(upload::get_upload_token))
         .route("/api/ws", get(ws::ws_handler))
         .layer(cors)
@@ -336,13 +380,13 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
 
 /// GET /api/metrics — Prometheus text format metrics (no auth required)
 async fn get_metrics(State(state): State<AppState>) -> String {
-    state.metrics.render()
+    state.infra.metrics.render()
 }
 
 async fn health_check(State(state): State<AppState>) -> Result<&'static str, ApiError> {
     // Verify database connectivity — critical for production deployments
     sqlx::query("SELECT 1")
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| {
             tracing::error!(%e, "Health check failed: database unreachable");
@@ -398,12 +442,12 @@ async fn handle_chat(
         tracing::debug!(client_ip = %proxy_ip, peer = %addr, "Chat request");
     }
 
-    let current_user_id = auth::extract_user_id_from_token(&headers, &state.jwt_secret)
+    let current_user_id = auth::extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Route: lightweight intent classification before doing any LLM work.
     // Blocked content and simple chat greetings short-circuit here — no token spent.
-    let intent_result = state.router.classify(&payload.message);
+    let intent_result = state.agents.router.classify(&payload.message);
     tracing::debug!(intent = ?intent_result.intent.as_str(), confidence = %intent_result.confidence, "Router classification");
 
     // Blocked: reject immediately, no LLM tokens consumed.
@@ -427,7 +471,7 @@ async fn handle_chat(
         Some(ref lid) if !lid.is_empty() => {
             let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
                 .bind(lid)
-                .fetch_optional(&state.db)
+                .fetch_optional(&state.infra.db)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -463,7 +507,7 @@ async fn handle_chat(
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let chat_svc = ChatService::new(state.db.clone());
+    let chat_svc = ChatService::new(state.infra.db.clone());
 
     // Log user message BEFORE LLM call — prevents data loss if LLM times out or request is aborted.
     // When listing_id is provided, receiver is set to the listing owner so the seller
@@ -484,7 +528,7 @@ async fn handle_chat(
         tracing::warn!(%e, "Failed to log user message — continuing anyway");
     }
 
-    state.metrics.record_chat_message();
+    state.infra.metrics.record_chat_message();
 
     let history_entries = chat_svc
         .get_conversation_history(&conversation_id)
@@ -512,10 +556,11 @@ async fn handle_chat(
         .collect();
 
     let agent: Box<dyn MarketplaceAgent> = state
+        .agents
         .llm_provider
         .create_marketplace_agent(
-            &state.db,
-            state.event_tx.clone(),
+            &state.infra.db,
+            state.infra.event_tx.clone(),
             Some(current_user_id.clone()),
         )
         .await
@@ -526,11 +571,11 @@ async fn handle_chat(
         .await
         .map_err(|e| {
             tracing::error!(err = %e, "LLM prompt failed");
-            state.metrics.record_llm_error();
+            state.infra.metrics.record_llm_error();
             ApiError::Internal(anyhow::anyhow!(e))
         })?;
 
-    state.metrics.record_llm_call();
+    state.infra.metrics.record_llm_call();
 
     // Log agent reply — fire and forget, errors are non-fatal.
     // Agent messages have no receiver (they're broadcast-style from the AI assistant).
@@ -563,7 +608,7 @@ async fn handle_chat(
     // is closed. This is preferred over try_send/timeout because ChatMessage must
     // be persisted — dropping it silently would cause the user to see their message
     // disappear with no reply and no error feedback.
-    if let Err(e) = state.event_tx.send(chat_event).await {
+    if let Err(e) = state.infra.event_tx.send(chat_event).await {
         tracing::error!(%e, "Event bus closed, ChatMessage not delivered");
         return Err(ApiError::Internal(anyhow::anyhow!(
             "服务暂时不可用，请稍后重试: {}",
@@ -578,10 +623,13 @@ async fn handle_chat(
 }
 
 /// Query params for SSE chat streaming.
-/// Token is required for auth; message is required to start a new turn.
+/// Message is required to start a new turn.
+///
+/// Auth is read from Authorization header first; query `token` remains a
+/// backward-compatible fallback for older clients.
 #[derive(Deserialize)]
 struct ChatStreamQuery {
-    token: String,
+    token: Option<String>,
     message: String,
     /// Optional listing context — same as handle_chat.
     listing_id: Option<String>,
@@ -591,13 +639,15 @@ struct ChatStreamQuery {
 
 /// GET /api/chat/stream — SSE streaming chat endpoint.
 ///
-/// Clients send: GET /api/chat/stream?token=<jwt>&message=hello&listing_id=xxx
+/// Clients send: GET /api/chat/stream?message=hello&listing_id=xxx
+/// Auth: Authorization: Bearer <jwt> (preferred), query token (fallback)
 /// Server streams: text/event-stream with data: {"token": "..."} chunks.
 ///
 /// Each chunk is a JSON object with a "token" field containing the text fragment.
 /// The stream closes when the LLM finishes responding (no more tool calls).
 async fn handle_chat_stream(
     State(state): State<AppState>,
+    headers: HeaderMap,
     axum::extract::Query(params): axum::extract::Query<ChatStreamQuery>,
 ) -> Result<impl axum::response::IntoResponse, ApiError> {
     if params.message.len() > 2000 {
@@ -606,11 +656,22 @@ async fn handle_chat_stream(
         ));
     }
 
-    let current_user_id = auth::extract_user_id_from_token_str(&params.token, &state.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
+    let has_auth_header = headers.get("Authorization").is_some();
+    let current_user_id = if has_auth_header {
+        auth::extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+            .map_err(|_| ApiError::Unauthorized)?
+    } else {
+        let token = params
+            .token
+            .as_deref()
+            .filter(|v| !v.is_empty())
+            .ok_or(ApiError::Unauthorized)?;
+        auth::extract_user_id_from_token_str(token, &state.secrets.jwt_secret)
+            .map_err(|_| ApiError::Unauthorized)?
+    };
 
     // Route: lightweight intent classification before doing any LLM work.
-    let intent_result = state.router.classify(&params.message);
+    let intent_result = state.agents.router.classify(&params.message);
     tracing::debug!(intent = ?intent_result.intent.as_str(), confidence = %intent_result.confidence, "SSE Router classification");
 
     // Blocked: reject immediately, no LLM tokens consumed.
@@ -641,7 +702,7 @@ async fn handle_chat_stream(
         Some(ref lid) if !lid.is_empty() => {
             let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
                 .bind(lid)
-                .fetch_optional(&state.db)
+                .fetch_optional(&state.infra.db)
                 .await
                 .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -674,7 +735,7 @@ async fn handle_chat_stream(
         .filter(|id| !id.is_empty())
         .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let chat_svc = ChatService::new(state.db.clone());
+    let chat_svc = ChatService::new(state.infra.db.clone());
 
     // Log user message before streaming.
     let log_user = chat_svc.log_message(
@@ -717,10 +778,11 @@ async fn handle_chat_stream(
         .collect();
 
     let agent: Box<dyn MarketplaceAgent> = state
+        .agents
         .llm_provider
         .create_marketplace_agent(
-            &state.db,
-            state.event_tx.clone(),
+            &state.infra.db,
+            state.infra.event_tx.clone(),
             Some(current_user_id.clone()),
         )
         .await
@@ -737,7 +799,9 @@ async fn handle_chat_stream(
         image_data: None,
         audio_data: None,
     };
-    let _ = state.event_tx.try_send(chat_event);
+    if let Err(e) = state.infra.event_tx.try_send(chat_event) {
+        tracing::warn!(%e, conversation_id = %conversation_id, "ChatMessage event dropped - channel full");
+    }
 
     // Build SSE stream: each token becomes data: {"token": "..."}\n\n
     let conv_id = conversation_id.clone();

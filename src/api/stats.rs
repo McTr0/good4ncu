@@ -36,19 +36,19 @@ pub async fn get_stats(
     State(state): State<AppState>,
 ) -> Result<Json<MarketplaceStats>, crate::api::error::ApiError> {
     let (total_listings, active_listings, total_users, total_orders) = try_join!(
-        count_query(&state.db, "SELECT COUNT(*) as cnt FROM inventory"),
+        count_query(&state.infra.db, "SELECT COUNT(*) as cnt FROM inventory"),
         count_query(
-            &state.db,
+            &state.infra.db,
             "SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'"
         ),
-        count_query(&state.db, "SELECT COUNT(*) as cnt FROM users"),
-        count_query(&state.db, "SELECT COUNT(*) as cnt FROM orders"),
+        count_query(&state.infra.db, "SELECT COUNT(*) as cnt FROM users"),
+        count_query(&state.infra.db, "SELECT COUNT(*) as cnt FROM orders"),
     )?;
 
     let category_rows = sqlx::query(
         "SELECT category, COUNT(*) as cnt FROM inventory WHERE status = 'active' GROUP BY category ORDER BY cnt DESC",
     )
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| crate::api::error::ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 

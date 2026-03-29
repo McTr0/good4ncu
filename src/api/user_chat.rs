@@ -67,6 +67,7 @@ pub struct ConnectRejectResponse {
 #[derive(Serialize)]
 pub struct ConnectionEntry {
     pub id: String,
+    pub requester_id: String,
     pub other_user_id: String,
     pub other_username: Option<String>,
     pub status: String,
@@ -74,6 +75,8 @@ pub struct ConnectionEntry {
     pub created_at: String,
     /// 未读消息数
     pub unread_count: i32,
+    /// Whether the current user is the receiver (can accept/reject this pending request)
+    pub is_receiver: bool,
 }
 
 #[derive(Serialize)]
@@ -90,9 +93,17 @@ pub struct SendMessageBody {
 
 #[derive(Serialize)]
 pub struct SendMessageResponse {
+    /// Returned as `id` for frontend compatibility with ConversationMessage.fromJson
+    #[serde(rename = "id")]
     pub message_id: i64,
+    pub sender: String,
+    pub content: String,
+    pub conversation_id: String,
+    #[serde(rename = "timestamp")]
     pub sent_at: String,
     pub read_at: Option<String>,
+    pub image_data: Option<String>,
+    pub audio_data: Option<String>,
     /// 消息状态: sending | sent | delivered | read | failed
     pub status: String,
 }
@@ -181,6 +192,12 @@ struct WsConnectionEstablishedEvent {
 }
 
 #[derive(Serialize)]
+struct WsConnectionRejectedEvent {
+    event: String,
+    connection_id: String,
+}
+
+#[derive(Serialize)]
 struct WsNewMessageEvent {
     event: String,
     message_id: i64,
@@ -214,7 +231,7 @@ pub async fn connect_request(
     headers: HeaderMap,
     Json(body): Json<ConnectRequestBody>,
 ) -> Result<Json<ConnectRequestResponse>, ApiError> {
-    let requester_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let requester_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     if requester_id == body.receiver_id {
@@ -223,7 +240,7 @@ pub async fn connect_request(
 
     let receiver_exists = sqlx::query("SELECT 1 FROM users WHERE id = $1")
         .bind(&body.receiver_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .is_some();
@@ -241,7 +258,7 @@ pub async fn connect_request(
         )
         .bind(&requester_id)
         .bind(&body.receiver_id)
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
         let uuid_val: uuid::Uuid = row
@@ -253,7 +270,7 @@ pub async fn connect_request(
     let requester_username: Option<String> =
         sqlx::query("SELECT username FROM users WHERE id = $1")
             .bind(&requester_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&state.infra.db)
             .await
             .ok()
             .flatten()
@@ -283,14 +300,16 @@ pub async fn connect_accept(
     headers: HeaderMap,
     Json(body): Json<ConnectAcceptBody>,
 ) -> Result<Json<ConnectAcceptResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
+
+    tracing::info!(user_id = %user_id, connection_id = %body.connection_id, "ACCEPT_CONNECTION");
 
     let row = sqlx::query(
         "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&body.connection_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -299,10 +318,14 @@ pub async fn connect_accept(
     let receiver_id: String = row.get("receiver_id");
     let current_status: String = row.get("status");
 
+    tracing::info!(receiver_id = %receiver_id, requester_id = %requester_id, current_status = %current_status, "ACCEPT_CONNECTION row found");
+
     if receiver_id != user_id {
+        tracing::warn!(user_id = %user_id, receiver_id = %receiver_id, "ACCEPT_CONNECTION forbidden - not receiver");
         return Err(ApiError::Forbidden);
     }
     if current_status != "pending" {
+        tracing::warn!(connection_id = %body.connection_id, current_status = %current_status, "ACCEPT_CONNECTION bad request - not pending");
         return Err(ApiError::BadRequest(format!(
             "连接状态不是 pending，当前状态: {}",
             current_status
@@ -317,7 +340,7 @@ pub async fn connect_accept(
     )
     .bind(established_at)
     .bind(&body.connection_id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -342,18 +365,19 @@ pub async fn connect_reject(
     headers: HeaderMap,
     Json(body): Json<ConnectRejectBody>,
 ) -> Result<Json<ConnectRejectResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
         "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&body.connection_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
 
+    let requester_id: String = row.get("requester_id");
     let receiver_id: String = row.get("receiver_id");
     let current_status: String = row.get("status");
 
@@ -369,9 +393,17 @@ pub async fn connect_reject(
 
     sqlx::query("UPDATE chat_connections SET status = 'rejected' WHERE id = $1::uuid")
         .bind(&body.connection_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    // Notify the requester so they know the invitation was rejected.
+    let ws_event = WsConnectionRejectedEvent {
+        event: "connection_rejected".to_string(),
+        connection_id: body.connection_id.clone(),
+    };
+    let payload = serde_json::to_string(&ws_event).unwrap_or_default();
+    ws::broadcast_to_user(&requester_id, &payload);
 
     Ok(Json(ConnectRejectResponse {
         status: "rejected".to_string(),
@@ -383,7 +415,7 @@ pub async fn list_connections(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<ConnectionListResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let rows = sqlx::query(
@@ -394,14 +426,14 @@ pub async fn list_connections(
                cc.created_at,
                cc.unread_count,
                cc.requester_id,
-               cc.receiver_id,
+               (cc.receiver_id = $1) as is_receiver,
                CASE WHEN cc.requester_id = $1 THEN cc.receiver_id ELSE cc.requester_id END as other_user_id
            FROM chat_connections cc
            WHERE cc.requester_id = $1 OR cc.receiver_id = $1
            ORDER BY cc.created_at DESC"#,
     )
     .bind(&user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -414,7 +446,7 @@ pub async fn list_connections(
     } else {
         sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
             .bind(&other_ids)
-            .fetch_all(&state.db)
+            .fetch_all(&state.infra.db)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
             .into_iter()
@@ -435,12 +467,14 @@ pub async fn list_connections(
                     .try_get::<uuid::Uuid, _>("id")
                     .map(|u| u.to_string())
                     .unwrap_or_default(),
+                requester_id: row.get("requester_id"),
                 other_user_id: other_user_id.clone(),
                 other_username: usernames.get(&other_user_id).cloned(),
                 status: row.get("status"),
                 established_at: established_at.map(|dt| dt.to_rfc3339()),
                 created_at: created_at.to_rfc3339(),
                 unread_count,
+                is_receiver: row.get("is_receiver"),
             }
         })
         .collect();
@@ -455,7 +489,7 @@ pub async fn get_connection_messages(
     Path(connection_id): Path<String>,
     Query(params): Query<MessageListQuery>,
 ) -> Result<Json<MessageListResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
@@ -465,7 +499,7 @@ pub async fn get_connection_messages(
         "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&connection_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -480,24 +514,23 @@ pub async fn get_connection_messages(
     let rows = sqlx::query(
         r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data, edited_at, status
            FROM chat_messages
-           WHERE conversation_id = $1::uuid
+           WHERE conversation_id = $1::text
            ORDER BY id DESC
            LIMIT $2 OFFSET $3"#,
     )
     .bind(&connection_id)
     .bind(limit)
     .bind(offset)
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let total: i64 = sqlx::query(
         r#"SELECT COUNT(*) as cnt FROM chat_messages
-            WHERE (sender = $1 AND receiver = $2) OR (sender = $2 AND receiver = $1)"#,
+            WHERE conversation_id = $1::text"#,
     )
-    .bind(&requester_id)
-    .bind(&receiver_id)
-    .fetch_one(&state.db)
+    .bind(&connection_id)
+    .fetch_one(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .try_get("cnt")
@@ -519,7 +552,7 @@ pub async fn get_connection_messages(
     } else {
         sqlx::query("SELECT id, username FROM users WHERE id = ANY($1)")
             .bind(&sender_ids)
-            .fetch_all(&state.db)
+            .fetch_all(&state.infra.db)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
             .into_iter()
@@ -577,7 +610,7 @@ pub async fn send_connection_message(
     Path(connection_id): Path<String>,
     Json(body): Json<SendMessageBody>,
 ) -> Result<Json<SendMessageResponse>, ApiError> {
-    let sender_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let sender_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     if body.content.is_empty() {
@@ -591,7 +624,7 @@ pub async fn send_connection_message(
         "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&connection_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -621,7 +654,7 @@ pub async fn send_connection_message(
 
     let row = sqlx::query(
         r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, read_at, read_by, status)
-           VALUES ($1::uuid, 'direct', $2, $3, false, $4, $5, $6, $7, $2, 'sent')
+           VALUES ($1::text, 'direct', $2, $3, false, $4, $5, $6, $7, $2, 'sent')
            RETURNING id, timestamp"#,
     )
     .bind(&connection_id)
@@ -631,25 +664,25 @@ pub async fn send_connection_message(
     .bind(&body.image_base64)
     .bind(&body.audio_base64)
     .bind(read_at)
-    .fetch_one(&state.db)
+    .fetch_one(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let message_id: i64 = row.get("id");
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
 
-    state.metrics.record_chat_message();
+    state.infra.metrics.record_chat_message();
 
     // Update unread_count for the receiver (always Some at this point)
     sqlx::query("UPDATE chat_connections SET unread_count = unread_count + 1 WHERE id = $1::uuid")
         .bind(&connection_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let sender_username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
         .bind(&sender_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .ok()
         .flatten()
@@ -661,11 +694,11 @@ pub async fn send_connection_message(
         conversation_id: connection_id.clone(),
         sender: sender_id.clone(),
         sender_username,
-        content: body.content,
+        content: body.content.clone(),
         timestamp: timestamp.to_rfc3339(),
         read_at: read_at_str.clone(),
-        image_data: body.image_base64,
-        audio_data: body.audio_base64,
+        image_data: body.image_base64.clone(),
+        audio_data: body.audio_base64.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
     if let Some(ref recv) = receiver {
@@ -674,8 +707,13 @@ pub async fn send_connection_message(
 
     Ok(Json(SendMessageResponse {
         message_id,
+        sender: sender_id,
+        content: body.content,
+        conversation_id: connection_id,
         sent_at: timestamp.to_rfc3339(),
         read_at: read_at_str,
+        image_data: body.image_base64,
+        audio_data: body.audio_base64,
         status: "sent".to_string(),
     }))
 }
@@ -686,17 +724,17 @@ pub async fn mark_message_read(
     headers: HeaderMap,
     Path(message_id): Path<i64>,
 ) -> Result<Json<MarkReadResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
-        r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cm.conversation_id, cc.status
+        r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cm.conversation_id, cc.status as conn_status
            FROM chat_messages cm
-           JOIN chat_connections cc ON cc.id = cm.conversation_id::uuid
+           JOIN chat_connections cc ON cc.id::text = cm.conversation_id
            WHERE cm.id = $1"#,
     )
     .bind(message_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -706,12 +744,12 @@ pub async fn mark_message_read(
     let conversation_id: String = row.get("conversation_id");
     let current_read_at: Option<chrono::DateTime<chrono::Utc>> =
         row.try_get("read_at").ok().flatten();
-    let status: String = row.get("status");
+    let conn_status: String = row.get("conn_status");
 
-    if status != "connected" {
+    if conn_status != "connected" {
         return Err(ApiError::BadRequest(format!(
             "连接状态不是 connected，无法标记已读: {}",
-            status
+            conn_status
         )));
     }
 
@@ -737,14 +775,14 @@ pub async fn mark_message_read(
         .bind(read_at)
         .bind(&user_id)
         .bind(message_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     // Reset unread_count for the receiver
     sqlx::query("UPDATE chat_connections SET unread_count = 0 WHERE id = $1::uuid")
         .bind(&conversation_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -770,7 +808,7 @@ pub async fn edit_message(
     Path(message_id): Path<i64>,
     Json(body): Json<EditMessageBody>,
 ) -> Result<Json<EditMessageResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     if body.content.is_empty() {
@@ -782,13 +820,13 @@ pub async fn edit_message(
 
     // Fetch the existing message
     let row = sqlx::query(
-        r#"SELECT cm.id, cm.sender, cm.timestamp, cc.status
+        r#"SELECT cm.id, cm.sender, cm.timestamp, cc.status as conn_status
            FROM chat_messages cm
-           JOIN chat_connections cc ON cc.id = cm.conversation_id::uuid
+           JOIN chat_connections cc ON cc.id::text = cm.conversation_id
            WHERE cm.id = $1"#,
     )
     .bind(message_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -799,12 +837,12 @@ pub async fn edit_message(
     }
 
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
-    let status: String = row.get("status");
+    let conn_status: String = row.get("conn_status");
 
-    if status != "connected" {
+    if conn_status != "connected" {
         return Err(ApiError::BadRequest(format!(
             "连接状态不是 connected，无法编辑: {}",
-            status
+            conn_status
         )));
     }
 
@@ -824,7 +862,7 @@ pub async fn edit_message(
         .bind(&body.content)
         .bind(edited_at)
         .bind(message_id)
-        .execute(&state.db)
+        .execute(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -841,7 +879,7 @@ pub async fn typing_indicator(
     headers: HeaderMap,
     Json(body): Json<TypingBody>,
 ) -> Result<(), ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Verify user is part of this connection
@@ -849,7 +887,7 @@ pub async fn typing_indicator(
         "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
     )
     .bind(&body.conversation_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -863,7 +901,7 @@ pub async fn typing_indicator(
 
     let username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
         .bind(&user_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .ok()
         .flatten()
@@ -888,6 +926,65 @@ pub async fn typing_indicator(
     Ok(())
 }
 
+/// POST /api/chat/connection/{id}/read — batch mark all messages in a connection as read.
+///
+/// Replaces the N+1 pattern where the client fetches 50 messages then marks each one read
+/// individually. One SQL UPDATE + one unread_count reset.
+pub async fn mark_connection_read(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(connection_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Verify the user is part of this connection
+    let row = sqlx::query(
+        "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1::uuid",
+    )
+    .bind(&connection_id)
+    .fetch_optional(&state.infra.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    .ok_or(ApiError::NotFound)?;
+
+    let requester_id: String = row.get("requester_id");
+    let receiver_id: String = row.get("receiver_id");
+
+    if user_id != requester_id && user_id != receiver_id {
+        return Err(ApiError::Forbidden);
+    }
+
+    let now = chrono::Utc::now();
+
+    // Batch UPDATE: mark all unread messages sent TO this user as read
+    let result = sqlx::query(
+        r#"UPDATE chat_messages
+           SET read_at = $1, read_by = $2, status = 'read'
+           WHERE conversation_id = $3::text
+             AND receiver = $2
+             AND read_at IS NULL"#,
+    )
+    .bind(now)
+    .bind(&user_id)
+    .bind(&connection_id)
+    .execute(&state.infra.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    // Reset unread_count
+    sqlx::query("UPDATE chat_connections SET unread_count = 0 WHERE id = $1::uuid")
+        .bind(&connection_id)
+        .execute(&state.infra.db)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    Ok(Json(serde_json::json!({
+        "marked_count": result.rows_affected(),
+        "read_at": now.to_rfc3339()
+    })))
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -896,22 +993,74 @@ pub async fn typing_indicator(
 mod tests {
     use super::*;
 
+    // ========================================================================
+    // Request/Response Serialization Tests
+    // ========================================================================
+
     #[test]
     fn test_connection_entry_serialization() {
         let entry = ConnectionEntry {
             id: "conn-1".to_string(),
+            requester_id: "user-1".to_string(),
             other_user_id: "user-2".to_string(),
             other_username: Some("alice".to_string()),
             status: "connected".to_string(),
             established_at: Some("2024-01-01T00:00:00Z".to_string()),
             created_at: "2024-01-01T00:00:00Z".to_string(),
             unread_count: 3,
+            is_receiver: false,
         };
         let json = serde_json::to_string(&entry).unwrap();
         assert!(json.contains("conn-1"));
         assert!(json.contains("connected"));
         assert!(json.contains("alice"));
         assert!(json.contains("\"unread_count\":3"));
+    }
+
+    #[test]
+    fn test_connection_entry_json_structure() {
+        // ConnectionEntry only implements Serialize, not Deserialize.
+        // Verify the JSON output has correct structure by checking key presence.
+        let entry = ConnectionEntry {
+            id: "conn-123".to_string(),
+            requester_id: "user-a".to_string(),
+            other_user_id: "user-b".to_string(),
+            other_username: Some("bob".to_string()),
+            status: "pending".to_string(),
+            established_at: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            unread_count: 0,
+            is_receiver: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        // Verify JSON structure contains expected keys
+        assert!(json.contains(r#""id":"conn-123""#));
+        assert!(json.contains(r#""requester_id":"user-a""#));
+        assert!(json.contains(r#""other_user_id":"user-b""#));
+        assert!(json.contains(r#""other_username":"bob""#));
+        assert!(json.contains(r#""status":"pending""#));
+        assert!(json.contains(r#""established_at":null"#));
+        assert!(json.contains(r#""created_at":"2024-01-01T00:00:00Z""#));
+        assert!(json.contains(r#""unread_count":0"#));
+        assert!(json.contains(r#""is_receiver":true"#));
+    }
+
+    #[test]
+    fn test_connection_entry_without_username() {
+        let entry = ConnectionEntry {
+            id: "conn-1".to_string(),
+            requester_id: "user-1".to_string(),
+            other_user_id: "user-2".to_string(),
+            other_username: None,
+            status: "pending".to_string(),
+            established_at: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            unread_count: 5,
+            is_receiver: true,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        // other_username should be null in JSON, not omitted
+        assert!(json.contains("\"other_username\":null"));
     }
 
     #[test]
@@ -938,6 +1087,119 @@ mod tests {
     }
 
     #[test]
+    fn test_message_entry_json_structure() {
+        // MessageEntry only implements Serialize, not Deserialize.
+        // Verify the JSON output has correct structure by serializing and checking keys.
+        let entry = MessageEntry {
+            id: 42,
+            sender: "user-1".to_string(),
+            sender_username: Some("alice".to_string()),
+            content: "Test message".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: None,
+            status: "sent".to_string(),
+            edited_at: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        // Verify JSON structure
+        assert!(json.contains(r#""id":42"#));
+        assert!(json.contains(r#""sender":"user-1""#));
+        assert!(json.contains(r#""sender_username":"alice""#));
+        assert!(json.contains(r#""content":"Test message""#));
+        assert!(json.contains(r#""is_agent":false"#));
+        assert!(json.contains(r#""status":"sent""#));
+    }
+
+    #[test]
+    fn test_message_entry_with_read_status_json() {
+        // Verify message with read status serializes correctly
+        let entry = MessageEntry {
+            id: 100,
+            sender: "user-2".to_string(),
+            sender_username: Some("bob".to_string()),
+            content: "Read message".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: Some("2024-01-01T00:01:00Z".to_string()),
+            read_by: Some("user-1".to_string()),
+            image_data: None,
+            audio_data: None,
+            status: "read".to_string(),
+            edited_at: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains(r#""id":100"#));
+        assert!(json.contains(r#""read_at":"2024-01-01T00:01:00Z""#));
+        assert!(json.contains(r#""read_by":"user-1""#));
+        assert!(json.contains(r#""status":"read""#));
+    }
+
+    #[test]
+    fn test_message_entry_agent_message() {
+        let entry = MessageEntry {
+            id: 1,
+            sender: "assistant".to_string(),
+            sender_username: None,
+            content: "AI response".to_string(),
+            is_agent: true,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: None,
+            status: "delivered".to_string(),
+            edited_at: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("\"is_agent\":true"));
+        assert!(json.contains("assistant"));
+    }
+
+    #[test]
+    fn test_message_entry_with_image_data() {
+        let entry = MessageEntry {
+            id: 1,
+            sender: "user-1".to_string(),
+            sender_username: Some("alice".to_string()),
+            content: "Check this out!".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: Some("data:image/png;base64,abc123".to_string()),
+            audio_data: None,
+            status: "sent".to_string(),
+            edited_at: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("data:image/png;base64,abc123"));
+    }
+
+    #[test]
+    fn test_message_entry_with_audio_data() {
+        let entry = MessageEntry {
+            id: 1,
+            sender: "user-1".to_string(),
+            sender_username: Some("alice".to_string()),
+            content: "Voice message".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: Some("data:audio/webm;base64,xyz789".to_string()),
+            status: "sent".to_string(),
+            edited_at: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("data:audio/webm;base64,xyz789"));
+    }
+
+    #[test]
     fn test_connect_request_response() {
         let resp = ConnectRequestResponse {
             connection_id: "conn-123".to_string(),
@@ -949,17 +1211,144 @@ mod tests {
     }
 
     #[test]
+    fn test_connect_request_response_json_structure() {
+        // ConnectRequestResponse only implements Serialize, not Deserialize.
+        // Verify the JSON output has correct structure.
+        let resp = ConnectRequestResponse {
+            connection_id: "conn-abc".to_string(),
+            status: "pending".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains(r#""connection_id":"conn-abc""#));
+        assert!(json.contains(r#""status":"pending""#));
+    }
+
+    #[test]
+    fn test_connect_accept_response() {
+        let resp = ConnectAcceptResponse {
+            status: "connected".to_string(),
+            established_at: "2024-01-01T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("connected"));
+        assert!(json.contains("2024-01-01T12:00:00Z"));
+    }
+
+    #[test]
+    fn test_connect_reject_response() {
+        let resp = ConnectRejectResponse {
+            status: "rejected".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("rejected"));
+    }
+
+    #[test]
+    fn test_connect_request_body_deserialization() {
+        let json = r#"{"receiver_id": "user-123", "listing_id": "listing-456"}"#;
+        let body: ConnectRequestBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.receiver_id, "user-123");
+        assert_eq!(body.listing_id, Some("listing-456".to_string()));
+    }
+
+    #[test]
+    fn test_connect_request_body_without_listing() {
+        let json = r#"{"receiver_id": "user-123"}"#;
+        let body: ConnectRequestBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.receiver_id, "user-123");
+        assert!(body.listing_id.is_none());
+    }
+
+    #[test]
+    fn test_connect_accept_body_deserialization() {
+        let json = r#"{"connection_id": "conn-xyz"}"#;
+        let body: ConnectAcceptBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.connection_id, "conn-xyz");
+    }
+
+    #[test]
+    fn test_connect_reject_body_deserialization() {
+        let json = r#"{"connection_id": "conn-xyz"}"#;
+        let body: ConnectRejectBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.connection_id, "conn-xyz");
+    }
+
+    #[test]
+    fn test_send_message_body_deserialization() {
+        let json = r#"{"content": "Hello!", "image_base64": null, "audio_base64": null}"#;
+        let body: SendMessageBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.content, "Hello!");
+        assert!(body.image_base64.is_none());
+        assert!(body.audio_base64.is_none());
+    }
+
+    #[test]
+    fn test_send_message_body_with_media() {
+        let json = r#"{
+            "content": "Image message",
+            "image_base64": "base64data",
+            "audio_base64": null
+        }"#;
+        let body: SendMessageBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.content, "Image message");
+        assert_eq!(body.image_base64, Some("base64data".to_string()));
+    }
+
+    #[test]
     fn test_send_message_response() {
         let resp = SendMessageResponse {
             message_id: 42,
+            sender: "user-1".to_string(),
+            content: "hello".to_string(),
+            conversation_id: "conv-1".to_string(),
             sent_at: "2024-01-01T00:00:00Z".to_string(),
             read_at: Some("2024-01-01T00:00:01Z".to_string()),
+            image_data: None,
+            audio_data: None,
             status: "sent".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("42"));
         assert!(json.contains("2024-01-01T00:00:00Z"));
         assert!(json.contains("\"status\":\"sent\""));
+    }
+
+    #[test]
+    fn test_send_message_response_id_field_renamed() {
+        // SendMessageResponse uses #[serde(rename = "id")] for message_id
+        let resp = SendMessageResponse {
+            message_id: 99,
+            sender: "user-1".to_string(),
+            content: "test".to_string(),
+            conversation_id: "conv-1".to_string(),
+            sent_at: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            image_data: None,
+            audio_data: None,
+            status: "sending".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        // The message_id field should be serialized as "id" due to #[serde(rename = "id")]
+        assert!(json.contains("\"id\":99"));
+    }
+
+    #[test]
+    fn test_send_message_response_timestamp_field_renamed() {
+        // SendMessageResponse uses #[serde(rename = "timestamp")] for sent_at
+        let resp = SendMessageResponse {
+            message_id: 1,
+            sender: "user-1".to_string(),
+            content: "test".to_string(),
+            conversation_id: "conv-1".to_string(),
+            sent_at: "2024-01-01T12:34:56Z".to_string(),
+            read_at: None,
+            image_data: None,
+            audio_data: None,
+            status: "sent".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        // The sent_at field should be serialized as "timestamp"
+        assert!(json.contains("\"timestamp\":\"2024-01-01T12:34:56Z\""));
     }
 
     #[test]
@@ -974,10 +1363,76 @@ mod tests {
     }
 
     #[test]
+    fn test_edit_message_body_deserialization() {
+        let json = r#"{"content": "Updated message"}"#;
+        let body: EditMessageBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.content, "Updated message");
+    }
+
+    #[test]
+    fn test_edit_message_response_serialization() {
+        let resp = EditMessageResponse {
+            message_id: 42,
+            content: "Updated".to_string(),
+            edited_at: "2024-01-01T12:00:00Z".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("42"));
+        assert!(json.contains("Updated"));
+        assert!(json.contains("2024-01-01T12:00:00Z"));
+    }
+
+    #[test]
+    fn test_typing_body_deserialization() {
+        let json = r#"{"conversation_id": "conv-123"}"#;
+        let body: TypingBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.conversation_id, "conv-123");
+    }
+
+    #[test]
+    fn test_message_list_query_defaults() {
+        let query = MessageListQuery {
+            limit: None,
+            offset: None,
+        };
+        assert!(query.limit.is_none());
+        assert!(query.offset.is_none());
+    }
+
+    #[test]
+    fn test_message_list_query_with_pagination() {
+        let query = MessageListQuery {
+            limit: Some(100),
+            offset: Some(50),
+        };
+        assert_eq!(query.limit, Some(100));
+        assert_eq!(query.offset, Some(50));
+    }
+
+    #[test]
     fn test_connection_list_response() {
         let resp = ConnectionListResponse { items: vec![] };
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"items\":[]"));
+    }
+
+    #[test]
+    fn test_connection_list_response_with_items() {
+        let entry = ConnectionEntry {
+            id: "conn-1".to_string(),
+            requester_id: "user-1".to_string(),
+            other_user_id: "user-2".to_string(),
+            other_username: Some("alice".to_string()),
+            status: "connected".to_string(),
+            established_at: Some("2024-01-01T00:00:00Z".to_string()),
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            unread_count: 3,
+            is_receiver: false,
+        };
+        let resp = ConnectionListResponse { items: vec![entry] };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("conn-1"));
+        assert!(json.contains("\"unread_count\":3"));
     }
 
     #[test]
@@ -990,5 +1445,116 @@ mod tests {
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("conn-1"));
         assert!(json.contains("\"messages\":[]"));
+    }
+
+    #[test]
+    fn test_message_list_response_with_total() {
+        let resp = MessageListResponse {
+            conversation_id: "conn-1".to_string(),
+            messages: vec![],
+            total: 100,
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"total\":100"));
+    }
+
+    // ========================================================================
+    // Edge Case Tests
+    // ========================================================================
+
+    #[test]
+    fn test_empty_content_in_send_message_body() {
+        // Empty content should be valid for deserialization
+        // (validation happens in the handler, not at deserialization)
+        let json = r#"{"content": "", "image_base64": null, "audio_base64": null}"#;
+        let body: SendMessageBody = serde_json::from_str(json).unwrap();
+        assert_eq!(body.content, "");
+    }
+
+    #[test]
+    fn test_unicode_content_in_message() {
+        let entry = MessageEntry {
+            id: 1,
+            sender: "user-1".to_string(),
+            sender_username: Some("中文用户".to_string()),
+            content: "你好世界！".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: None,
+            status: "sent".to_string(),
+            edited_at: None,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("你好世界！"));
+        assert!(json.contains("中文用户"));
+    }
+
+    #[test]
+    fn test_emoji_in_message_content() {
+        let entry = MessageEntry {
+            id: 1,
+            sender: "user-1".to_string(),
+            sender_username: None,
+            content: "Hello 👋🎉".to_string(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: None,
+            status: "sent".to_string(),
+            edited_at: None,
+        };
+        // MessageEntry only implements Serialize, not Deserialize.
+        // Verify serialization preserves emoji content.
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("Hello 👋🎉"));
+        assert!(json.contains(r#""content":"Hello 👋🎉""#));
+    }
+
+    #[test]
+    fn test_long_content_in_message() {
+        let long_content = "a".repeat(2000);
+        let entry = MessageEntry {
+            id: 1,
+            sender: "user-1".to_string(),
+            sender_username: None,
+            content: long_content.clone(),
+            is_agent: false,
+            timestamp: "2024-01-01T00:00:00Z".to_string(),
+            read_at: None,
+            read_by: None,
+            image_data: None,
+            audio_data: None,
+            status: "sent".to_string(),
+            edited_at: None,
+        };
+        // MessageEntry only implements Serialize, not Deserialize.
+        // Verify serialization handles long content.
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.len() > 2000);
+        // The content should appear in the JSON
+        assert!(json.contains(&"a".repeat(100)));
+    }
+
+    #[test]
+    fn test_special_characters_in_connection_id() {
+        // UUIDs should be serializable
+        let entry = ConnectionEntry {
+            id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+            requester_id: "user-1".to_string(),
+            other_user_id: "user-2".to_string(),
+            other_username: None,
+            status: "connected".to_string(),
+            established_at: None,
+            created_at: "2024-01-01T00:00:00Z".to_string(),
+            unread_count: 0,
+            is_receiver: false,
+        };
+        let json = serde_json::to_string(&entry).unwrap();
+        assert!(json.contains("550e8400-e29b-41d4-a716-446655440000"));
     }
 }

@@ -9,19 +9,13 @@ use sqlx::Row;
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::utils::cents_to_yuan;
+use crate::repositories::{Listing, UserProfile, UserRepository};
 
 // ---------------------------------------------------------------------------
 // Response types
 // ---------------------------------------------------------------------------
 
-#[derive(Serialize)]
-pub struct UserProfile {
-    pub user_id: String,
-    pub username: String,
-    pub role: String,
-    pub created_at: String,
-}
+// UserProfile is imported from repositories::UserProfile
 
 #[derive(Serialize)]
 pub struct ListingItem {
@@ -60,29 +54,66 @@ pub async fn get_profile(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<UserProfile>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    let row = sqlx::query("SELECT username, role, created_at FROM users WHERE id = $1")
-        .bind(&user_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
+    let profile = state.user_repo.get_profile(&user_id).await?;
 
-    let username: String = row.get("username");
-    let role: String = row.get("role");
-    let created_at: String = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|_| "unknown".to_string());
+    Ok(Json(profile))
+}
 
-    Ok(Json(UserProfile {
-        user_id,
-        username,
-        role,
-        created_at,
-    }))
+/// PATCH /api/user/profile — update current user's profile
+#[derive(Deserialize)]
+pub struct UpdateProfileRequest {
+    pub username: Option<String>,
+    pub email: Option<String>,
+    pub avatar_url: Option<String>,
+}
+
+pub async fn update_profile(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<UpdateProfileRequest>,
+) -> Result<Json<UserProfile>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    if let Some(username) = &body.username {
+        if username.is_empty() {
+            return Err(ApiError::BadRequest("用户名不能为空".to_string()));
+        }
+        if username.len() > 50 {
+            return Err(ApiError::BadRequest("用户名不能超过50个字符".to_string()));
+        }
+        state.user_repo.update_username(&user_id, username).await?;
+    }
+
+    if let Some(email) = &body.email {
+        if email.is_empty() {
+            return Err(ApiError::BadRequest("邮箱不能为空".to_string()));
+        }
+        if !email.ends_with("@email.ncu.edu.cn") {
+            return Err(ApiError::BadRequest("必须使用 @email.ncu.edu.cn 邮箱".to_string()));
+        }
+        if email.len() > 100 {
+            return Err(ApiError::BadRequest("邮箱不能超过100个字符".to_string()));
+        }
+        state.user_repo.update_email(&user_id, email).await?;
+    }
+
+    if let Some(avatar_url) = &body.avatar_url {
+        if avatar_url.is_empty() {
+            return Err(ApiError::BadRequest("头像URL不能为空".to_string()));
+        }
+        // Basic URL validation
+        if !avatar_url.starts_with("http://") && !avatar_url.starts_with("https://") {
+            return Err(ApiError::BadRequest("头像URL格式无效".to_string()));
+        }
+        state.user_repo.update_avatar(&user_id, avatar_url).await?;
+    }
+
+    let profile = state.user_repo.get_profile(&user_id).await?;
+    Ok(Json(profile))
 }
 
 /// GET /api/user/listings?limit=20&offset=0&status=active
@@ -91,7 +122,7 @@ pub async fn get_user_listings(
     headers: HeaderMap,
     Query(params): Query<PaginationParams>,
 ) -> Result<Json<PaginatedListings>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(20).min(100);
@@ -103,80 +134,35 @@ pub async fn get_user_listings(
         ));
     }
 
-    let (count_sql, items_sql) = match status_filter {
-        "all" => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1",
-            r#"
-                SELECT id, title, category, brand, condition_score,
-                       suggested_price_cny, description, status
-                FROM inventory
-                WHERE owner_id = $1
-                ORDER BY created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-        "active" => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'active'",
-            r#"
-                SELECT id, title, category, brand, condition_score,
-                       suggested_price_cny, description, status
-                FROM inventory
-                WHERE owner_id = $1 AND status = 'active'
-                ORDER BY created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-        "sold" => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'sold'",
-            r#"
-                SELECT id, title, category, brand, condition_score,
-                       suggested_price_cny, description, status
-                FROM inventory
-                WHERE owner_id = $1 AND status = 'sold'
-                ORDER BY created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-        "deleted" => (
-            "SELECT COUNT(*) as cnt FROM inventory WHERE owner_id = $1 AND status = 'deleted'",
-            r#"
-                SELECT id, title, category, brand, condition_score,
-                       suggested_price_cny, description, status
-                FROM inventory
-                WHERE owner_id = $1 AND status = 'deleted'
-                ORDER BY created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-        _ => unreachable!(),
-    };
+    let (listings, total) = state
+        .user_repo
+        .get_user_listings(&user_id, limit, offset, status_filter)
+        .await?;
 
-    let count_row = sqlx::query(count_sql)
-        .bind(&user_id)
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    let total: i64 = count_row.try_get("cnt").unwrap_or(0);
-
-    let rows = sqlx::query(items_sql)
-        .bind(&user_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let items: Vec<ListingItem> = rows
-        .iter()
-        .map(|row| ListingItem {
-            id: row.get("id"),
-            title: row.get("title"),
-            category: row.get("category"),
-            brand: row.get("brand"),
-            condition_score: row.get("condition_score"),
-            suggested_price_cny: cents_to_yuan(row.get::<i32, _>("suggested_price_cny") as i64),
-            description: row.try_get("description").ok(),
-            status: row.get("status"),
+    let items: Vec<ListingItem> = listings
+        .into_iter()
+        .map(|listing: Listing| {
+            // Parse defects JSON array into description string
+            let description = listing
+                .defects
+                .and_then(|d| serde_json::from_str::<Vec<String>>(&d).ok())
+                .map(|defects| {
+                    if defects.is_empty() {
+                        String::new()
+                    } else {
+                        defects.join(", ")
+                    }
+                });
+            ListingItem {
+                id: listing.id,
+                title: listing.title,
+                category: listing.category,
+                brand: listing.brand.unwrap_or_default(),
+                condition_score: listing.condition_score,
+                suggested_price_cny: listing.suggested_price_cny as f64 / 100.0,
+                description,
+                status: listing.status,
+            }
         })
         .collect();
 
@@ -225,64 +211,18 @@ pub async fn search_users(
         }
     }
 
-    let (count_row, rows) = if let Some(ref q) = params.q {
-        let pattern = format!("%{}%", q);
-        let count_row = sqlx::query("SELECT COUNT(*) as cnt FROM users WHERE username ILIKE $1")
-            .bind(&pattern)
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-        let rows = sqlx::query(
-            r#"
-            SELECT u.id as user_id, u.username,
-                   COUNT(i.id) as listing_count
-            FROM users u
-            LEFT JOIN inventory i ON u.id = i.owner_id AND i.status = 'active'
-            WHERE u.username ILIKE $1
-            GROUP BY u.id, u.username
-            ORDER BY listing_count DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(&pattern)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-        (count_row, rows)
-    } else {
-        let count_row = sqlx::query("SELECT COUNT(*) as cnt FROM users")
-            .fetch_one(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-        let rows = sqlx::query(
-            r#"
-            SELECT u.id as user_id, u.username,
-                   COUNT(i.id) as listing_count
-            FROM users u
-            LEFT JOIN inventory i ON u.id = i.owner_id AND i.status = 'active'
-            GROUP BY u.id, u.username
-            ORDER BY listing_count DESC
-            LIMIT $1 OFFSET $2
-            "#,
-        )
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-        (count_row, rows)
-    };
+    let query_param = params.q.as_deref();
+    let (profiles_with_counts, total): (Vec<(crate::repositories::UserProfile, i64)>, i64) = state
+        .user_repo
+        .search_users_with_listing_count(query_param, limit, offset)
+        .await?;
 
-    let total: i64 = count_row.try_get("cnt").unwrap_or(0);
-
-    let items: Vec<UserSummary> = rows
-        .iter()
-        .map(|row| UserSummary {
-            user_id: row.get("user_id"),
-            username: row.get("username"),
-            listing_count: row.get("listing_count"),
+    let items: Vec<UserSummary> = profiles_with_counts
+        .into_iter()
+        .map(|(profile, listing_count)| UserSummary {
+            user_id: profile.user_id,
+            username: profile.username,
+            listing_count,
         })
         .collect();
 
@@ -313,7 +253,7 @@ pub async fn get_user_profile(
         "#,
     )
     .bind(&user_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -370,11 +310,13 @@ mod tests {
         let profile = UserProfile {
             user_id: "user-123".to_string(),
             username: "testuser".to_string(),
+            role: "user".to_string(),
             created_at: "2024-01-01T00:00:00Z".to_string(),
         };
         let json = serde_json::to_string(&profile).unwrap();
         assert!(json.contains("user-123"));
         assert!(json.contains("testuser"));
+        assert!(json.contains("\"role\":\"user\""));
     }
 
     #[test]

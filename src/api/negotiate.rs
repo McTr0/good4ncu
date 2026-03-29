@@ -39,7 +39,7 @@ pub async fn list_negotiations(
     headers: HeaderMap,
     Json(_params): Json<ListNegotiationsParams>,
 ) -> Result<Json<ListNegotiationsResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Sellers see: pending (awaiting their response) and expired (auto-cancelled).
@@ -61,7 +61,7 @@ pub async fn list_negotiations(
         "#,
     )
     .bind(&user_id)
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -114,7 +114,7 @@ pub async fn respond_negotiation(
     Path(id): Path<String>,
     Json(payload): Json<NegotiationResponse>,
 ) -> Result<Json<NegotiationResponseResult>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Fetch the request and verify ownership
@@ -122,7 +122,7 @@ pub async fn respond_negotiation(
         "SELECT id, seller_id, listing_id, buyer_id, status FROM hitl_requests WHERE id = $1",
     )
     .bind(&id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -164,14 +164,14 @@ pub async fn respond_negotiation(
     .bind(new_status)
     .bind(counter_price)
     .bind(&id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     // Fetch proposed_price before we emit DealReached (needed for system message + event)
     let hitl_row = sqlx::query("SELECT proposed_price FROM hitl_requests WHERE id = $1")
         .bind(&id)
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     let proposed_price: i64 = hitl_row.get::<i64, _>("proposed_price") as i64;
@@ -197,6 +197,7 @@ pub async fn respond_negotiation(
     };
 
     let _ = state
+        .infra
         .notification
         .create(
             &buyer_id,
@@ -239,7 +240,7 @@ pub async fn respond_negotiation(
     .bind(&conversation_id)
     .bind(&system_content)
     .bind(&listing_id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| tracing::warn!(%e, "Failed to inject system message into chat"));
 
@@ -251,7 +252,7 @@ pub async fn respond_negotiation(
             seller_id: user_id,
             final_price: price,
         };
-        if let Err(e) = state.event_tx.send(chat_event).await {
+        if let Err(e) = state.infra.event_tx.send(chat_event).await {
             tracing::error!(%e, "Failed to emit DealReached after negotiation approval");
         }
     }
@@ -271,7 +272,7 @@ pub async fn accept_counter_negotiation(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<NegotiationResponseResult>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     // Fetch the request and verify the buyer owns it.
@@ -279,7 +280,7 @@ pub async fn accept_counter_negotiation(
         "SELECT id, buyer_id, seller_id, listing_id, status, counter_price FROM hitl_requests WHERE id = $1",
     )
     .bind(&id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -307,7 +308,7 @@ pub async fn accept_counter_negotiation(
            WHERE id = $1"#,
     )
     .bind(&id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -324,12 +325,13 @@ pub async fn accept_counter_negotiation(
     .bind(&conversation_id)
     .bind(&system_content)
     .bind(&listing_id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| tracing::warn!(%e, "Failed to inject system message"));
 
     // Notify seller.
     let _ = state
+        .infra
         .notification
         .create(
             &seller_id,
@@ -348,7 +350,7 @@ pub async fn accept_counter_negotiation(
         seller_id,
         final_price: counter_price,
     };
-    if let Err(e) = state.event_tx.send(chat_event).await {
+    if let Err(e) = state.infra.event_tx.send(chat_event).await {
         tracing::error!(%e, "Failed to emit DealReached after buyer accepted counter");
     }
 
@@ -366,14 +368,14 @@ pub async fn reject_counter_negotiation(
     headers: HeaderMap,
     Path(id): Path<String>,
 ) -> Result<Json<NegotiationResponseResult>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let row = sqlx::query(
         "SELECT id, buyer_id, seller_id, listing_id, status FROM hitl_requests WHERE id = $1",
     )
     .bind(&id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
     .ok_or(ApiError::NotFound)?;
@@ -399,7 +401,7 @@ pub async fn reject_counter_negotiation(
            WHERE id = $1"#,
     )
     .bind(&id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -412,11 +414,12 @@ pub async fn reject_counter_negotiation(
     .bind(&conversation_id)
     .bind(&system_content)
     .bind(&listing_id)
-    .execute(&state.db)
+    .execute(&state.infra.db)
     .await
     .map_err(|e| tracing::warn!(%e, "Failed to inject system message"));
 
     let _ = state
+        .infra
         .notification
         .create(
             &seller_id,

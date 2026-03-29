@@ -27,10 +27,10 @@ pub async fn get_admin_stats(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<AdminStats>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     let total_listings: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM inventory")
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .try_get("cnt")
@@ -38,28 +38,24 @@ pub async fn get_admin_stats(
 
     let active_listings: i64 =
         sqlx::query("SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'")
-            .fetch_one(&state.db)
+            .fetch_one(&state.infra.db)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
             .try_get("cnt")
             .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
 
     let total_users: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM users")
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .try_get("cnt")
         .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
 
-    let total_orders: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM orders")
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .try_get("cnt")
-        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
+    // Orders are disabled - always return 0
+    let total_orders: i64 = 0;
 
     let admin_users: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'")
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .try_get("cnt")
@@ -68,7 +64,7 @@ pub async fn get_admin_stats(
     let category_rows = sqlx::query(
         "SELECT COALESCE(category, 'Other') as category, COUNT(*) as cnt FROM inventory GROUP BY category ORDER BY cnt DESC LIMIT 20",
     )
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -128,7 +124,7 @@ pub async fn get_admin_users(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminUsersResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     let users = sqlx::query(
         r#"
@@ -143,12 +139,12 @@ pub async fn get_admin_users(
     )
     .bind(query.limit())
     .bind(query.offset())
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let total: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM users")
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .try_get("cnt")
@@ -191,19 +187,19 @@ pub async fn get_admin_listings(
     headers: HeaderMap,
     Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminListingsResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     let listings = sqlx::query(
         "SELECT id, title, category, brand, condition_score, suggested_price_cny, description, status, owner_id, created_at FROM inventory ORDER BY created_at DESC LIMIT $1 OFFSET $2"
     )
     .bind(query.limit())
     .bind(query.offset())
-    .fetch_all(&state.db)
+    .fetch_all(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
     let total: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM inventory")
-        .fetch_one(&state.db)
+        .fetch_one(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .try_get("cnt")
@@ -248,59 +244,34 @@ pub struct ListingInfo {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// GET /api/admin/orders - list all orders (requires admin role)
+/// GET /api/admin/orders - list all orders (DISABLED)
+#[allow(dead_code)]
 pub async fn get_admin_orders(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     headers: HeaderMap,
-    Query(query): Query<AdminListQuery>,
+    Query(_query): Query<AdminListQuery>,
 ) -> Result<Json<AdminOrdersResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &_state.secrets.jwt_secret)?;
 
-    let orders = sqlx::query(
-        "SELECT id, listing_id, buyer_id, seller_id, final_price, status, created_at FROM orders ORDER BY created_at DESC LIMIT $1 OFFSET $2"
-    )
-    .bind(query.limit())
-    .bind(query.offset())
-    .fetch_all(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let total: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM orders")
-        .fetch_one(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .try_get("cnt")
-        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
-
-    let orders: Vec<OrderInfo> = orders
-        .iter()
-        .map(|row| OrderInfo {
-            id: row.get("id"),
-            listing_id: row.get("listing_id"),
-            buyer_id: row.get("buyer_id"),
-            seller_id: row.get("seller_id"),
-            final_price: row.get("final_price"),
-            status: row.get("status"),
-            created_at: row.get("created_at"),
-        })
-        .collect();
-
-    Ok(Json(AdminOrdersResponse { total, orders }))
+    tracing::warn!("Admin order list requested but orders are disabled");
+    Err(ApiError::BadRequest("订单功能已禁用".to_string()))
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 pub struct AdminOrdersResponse {
     pub total: i64,
     pub orders: Vec<OrderInfo>,
 }
 
 #[derive(Serialize)]
+#[allow(dead_code)]
 pub struct OrderInfo {
     pub id: String,
     pub listing_id: String,
     pub buyer_id: String,
     pub seller_id: String,
-    pub final_price: i64,
+    pub final_price: f64,
     pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
@@ -311,12 +282,12 @@ pub async fn ban_user(
     headers: HeaderMap,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     // Check target user exists and is not an admin
     let user_row = sqlx::query("SELECT id, role FROM users WHERE id = $1")
         .bind(&target_user_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .ok_or(ApiError::NotFound)?;
@@ -331,7 +302,7 @@ pub async fn ban_user(
         "UPDATE users SET status = 'banned' WHERE id = $1 AND status = 'active' RETURNING id",
     )
     .bind(&target_user_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -340,7 +311,7 @@ pub async fn ban_user(
     }
 
     // Revoke all sessions
-    revoke_all_refresh_tokens(&state.db, &target_user_id)
+    revoke_all_refresh_tokens(&state.infra.db, &target_user_id)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to revoke sessions: {}", e)))?;
 
@@ -359,13 +330,13 @@ pub async fn unban_user(
     headers: HeaderMap,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     let unbanned = sqlx::query(
         "UPDATE users SET status = 'active' WHERE id = $1 AND status = 'banned' RETURNING id",
     )
     .bind(&target_user_id)
-    .fetch_optional(&state.db)
+    .fetch_optional(&state.infra.db)
     .await
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -388,13 +359,13 @@ pub async fn takedown_listing(
     headers: HeaderMap,
     Path(listing_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     // Takedown the listing
     let takedown =
         sqlx::query("UPDATE inventory SET status = 'takedown' WHERE id = $1 RETURNING id")
             .bind(&listing_id)
-            .fetch_optional(&state.db)
+            .fetch_optional(&state.infra.db)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -402,14 +373,7 @@ pub async fn takedown_listing(
         return Err(ApiError::NotFound);
     }
 
-    // Cancel any pending orders for this listing
-    sqlx::query(
-        "UPDATE orders SET status = 'cancelled' WHERE listing_id = $1 AND status = 'pending'",
-    )
-    .bind(&listing_id)
-    .execute(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    // Note: Orders are disabled, so we don't cancel pending orders anymore
 
     tracing::info!(
         admin_id = %admin_id,
@@ -427,12 +391,12 @@ pub async fn impersonate_user(
     headers: HeaderMap,
     Path(target_user_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     // Fetch target user info
     let row = sqlx::query("SELECT username, role, status FROM users WHERE id = $1")
         .bind(&target_user_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
         .ok_or(ApiError::NotFound)?;
@@ -450,7 +414,7 @@ pub async fn impersonate_user(
     let token = generate_access_token(
         &target_user_id,
         &role,
-        &state.jwt_secret,
+        &state.secrets.jwt_secret,
         1800, // 30 min TTL
     )
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to generate token: {}", e)))?;
@@ -472,44 +436,24 @@ pub async fn impersonate_user(
     })))
 }
 
-/// POST /api/admin/orders/:order_id/status - admin force-sets order status
+/// POST /api/admin/orders/:order_id/status - admin force-sets order status (DISABLED)
 #[derive(Deserialize)]
+#[allow(dead_code)]
 pub struct UpdateOrderStatusRequest {
     pub status: String,
 }
 
+#[allow(dead_code)]
 pub async fn update_order_status(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     headers: HeaderMap,
-    Path(order_id): Path<String>,
-    Json(payload): Json<UpdateOrderStatusRequest>,
+    Path(_order_id): Path<String>,
+    Json(_payload): Json<UpdateOrderStatusRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &_state.secrets.jwt_secret)?;
 
-    let valid_statuses = ["pending", "paid", "shipped", "completed", "cancelled"];
-    if !valid_statuses.contains(&payload.status.as_str()) {
-        return Err(ApiError::BadRequest("Invalid status value".to_string()));
-    }
-
-    let updated = sqlx::query("UPDATE orders SET status = $1 WHERE id = $2 RETURNING id")
-        .bind(&payload.status)
-        .bind(&order_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if updated.is_none() {
-        return Err(ApiError::NotFound);
-    }
-
-    tracing::info!(
-        admin_id = %_admin_id,
-        order_id = %order_id,
-        new_status = %payload.status,
-        "Admin updated order status"
-    );
-
-    Ok(Json(serde_json::json!({ "message": "订单状态已更新" })))
+    tracing::warn!("Admin order status update requested but orders are disabled");
+    Err(ApiError::BadRequest("订单功能已禁用".to_string()))
 }
 
 /// POST /api/admin/users/:user_id/role - admin changes user role
@@ -524,7 +468,7 @@ pub async fn update_user_role(
     Path(user_id): Path<String>,
     Json(payload): Json<UpdateRoleRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let admin_id = require_admin(&headers, &state.jwt_secret)?;
+    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
     let valid_roles = ["buyer", "seller"];
     if !valid_roles.contains(&payload.role.as_str()) {
@@ -536,7 +480,7 @@ pub async fn update_user_role(
     let updated = sqlx::query("UPDATE users SET role = $1 WHERE id = $2 RETURNING id")
         .bind(&payload.role)
         .bind(&user_id)
-        .fetch_optional(&state.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 

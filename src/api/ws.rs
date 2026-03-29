@@ -1,6 +1,10 @@
 //! WebSocket real-time notification push.
 //!
-//! Clients connect to GET /ws?token=<jwt>. The JWT is validated server-side
+//! Clients connect to GET /api/ws and authenticate with either:
+//! - Authorization: Bearer <jwt> (preferred for native clients)
+//! - ?token=<jwt> query parameter (fallback for browser WebSocket)
+//!
+//! The JWT is validated server-side
 //! to associate the WebSocket connection with a user_id. When a notification is
 //! created via NotificationService.create(), it is immediately pushed to all
 //! connected clients for that user via the global WS_CONNECTIONS map.
@@ -10,7 +14,7 @@
 //! heartbeated via ping/pong. Dead connections are cleaned up automatically.
 
 use axum::extract::ws::Message as WsMsg;
-use axum::http::StatusCode;
+use axum::http::{HeaderMap, StatusCode};
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     response::IntoResponse,
@@ -69,22 +73,48 @@ pub fn broadcast_to_user(user_id: &str, payload: &str) {
 // Axum handler
 // ---------------------------------------------------------------------------
 
-/// GET /ws?token=<jwt> — WebSocket upgrade endpoint.
-/// Authentication is done via JWT in the query parameter (not headers, since browsers
-/// do not send custom headers during WebSocket handshake).
+/// GET /api/ws — WebSocket upgrade endpoint.
+///
+/// Authentication is extracted from Authorization header first. If missing,
+/// falls back to query parameter `token` for browser compatibility.
 pub async fn ws_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
     axum::extract::Query(params): axum::extract::Query<WsQuery>,
+    headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let token = params.token.as_deref().unwrap_or("");
-    let user_id = match extract_user_id_from_token_str(token, &state.jwt_secret) {
+    let has_auth_header = headers.get("Authorization").is_some();
+    let header_token = headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "));
+    let query_token = params.token.as_deref().filter(|v| !v.is_empty());
+    let token = if has_auth_header {
+        match header_token {
+            Some(t) if !t.is_empty() => t,
+            _ => {
+                tracing::warn!("WS auth failed: malformed Authorization header");
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    axum::response::Json(serde_json::json!({
+                        "error": "Unauthorized"
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    } else {
+        query_token.unwrap_or("")
+    };
+
+    let user_id = match extract_user_id_from_token_str(token, &state.secrets.jwt_secret) {
         Ok(uid) => uid,
-        Err(_) => {
+        Err(err) => {
+            tracing::warn!(err = %err, "WS auth failed");
             return (
                 StatusCode::UNAUTHORIZED,
                 axum::response::Json(serde_json::json!({
-                    "error": "Invalid or missing token"
+                    "error": "Unauthorized"
                 })),
             )
                 .into_response();

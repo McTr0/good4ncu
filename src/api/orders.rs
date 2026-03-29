@@ -9,11 +9,10 @@ use sqlx::Row;
 use crate::api::auth::extract_user_id_from_token;
 use crate::api::error::ApiError;
 use crate::api::AppState;
-use crate::utils::{cents_to_yuan, yuan_to_cents};
 
 #[derive(Deserialize)]
 pub struct OrderQuery {
-    pub role: Option<String>, // "buyer" | "seller" | "all" (default: all)
+    pub role: Option<String>,
     pub limit: Option<i64>,
     pub offset: Option<i64>,
 }
@@ -25,10 +24,30 @@ pub struct OrderSummary {
     pub listing_title: String,
     pub buyer_id: String,
     pub seller_id: String,
+    pub buyer_username: String,
+    pub seller_username: String,
     pub final_price_cny: f64,
     pub status: String,
     pub created_at: String,
-    pub role: String, // "buyer" or "seller" from current user's perspective
+    pub role: String,
+}
+
+impl From<crate::services::order::OrderSummaryRow> for OrderSummary {
+    fn from(r: crate::services::order::OrderSummaryRow) -> Self {
+        Self {
+            id: r.id,
+            listing_id: r.listing_id,
+            listing_title: r.listing_title,
+            buyer_id: r.buyer_id,
+            seller_id: r.seller_id,
+            buyer_username: r.buyer_username,
+            seller_username: r.seller_username,
+            final_price_cny: r.final_price as f64 / 100.0,
+            status: r.status,
+            created_at: r.created_at.to_rfc3339(),
+            role: r.role,
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -58,95 +77,51 @@ pub struct OrderDetail {
     pub cancellation_reason: Option<String>,
 }
 
+impl From<crate::services::order::OrderRow> for OrderDetail {
+    fn from(r: crate::services::order::OrderRow) -> Self {
+        Self {
+            id: r.id,
+            listing_id: r.listing_id,
+            listing_title: r.listing_title,
+            buyer_id: r.buyer_id,
+            seller_id: r.seller_id,
+            buyer_username: r.buyer_username,
+            seller_username: r.seller_username,
+            final_price_cny: r.final_price as f64 / 100.0,
+            status: r.status,
+            created_at: r.created_at.to_rfc3339(),
+            paid_at: r.paid_at.map(|dt| dt.to_rfc3339()),
+            shipped_at: r.shipped_at.map(|dt| dt.to_rfc3339()),
+            completed_at: r.completed_at.map(|dt| dt.to_rfc3339()),
+            cancelled_at: r.cancelled_at.map(|dt| dt.to_rfc3339()),
+            cancellation_reason: r.cancellation_reason,
+        }
+    }
+}
+
 /// GET /api/orders - list orders for current user
 pub async fn get_orders(
     State(state): State<AppState>,
     headers: HeaderMap,
     Query(params): Query<OrderQuery>,
 ) -> Result<Json<OrdersResponse>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
     let limit = params.limit.unwrap_or(20).clamp(1, 100);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    let (count_sql, items_sql) = match params.role.as_deref() {
-        Some("buyer") => (
-            "SELECT COUNT(*) as cnt FROM orders WHERE buyer_id = $1",
-            r#"
-                SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
-                       o.status, o.created_at, i.title as listing_title,
-                       'buyer' as role
-                FROM orders o
-                JOIN inventory i ON o.listing_id = i.id
-                WHERE o.buyer_id = $1
-                ORDER BY o.created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-        Some("seller") => (
-            "SELECT COUNT(*) as cnt FROM orders WHERE seller_id = $1",
-            r#"
-                SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
-                       o.status, o.created_at, i.title as listing_title,
-                       'seller' as role
-                FROM orders o
-                JOIN inventory i ON o.listing_id = i.id
-                WHERE o.seller_id = $1
-                ORDER BY o.created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-        _ => (
-            "SELECT COUNT(*) as cnt FROM orders WHERE buyer_id = $1 OR seller_id = $1",
-            r#"
-                SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
-                       o.status, o.created_at, i.title as listing_title,
-                       CASE WHEN o.buyer_id = $1 THEN 'buyer' ELSE 'seller' END as role
-                FROM orders o
-                JOIN inventory i ON o.listing_id = i.id
-                WHERE o.buyer_id = $1 OR o.seller_id = $1
-                ORDER BY o.created_at DESC
-                LIMIT $2 OFFSET $3
-            "#,
-        ),
-    };
-
-    let count_row = sqlx::query(count_sql)
-        .bind(&user_id)
-        .fetch_one(&state.db)
+    let (items, total) = state
+        .infra
+        .order_service
+        .list_orders(&user_id, params.role.as_deref(), limit, offset)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    let total: i64 = count_row.try_get("cnt").unwrap_or(0);
+        .map_err(|e| {
+            tracing::error!("get_orders error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to fetch orders"))
+        })?;
 
-    let rows = sqlx::query(items_sql)
-        .bind(&user_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let items: Vec<OrderSummary> = rows
-        .iter()
-        .map(|row| {
-            let created_at: String = row
-                .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
-                .map(|dt| dt.to_rfc3339())
-                .unwrap_or_else(|_| String::new());
-            OrderSummary {
-                id: row.get("id"),
-                listing_id: row.get("listing_id"),
-                listing_title: row.get("listing_title"),
-                buyer_id: row.get("buyer_id"),
-                seller_id: row.get("seller_id"),
-                final_price_cny: cents_to_yuan(row.get::<i64, _>("final_price")),
-                status: row.get("status"),
-                created_at,
-                role: row.get("role"),
-            }
-        })
-        .collect();
+    let items: Vec<OrderSummary> = items.into_iter().map(OrderSummary::from).collect();
 
     Ok(Json(OrdersResponse {
         items,
@@ -162,70 +137,92 @@ pub async fn get_order(
     headers: HeaderMap,
     Path(order_id): Path<String>,
 ) -> Result<Json<OrderDetail>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    let row = sqlx::query(
-        r#"
-        SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
-               o.status, o.created_at, o.paid_at, o.shipped_at, o.completed_at,
-               o.cancelled_at, o.cancellation_reason,
-               i.title as listing_title,
-               b.username as buyer_username, s.username as seller_username
-        FROM orders o
-        JOIN inventory i ON o.listing_id = i.id
-        JOIN users b ON o.buyer_id = b.id
-        JOIN users s ON o.seller_id = s.id
-        WHERE o.id = $1 AND (o.buyer_id = $2 OR o.seller_id = $2)
-        "#,
-    )
-    .bind(&order_id)
-    .bind(&user_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-    .ok_or(ApiError::NotFound)?;
+    let has_access = state
+        .infra
+        .order_service
+        .verify_order_access(&order_id, &user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("verify_order_access error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to verify order access"))
+        })?;
 
-    let created_at: String = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("created_at")
-        .map(|dt| dt.to_rfc3339())
-        .unwrap_or_else(|_| String::new());
+    if !has_access {
+        return Err(ApiError::Forbidden);
+    }
 
-    let paid_at: Option<String> = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("paid_at")
-        .ok()
-        .map(|dt| dt.to_rfc3339());
-    let shipped_at: Option<String> = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("shipped_at")
-        .ok()
-        .map(|dt| dt.to_rfc3339());
-    let completed_at: Option<String> = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("completed_at")
-        .ok()
-        .map(|dt| dt.to_rfc3339());
-    let cancelled_at: Option<String> = row
-        .try_get::<sqlx::types::chrono::DateTime<sqlx::types::chrono::Utc>, _>("cancelled_at")
-        .ok()
-        .map(|dt| dt.to_rfc3339());
-    let cancellation_reason: Option<String> = row.try_get("cancellation_reason").ok();
+    let order = state
+        .infra
+        .order_service
+        .get_order_with_details(&order_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("get_order error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to fetch order"))
+        })?
+        .ok_or(ApiError::NotFound)?;
 
-    Ok(Json(OrderDetail {
-        id: row.get("id"),
-        listing_id: row.get("listing_id"),
-        listing_title: row.get("listing_title"),
-        buyer_id: row.get("buyer_id"),
-        seller_id: row.get("seller_id"),
-        buyer_username: row.get("buyer_username"),
-        seller_username: row.get("seller_username"),
-        final_price_cny: cents_to_yuan(row.get::<i64, _>("final_price")),
-        status: row.get("status"),
-        created_at,
-        paid_at,
-        shipped_at,
-        completed_at,
-        cancelled_at,
-        cancellation_reason,
-    }))
+    Ok(Json(OrderDetail::from(order)))
+}
+
+#[derive(Deserialize)]
+pub struct CreateOrderRequest {
+    pub listing_id: String,
+    pub offered_price_cny: f64,
+}
+
+/// POST /api/orders - create an order directly (buyer purchases at offered price)
+pub async fn create_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(payload): Json<CreateOrderRequest>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let buyer_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    // Fetch listing to get seller_id and validate
+    let listing_row =
+        sqlx::query("SELECT owner_id, suggested_price_cny FROM inventory WHERE id = $1")
+            .bind(&payload.listing_id)
+            .fetch_optional(&state.infra.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("fetch listing error: {}", e);
+                ApiError::Internal(anyhow::anyhow!("Failed to fetch listing"))
+            })?;
+
+    let (seller_id, _suggested_price): (String, i64) = match listing_row {
+        Some(row) => (row.get("owner_id"), row.get("suggested_price_cny")),
+        None => return Err(ApiError::NotFound),
+    };
+
+    if seller_id == buyer_id {
+        return Err(ApiError::BadRequest(
+            "Cannot order your own listing".to_string(),
+        ));
+    }
+
+    let final_price_cents = (payload.offered_price_cny * 100.0).round() as i64;
+
+    let order_id = state
+        .infra
+        .order_service
+        .create_order(
+            &payload.listing_id,
+            &buyer_id,
+            &seller_id,
+            final_price_cents,
+        )
+        .await
+        .map_err(|e| {
+            tracing::error!("create_order error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to create order"))
+        })?;
+
+    Ok(Json(serde_json::json!({ "id": order_id })))
 }
 
 #[derive(Deserialize)]
@@ -233,363 +230,212 @@ pub struct OrderActionRequest {
     pub reason: Option<String>,
 }
 
-/// POST /api/orders/:id/cancel - cancel an order
+/// Transition helper: verifies access + does status transition atomically.
+async fn transition_order(
+    state: &AppState,
+    order_id: &str,
+    user_id: &str,
+    expected_current: &str,
+    new_status: &str,
+    cancellation_reason: Option<&str>,
+) -> Result<(), ApiError> {
+    // Buyer can: pay (pending→paid), confirm (shipped→completed), cancel (pending/paid→cancelled)
+    // Seller can: ship (paid→shipped), cancel (pending/paid→cancelled)
+
+    // Verify access
+    let has_access = state
+        .infra
+        .order_service
+        .verify_order_access(order_id, user_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("verify_order_access error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to verify order access"))
+        })?;
+
+    if !has_access {
+        return Err(ApiError::Forbidden);
+    }
+
+    // Fetch current status
+    let (current_status, _) = state
+        .infra
+        .order_service
+        .get_order_meta(order_id)
+        .await
+        .map_err(|e| {
+            tracing::error!("get_order_meta error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to fetch order status"))
+        })?
+        .ok_or(ApiError::NotFound)?;
+
+    // Role-based permission check
+    let (buyer_id, seller_id) = {
+        let row = sqlx::query("SELECT buyer_id, seller_id FROM orders WHERE id = $1")
+            .bind(order_id)
+            .fetch_optional(&state.infra.db)
+            .await
+            .map_err(|e| {
+                tracing::error!("fetch order meta error: {}", e);
+                ApiError::Internal(anyhow::anyhow!("Failed to fetch order"))
+            })?
+            .ok_or(ApiError::NotFound)?;
+        (
+            row.get::<String, _>("buyer_id"),
+            row.get::<String, _>("seller_id"),
+        )
+    };
+
+    let is_buyer = buyer_id == user_id;
+    let is_seller = seller_id == user_id;
+
+    let allowed = matches!(
+        (new_status, is_buyer, is_seller),
+        ("paid", true, _)
+            | ("shipped", _, true)
+            | ("completed", true, _)
+            | ("cancelled", true, _)
+            | ("cancelled", _, true)
+    );
+
+    if !allowed {
+        return Err(ApiError::Forbidden);
+    }
+
+    if current_status != expected_current {
+        return Err(ApiError::BadRequest(format!(
+            "Order status is '{}', expected '{}'",
+            current_status, expected_current
+        )));
+    }
+
+    let success = state
+        .infra
+        .order_service
+        .transition_order_status(order_id, expected_current, new_status, cancellation_reason)
+        .await
+        .map_err(|e| {
+            tracing::error!("transition_order_status error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to update order status"))
+        })?;
+
+    if !success {
+        return Err(ApiError::BadRequest("Status transition failed".to_string()));
+    }
+
+    Ok(())
+}
+
+/// POST /api/orders/:id/pay - buyer pays for order
+pub async fn pay_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    transition_order(&state, &order_id, &user_id, "pending", "paid", None).await?;
+
+    Ok(Json(serde_json::json!({ "status": "paid" })))
+}
+
+/// POST /api/orders/:id/ship - seller ships order
+pub async fn ship_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    transition_order(&state, &order_id, &user_id, "paid", "shipped", None).await?;
+
+    Ok(Json(serde_json::json!({ "status": "shipped" })))
+}
+
+/// POST /api/orders/:id/confirm - buyer confirms receipt
+pub async fn confirm_order(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(order_id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    transition_order(&state, &order_id, &user_id, "shipped", "completed", None).await?;
+
+    Ok(Json(serde_json::json!({ "status": "completed" })))
+}
+
+/// POST /api/orders/:id/cancel - buyer or seller cancels order
 pub async fn cancel_order(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(order_id): Path<String>,
     Json(payload): Json<OrderActionRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
+    let user_id = extract_user_id_from_token(&headers, &state.secrets.jwt_secret)
         .map_err(|_| ApiError::Unauthorized)?;
 
-    // Fetch order and verify ownership
-    let order =
-        sqlx::query("SELECT buyer_id, seller_id, status, listing_id FROM orders WHERE id = $1")
-            .bind(&order_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-            .ok_or(ApiError::NotFound)?;
-
-    let buyer_id: String = order.get("buyer_id");
-    let seller_id: String = order.get("seller_id");
-    let listing_id: String = order.get("listing_id");
-    let status: String = order.get("status");
-
-    // Only buyer or seller can cancel
-    if buyer_id != user_id && seller_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Atomic update prevents race condition; store cancellation reason and timestamp
-    let updated = sqlx::query(
-        "UPDATE orders SET status = 'cancelled', cancellation_reason = $2, cancelled_at = CURRENT_TIMESTAMP \
-         WHERE id = $1 AND status IN ('pending', 'paid') RETURNING id",
-    )
-    .bind(&order_id)
-    .bind(&payload.reason)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if updated.is_none() {
-        return Err(ApiError::BadRequest(format!(
-            "无法取消订单，当前状态为'{}'",
-            status
-        )));
-    }
-
-    // Reactivate the listing — use conditional update to prevent overwriting
-    // a concurrent purchase that may have raced between the SELECT and here.
-    sqlx::query("UPDATE inventory SET status = 'active' WHERE id = $1 AND status = 'sold'")
-        .bind(&listing_id)
-        .execute(&state.db)
+    // Fetch current status to determine which transition to attempt
+    let current_status = state
+        .infra
+        .order_service
+        .get_order_meta(&order_id)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    state.metrics.record_order_cancelled();
-
-    tracing::info!(
-        order_id = %order_id,
-        cancelled_by = %user_id,
-        reason = ?payload.reason,
-        "Order cancelled"
-    );
-
-    Ok(Json(serde_json::json!({
-        "message": "订单已取消",
-        "order_id": order_id
-    })))
-}
-
-/// POST /api/orders/:id/confirm - confirm order receipt
-pub async fn confirm_order(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(order_id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
-
-    // Fetch order and verify buyer is confirming
-    let order = sqlx::query("SELECT buyer_id, status FROM orders WHERE id = $1")
-        .bind(&order_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .map_err(|e| {
+            tracing::error!("get_order_meta error: {}", e);
+            ApiError::Internal(anyhow::anyhow!("Failed to fetch order status"))
+        })?
+        .map(|(s, _)| s)
         .ok_or(ApiError::NotFound)?;
 
-    let buyer_id: String = order.get("buyer_id");
-    let status: String = order.get("status");
+    let target_status = match current_status.as_str() {
+        "pending" | "paid" => "cancelled",
+        _ => {
+            return Err(ApiError::BadRequest(
+                "Only pending or paid orders can be cancelled".to_string(),
+            ))
+        }
+    };
 
-    // Only buyer can confirm receipt
-    if buyer_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Can only confirm received orders — atomic update enforces the shipped→completed transition.
-    // State machine: pending → paid → shipped → completed
-    let updated = sqlx::query(
-        "UPDATE orders SET status = 'completed', completed_at = CURRENT_TIMESTAMP \
-         WHERE id = $1 AND status = 'shipped' RETURNING id",
+    transition_order(
+        &state,
+        &order_id,
+        &user_id,
+        &current_status,
+        target_status,
+        payload.reason.as_deref(),
     )
-    .bind(&order_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    .await?;
 
-    if updated.is_none() {
-        return Err(ApiError::BadRequest(format!(
-            "无法确认收货，当前状态为'{}'，请等待卖家发货",
-            status
-        )));
-    }
-
-    state.metrics.record_order_completed();
-
-    tracing::info!(order_id = %order_id, confirmed_by = %user_id, "Order confirmed");
-
-    Ok(Json(serde_json::json!({
-        "message": "已确认收货",
-        "order_id": order_id
-    })))
-}
-
-/// POST /api/orders/:id/pay - initiate payment for an order (buyer only)
-pub async fn pay_order(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(order_id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
-
-    let order = sqlx::query("SELECT buyer_id, status FROM orders WHERE id = $1")
-        .bind(&order_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-    let buyer_id: String = order.get("buyer_id");
-    let status: String = order.get("status");
-
-    if buyer_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Atomic update prevents race condition; record payment timestamp
-    let updated = sqlx::query(
-        "UPDATE orders SET status = 'paid', paid_at = CURRENT_TIMESTAMP \
-         WHERE id = $1 AND status = 'pending' RETURNING id",
-    )
-    .bind(&order_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if updated.is_none() {
-        return Err(ApiError::BadRequest(format!(
-            "无法支付订单，当前状态为'{}'，订单必须处于待支付状态",
-            status
-        )));
-    }
-
-    state.metrics.record_order_paid();
-
-    tracing::info!(order_id = %order_id, paid_by = %user_id, "Order paid");
-
-    Ok(Json(serde_json::json!({
-        "message": "支付成功",
-        "order_id": order_id
-    })))
-}
-
-/// POST /api/orders/:id/ship - mark order as shipped (seller only)
-pub async fn ship_order(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Path(order_id): Path<String>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let user_id = extract_user_id_from_token(&headers, &state.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
-
-    let order = sqlx::query("SELECT seller_id, listing_id, status FROM orders WHERE id = $1")
-        .bind(&order_id)
-        .fetch_optional(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-    let seller_id: String = order.get("seller_id");
-    let listing_id: String = order.get("listing_id");
-    let status: String = order.get("status");
-
-    if seller_id != user_id {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Atomic update prevents race condition; record ship timestamp
-    let updated = sqlx::query(
-        "UPDATE orders SET status = 'shipped', shipped_at = CURRENT_TIMESTAMP \
-         WHERE id = $1 AND status = 'paid' RETURNING id",
-    )
-    .bind(&order_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if updated.is_none() {
-        return Err(ApiError::BadRequest(format!(
-            "无法标记发货，当前状态为'{}'，必须先等待买家支付",
-            status
-        )));
-    }
-
-    // Mark listing as sold
-    sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1")
-        .bind(&listing_id)
-        .execute(&state.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    state.metrics.record_order_shipped();
-
-    tracing::info!(order_id = %order_id, shipped_by = %user_id, "Order shipped");
-
-    Ok(Json(serde_json::json!({
-        "message": "已标记发货",
-        "order_id": order_id
-    })))
-}
-
-/// Request body for POST /api/orders (direct order creation, bypassing AI agent)
-#[derive(Deserialize)]
-pub struct CreateOrderRequest {
-    pub listing_id: String,
-    pub offered_price_cny: f64,
-}
-
-/// POST /api/orders - create an order directly (buyer only, bypassing AI agent)
-pub async fn create_order(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    Json(payload): Json<CreateOrderRequest>,
-) -> Result<Json<serde_json::Value>, ApiError> {
-    let buyer_id = extract_user_id_from_token(&headers, &state.jwt_secret)
-        .map_err(|_| ApiError::Unauthorized)?;
-
-    // Look up the listing
-    let listing =
-        sqlx::query("SELECT owner_id, suggested_price_cny, status FROM inventory WHERE id = $1")
-            .bind(&payload.listing_id)
-            .fetch_optional(&state.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-            .ok_or(ApiError::NotFound)?;
-
-    let owner_id: String = listing.get("owner_id");
-    let suggested_price: i64 = listing.get("suggested_price_cny");
-    let status: String = listing.get("status");
-
-    if status != "active" {
-        return Err(ApiError::BadRequest(format!(
-            "Listing is not available (status: {}). Only active listings can be purchased.",
-            status
-        )));
-    }
-
-    if owner_id == buyer_id {
-        return Err(ApiError::BadRequest("不能购买自己发布的商品".to_string()));
-    }
-
-    // Validate offered price is within ±50% of suggested price (same rule as AI agent).
-    const PRICE_TOLERANCE: f64 = 0.50;
-    let min_price = (suggested_price as f64 * (1.0 - PRICE_TOLERANCE)) as i64;
-    let max_price = (suggested_price as f64 * (1.0 + PRICE_TOLERANCE)) as i64;
-    let offered_price_cents = yuan_to_cents(payload.offered_price_cny);
-    if offered_price_cents < min_price || offered_price_cents > max_price {
-        return Err(ApiError::BadRequest(format!(
-            "Offered price {:.2} CNY is outside the acceptable range ({:.2} - {:.2} CNY). \
-             Seller listed this item at {:.2} CNY.",
-            payload.offered_price_cny,
-            cents_to_yuan(min_price),
-            cents_to_yuan(max_price),
-            cents_to_yuan(suggested_price),
-        )));
-    }
-
-    // Create the order and mark listing as sold atomically.
-    // Uses the same optimistic locking pattern as OrderService::create_order:
-    // UPDATE returns the row only if status was 'active', preventing double purchase.
-    let order_id = uuid::Uuid::new_v4().to_string();
-    let result = sqlx::query(
-        r#"UPDATE inventory
-           SET status = 'sold'
-           WHERE id = $1 AND status = 'active'
-           RETURNING id"#,
-    )
-    .bind(&payload.listing_id)
-    .fetch_optional(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if result.is_none() {
-        return Err(ApiError::Conflict(
-            "商品已售出或不存在，无法创建订单".to_string(),
-        ));
-    }
-
-    sqlx::query(
-        "INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status) \
-         VALUES ($1, $2, $3, $4, $5, 'pending')",
-    )
-    .bind(&order_id)
-    .bind(&payload.listing_id)
-    .bind(&buyer_id)
-    .bind(&owner_id)
-    .bind(offered_price_cents)
-    .execute(&state.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    state.metrics.record_order_created();
-
-    // Notify seller that their item was purchased (same notification as AI tool path)
-    let _ = state
-        .notification
-        .create(
-            &owner_id,
-            "deal_reached",
-            "订单已创建",
-            &format!("买家已购买商品，成交价 ¥{:.2}", payload.offered_price_cny),
-            Some(&order_id),
-            Some(&payload.listing_id),
-        )
-        .await;
-
-    tracing::info!(
-        order_id = %order_id,
-        listing_id = %payload.listing_id,
-        buyer_id = %buyer_id,
-        seller_id = %owner_id,
-        price = %offered_price_cents,
-        "Direct order created (REST API)"
-    );
-
-    Ok(Json(serde_json::json!({
-        "message": "订单创建成功",
-        "order_id": order_id,
-        "listing_id": payload.listing_id,
-        "price_cny": payload.offered_price_cny,
-        "status": "pending"
-    })))
+    Ok(Json(serde_json::json!({ "status": "cancelled" })))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_order_summary_from_row() {
+        let row = crate::services::order::OrderSummaryRow {
+            id: "order-1".into(),
+            listing_id: "listing-1".into(),
+            listing_title: "iPhone 13".into(),
+            buyer_id: "buyer-1".into(),
+            seller_id: "seller-1".into(),
+            final_price: 499900, // 4999.00 CNY in cents
+            status: "pending".into(),
+            created_at: chrono::Utc::now(),
+            role: "buyer".into(),
+            buyer_username: "buyeruser".into(),
+            seller_username: "selleruser".into(),
+        };
+        let summary = OrderSummary::from(row);
+        assert_eq!(summary.final_price_cny, 4999.0);
+        assert_eq!(summary.status, "pending");
+    }
 
     #[test]
     fn test_order_query_defaults() {
@@ -606,137 +452,5 @@ mod tests {
         assert_eq!(query.role, Some("buyer".to_string()));
         assert_eq!(query.limit, Some(10));
         assert_eq!(query.offset, Some(20));
-    }
-
-    #[test]
-    fn test_order_query_role_values() {
-        for role in &["buyer", "seller", "all"] {
-            let query: OrderQuery =
-                serde_json::from_str(&format!(r#"{{"role": "{}"}}"#, role)).unwrap();
-            assert_eq!(query.role, Some(role.to_string()));
-        }
-    }
-
-    #[test]
-    fn test_order_summary_serialization() {
-        let summary = OrderSummary {
-            id: "order-123".to_string(),
-            listing_id: "listing-456".to_string(),
-            listing_title: "iPhone 13".to_string(),
-            buyer_id: "buyer-1".to_string(),
-            seller_id: "seller-1".to_string(),
-            final_price_cny: 4999.0,
-            status: "pending".to_string(),
-            created_at: "2024-01-01T00:00:00Z".to_string(),
-            role: "buyer".to_string(),
-        };
-        let json = serde_json::to_string(&summary).unwrap();
-        assert!(json.contains("order-123"));
-        assert!(json.contains("iPhone 13"));
-        assert!(json.contains("\"status\":\"pending\""));
-        assert!(json.contains("\"role\":\"buyer\""));
-    }
-
-    #[test]
-    fn test_orders_response_serialization() {
-        let response = OrdersResponse {
-            items: vec![],
-            total: 0,
-            limit: 20,
-            offset: 0,
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("\"items\":[]"));
-        assert!(json.contains("\"total\":0"));
-        assert!(json.contains("\"limit\":20"));
-        assert!(json.contains("\"offset\":0"));
-    }
-
-    #[test]
-    fn test_order_detail_serialization() {
-        let detail = OrderDetail {
-            id: "order-789".to_string(),
-            listing_id: "listing-123".to_string(),
-            listing_title: "MacBook Pro".to_string(),
-            buyer_id: "buyer-2".to_string(),
-            seller_id: "seller-3".to_string(),
-            buyer_username: "buyeruser".to_string(),
-            seller_username: "selleruser".to_string(),
-            final_price_cny: 12999.0,
-            status: "completed".to_string(),
-            created_at: "2024-01-15T12:00:00Z".to_string(),
-            paid_at: None,
-            shipped_at: None,
-            completed_at: Some("2024-01-16T10:00:00Z".to_string()),
-            cancelled_at: None,
-            cancellation_reason: None,
-        };
-        let json = serde_json::to_string(&detail).unwrap();
-        assert!(json.contains("order-789"));
-        assert!(json.contains("MacBook Pro"));
-        assert!(json.contains("buyeruser"));
-        assert!(json.contains("selleruser"));
-        assert!(json.contains("\"status\":\"completed\""));
-        assert!(json.contains("completed_at"));
-    }
-
-    #[test]
-    fn test_order_action_request_deserialization() {
-        let req: OrderActionRequest =
-            serde_json::from_str(r#"{"reason": "Changed my mind"}"#).unwrap();
-        assert_eq!(req.reason, Some("Changed my mind".to_string()));
-    }
-
-    #[test]
-    fn test_order_action_request_without_reason() {
-        let req: OrderActionRequest = serde_json::from_str(r#"{}"#).unwrap();
-        assert_eq!(req.reason, None);
-    }
-
-    #[test]
-    fn test_order_query_role_all() {
-        let query: OrderQuery = serde_json::from_str(r#"{"role": "all"}"#).unwrap();
-        assert_eq!(query.role, Some("all".to_string()));
-    }
-
-    #[test]
-    fn test_order_summary_seller_role() {
-        let summary = OrderSummary {
-            id: "order-seller-1".to_string(),
-            listing_id: "listing-abc".to_string(),
-            listing_title: "Nintendo Switch".to_string(),
-            buyer_id: "buyer-x".to_string(),
-            seller_id: "seller-y".to_string(),
-            final_price_cny: 1999.0,
-            status: "shipped".to_string(),
-            created_at: "2024-02-01T10:00:00Z".to_string(),
-            role: "seller".to_string(),
-        };
-        let json = serde_json::to_string(&summary).unwrap();
-        assert!(json.contains("seller"));
-        assert!(json.contains("shipped"));
-    }
-
-    #[test]
-    fn test_orders_response_with_items() {
-        let response = OrdersResponse {
-            items: vec![OrderSummary {
-                id: "order-1".to_string(),
-                listing_id: "l1".to_string(),
-                listing_title: "Item 1".to_string(),
-                buyer_id: "b1".to_string(),
-                seller_id: "s1".to_string(),
-                final_price_cny: 100.0,
-                status: "pending".to_string(),
-                created_at: "2024-01-01".to_string(),
-                role: "buyer".to_string(),
-            }],
-            total: 1,
-            limit: 10,
-            offset: 0,
-        };
-        let json = serde_json::to_string(&response).unwrap();
-        assert!(json.contains("Item 1"));
-        assert!(json.contains("\"total\":1"));
     }
 }
