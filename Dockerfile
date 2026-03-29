@@ -36,7 +36,7 @@ RUN touch src/main.rs && cargo build --release
 # -----------------------------------------------------------------------------
 # Stage 2: Runtime
 # -----------------------------------------------------------------------------
-FROM gcr.io/distroless/cc-debian12 AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 
 # Set labels
 LABEL org.opencontainers.image.title="Good4NCU Backend"
@@ -46,14 +46,10 @@ LABEL org.opencontainers.image.source="https://github.com/good4ncu/good4ncu"
 # Copy the binary from builder
 COPY --from=builder /app/target/release/good4ncu /usr/local/bin/good4ncu
 
-# Create non-root user for security
-RUN useradd --create-home --shell /bin/bash appuser && \
-    chown -R appuser:appuser /home/appuser
-
-USER appuser
+USER nonroot:nonroot
 
 # Set working directory
-WORKDIR /home/appuser
+WORKDIR /home/nonroot
 
 # Expose port
 EXPOSE 3000
@@ -64,7 +60,7 @@ ENV RUST_BACKTRACE=1
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
+    CMD ["/usr/local/bin/good4ncu", "--health-check"]
 
 # Run the application
-ENTRYPOINT ["good4ncu"]
+ENTRYPOINT ["/usr/local/bin/good4ncu"]

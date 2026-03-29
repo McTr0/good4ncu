@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sqlx::PgPool;
 use std::env;
+use std::time::Duration;
 
 /// Run the CLI with command-line arguments.
 /// Returns true if a CLI command was executed, false otherwise.
@@ -10,6 +11,10 @@ pub async fn run_cli(args: &[String]) -> Result<bool> {
     }
 
     match args[1].as_str() {
+        "--health-check" => {
+            run_health_check().await?;
+            Ok(true)
+        }
         "admin" => {
             if args.len() < 3 {
                 eprintln!("Usage: admin promote <username>");
@@ -33,6 +38,23 @@ pub async fn run_cli(args: &[String]) -> Result<bool> {
             }
         }
         _ => Ok(false),
+    }
+}
+
+async fn run_health_check() -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(3))
+        .build()?;
+
+    let response = client
+        .get("http://127.0.0.1:3000/api/health")
+        .send()
+        .await?;
+
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        anyhow::bail!("Health check failed with status {}", response.status())
     }
 }
 
@@ -60,7 +82,7 @@ mod tests {
     #[test]
     fn test_cli_args_parsing() {
         // Test admin promote parsing (cargo run -- admin promote testuser)
-        let args = vec![
+        let args = [
             "cargo".to_string(),
             "run".to_string(),
             "admin".to_string(),
