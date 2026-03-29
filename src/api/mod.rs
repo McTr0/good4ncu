@@ -191,6 +191,7 @@ pub struct ApiInfrastructure {
     pub ws_connections: Arc<ws::WsConnections>,
     pub metrics: Arc<MetricsService>,
     pub order_service: order::OrderService,
+    pub admin_service: crate::services::admin::AdminService,
 }
 
 /// LLM provider + intent routing.
@@ -214,6 +215,8 @@ pub struct AppState {
     pub chat_repo: repositories::PostgresChatRepository,
     #[allow(dead_code)]
     pub auth_repo: repositories::PostgresAuthRepository,
+    #[allow(dead_code)]
+    pub order_repo: repositories::PostgresOrderRepository,
 }
 
 pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
@@ -250,6 +253,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .route("/api/admin/users", get(admin::get_admin_users))
         .route("/api/admin/listings", get(admin::get_admin_listings))
         .route("/api/admin/orders", get(admin::get_admin_orders))
+        .route("/api/admin/audit-logs", get(admin::get_admin_audit_logs))
         .route("/api/admin/users/{id}/ban", post(admin::ban_user))
         .route("/api/admin/users/{id}/unban", post(admin::unban_user))
         .route(

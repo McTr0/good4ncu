@@ -2,10 +2,12 @@ use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use tokio::sync::mpsc;
 
+pub mod admin;
 pub mod chat;
 pub mod hitl_expire;
 pub mod notification;
 pub mod order;
+pub mod order_worker;
 pub mod product;
 pub mod settlement;
 
@@ -32,6 +34,7 @@ pub enum BusinessEvent {
 
 #[allow(dead_code)]
 pub struct ServiceManager {
+    pub admin: admin::AdminService,
     pub product: product::ProductService,
     pub order: order::OrderService,
     pub chat: chat::ChatService,
@@ -51,6 +54,7 @@ impl ServiceManager {
         let (tx, rx) = mpsc::channel(EVENT_BUS_CAPACITY);
 
         let manager = Self {
+            admin: admin::AdminService::new(db.clone()),
             product: product::ProductService::new(db.clone()),
             order: order::OrderService::new(db.clone()),
             chat: chat::ChatService::new(db.clone()),

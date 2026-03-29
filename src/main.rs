@@ -79,6 +79,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let (services, event_rx) = services::ServiceManager::new(db_pool.clone());
     let event_tx = services.event_tx.clone();
+    let admin_service = services.admin.clone();
 
     let event_loop_handle = tokio::spawn(async move {
         services.run_event_loop(event_rx).await;
@@ -105,11 +106,18 @@ async fn main() -> Result<(), anyhow::Error> {
         Arc::clone(&broadcast),
     ));
 
+    // Order lifecycle worker: 30-min payment timeout, 7-day auto-confirm.
+    let order_worker_handle = tokio::spawn(services::order_worker::run(
+        db_pool.clone(),
+        Arc::clone(&broadcast),
+    ));
+
     // Build repository layer (concrete types - simpler than dyn traits for now)
     let listing_repo = repositories::PostgresListingRepository::new(db_pool.clone());
     let user_repo = repositories::PostgresUserRepository::new(db_pool.clone());
     let chat_repo = repositories::PostgresChatRepository::new(db_pool.clone());
     let auth_repo = repositories::PostgresAuthRepository::new(db_pool.clone());
+    let order_repo = repositories::PostgresOrderRepository::new(db_pool.clone());
 
     let app_state = api::AppState {
         secrets: api::ApiSecrets {
@@ -135,6 +143,7 @@ async fn main() -> Result<(), anyhow::Error> {
             ws_connections: ws_state,
             metrics: Arc::clone(&metrics),
             order_service: services::order::OrderService::new(db_pool.clone()),
+            admin_service,
         },
         agents: api::ApiAgents {
             llm_provider: Arc::clone(&llm_provider),
@@ -144,6 +153,7 @@ async fn main() -> Result<(), anyhow::Error> {
         user_repo,
         chat_repo,
         auth_repo,
+        order_repo,
     };
 
     let app = api::create_router(app_state, &config.cors_origins);
@@ -164,6 +174,7 @@ async fn main() -> Result<(), anyhow::Error> {
     server_handle.abort();
     event_loop_handle.abort();
     hitl_expire_handle.abort();
+    order_worker_handle.abort();
 
     // Gracefully close the DB pool so Postgres can cleanly收回所有连接
     // and flush any pending transaction results in the buffer.
