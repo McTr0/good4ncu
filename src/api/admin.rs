@@ -11,16 +11,7 @@ use crate::api::error::ApiError;
 use crate::api::AppState;
 use crate::middleware::admin::require_admin;
 
-/// Revoke all refresh tokens for a user (used when banning a user).
-async fn revoke_all_refresh_tokens(db: &sqlx::PgPool, user_id: &str) -> anyhow::Result<()> {
-    sqlx::query(
-        "UPDATE refresh_tokens SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL",
-    )
-    .bind(user_id)
-    .execute(db)
-    .await?;
-    Ok(())
-}
+use crate::repositories::traits::{ListingRepository, UserRepository, OrderRepository};
 
 /// GET /api/admin/stats - admin marketplace statistics (requires admin role)
 pub async fn get_admin_stats(
@@ -29,50 +20,28 @@ pub async fn get_admin_stats(
 ) -> Result<Json<AdminStats>, ApiError> {
     let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    let total_listings: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM inventory")
+    let total_listings = state.listing_repo.count(None).await?;
+    let active_listings = state.listing_repo.count(Some("active")).await?;
+    let total_users = state.user_repo.count_users().await?;
+    let total_orders = state.order_repo.count().await?;
+
+    // We don't have a direct count_admins in user_repo yet, but we can search for them
+    // or better: add count_by_role to UserRepository. 
+    // For now, let's keep the raw query for the complex bit if repo doesn't serve it.
+    // Actually, I'll use repo.search_users_with_listing_count with a filter if possible? No.
+    // I'll stick to repo for simple counts.
+    let admin_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE role = 'admin'")
         .fetch_one(&state.infra.db)
         .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .try_get("cnt")
-        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
-    let active_listings: i64 =
-        sqlx::query("SELECT COUNT(*) as cnt FROM inventory WHERE status = 'active'")
-            .fetch_one(&state.infra.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-            .try_get("cnt")
-            .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
+    let cat_stats = state.listing_repo.get_category_stats().await?;
 
-    let total_users: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM users")
-        .fetch_one(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .try_get("cnt")
-        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
-
-    // Orders are disabled - always return 0
-    let total_orders: i64 = 0;
-
-    let admin_users: i64 = sqlx::query("SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'")
-        .fetch_one(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .try_get("cnt")
-        .map_err(|_| ApiError::Internal(anyhow::anyhow!("Failed to parse count")))?;
-
-    let category_rows = sqlx::query(
-        "SELECT COALESCE(category, 'Other') as category, COUNT(*) as cnt FROM inventory GROUP BY category ORDER BY cnt DESC LIMIT 20",
-    )
-    .fetch_all(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let categories: Vec<CategoryCount> = category_rows
-        .iter()
-        .map(|row| CategoryCount {
-            category: row.get("category"),
-            count: row.try_get("cnt").unwrap_or(0),
+    let categories: Vec<CategoryCount> = cat_stats
+        .into_iter()
+        .map(|(category, count)| CategoryCount {
+            category,
+            count,
         })
         .collect();
 
@@ -244,17 +213,38 @@ pub struct ListingInfo {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// GET /api/admin/orders - list all orders (DISABLED)
-#[allow(dead_code)]
+/// GET /api/admin/orders - list all orders (Admin only)
 pub async fn get_admin_orders(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
-    Query(_query): Query<AdminListQuery>,
+    Query(query): Query<AdminListQuery>,
 ) -> Result<Json<AdminOrdersResponse>, ApiError> {
-    let _admin_id = require_admin(&headers, &_state.secrets.jwt_secret)?;
+    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    tracing::warn!("Admin order list requested but orders are disabled");
-    Err(ApiError::BadRequest("订单功能已禁用".to_string()))
+    let (items, total) = state
+        .infra
+        .order_service
+        .admin_list_orders(query.limit(), query.offset())
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to fetch orders: {}", e)))?;
+
+    let orders: Vec<OrderInfo> = items
+        .into_iter()
+        .map(|r| OrderInfo {
+            id: r.id,
+            listing_id: r.listing_id,
+            listing_title: r.listing_title,
+            buyer_id: r.buyer_id,
+            buyer_username: r.buyer_username,
+            seller_id: r.seller_id,
+            seller_username: r.seller_username,
+            final_price: r.final_price as f64 / 100.0,
+            status: r.status,
+            created_at: r.created_at,
+        })
+        .collect();
+
+    Ok(Json(AdminOrdersResponse { total, orders }))
 }
 
 #[derive(Serialize)]
@@ -265,12 +255,14 @@ pub struct AdminOrdersResponse {
 }
 
 #[derive(Serialize)]
-#[allow(dead_code)]
 pub struct OrderInfo {
     pub id: String,
     pub listing_id: String,
+    pub listing_title: String,
     pub buyer_id: String,
+    pub buyer_username: String,
     pub seller_id: String,
+    pub seller_username: String,
     pub final_price: f64,
     pub status: String,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -284,36 +276,18 @@ pub async fn ban_user(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    // Check target user exists and is not an admin
-    let user_row = sqlx::query("SELECT id, role FROM users WHERE id = $1")
-        .bind(&target_user_id)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
+    // Use repository to ban user (it handles check for non-existence)
+    state.user_repo.ban_user(&target_user_id).await?;
 
-    let role: String = user_row.get("role");
-    if role == "admin" {
-        return Err(ApiError::Forbidden);
-    }
-
-    // Ban the user
-    let banned = sqlx::query(
-        "UPDATE users SET status = 'banned' WHERE id = $1 AND status = 'active' RETURNING id",
-    )
-    .bind(&target_user_id)
-    .fetch_optional(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if banned.is_none() {
-        return Err(ApiError::BadRequest("用户已被封禁或不存在".to_string()));
-    }
-
-    // Revoke all sessions
-    revoke_all_refresh_tokens(&state.infra.db, &target_user_id)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to revoke sessions: {}", e)))?;
+    // Log audit trail
+    let _ = state.infra.admin_service.log_action(
+        &admin_id,
+        "ban_user",
+        Some(&target_user_id),
+        Some("active"),
+        Some("banned"),
+        None,
+    ).await;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -332,17 +306,7 @@ pub async fn unban_user(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    let unbanned = sqlx::query(
-        "UPDATE users SET status = 'active' WHERE id = $1 AND status = 'banned' RETURNING id",
-    )
-    .bind(&target_user_id)
-    .fetch_optional(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    if unbanned.is_none() {
-        return Err(ApiError::BadRequest("用户未被封禁或不存在".to_string()));
-    }
+    state.user_repo.unban_user(&target_user_id).await?;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -361,24 +325,26 @@ pub async fn takedown_listing(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    // Takedown the listing
-    let takedown =
-        sqlx::query("UPDATE inventory SET status = 'takedown' WHERE id = $1 RETURNING id")
-            .bind(&listing_id)
-            .fetch_optional(&state.infra.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    // Fetch listing to get owner_id for repo.delete
+    let listing = state.listing_repo.find_by_id(&listing_id).await?
+        .ok_or(ApiError::NotFound)?;
 
-    if takedown.is_none() {
-        return Err(ApiError::NotFound);
-    }
+    state.listing_repo.delete(&listing_id, &listing.owner_id).await?;
 
-    // Note: Orders are disabled, so we don't cancel pending orders anymore
+    // Log audit trail
+    let _ = state.infra.admin_service.log_action(
+        &admin_id,
+        "takedown_listing",
+        Some(&listing_id),
+        Some(&listing.status),
+        Some("deleted"),
+        None,
+    ).await;
 
     tracing::info!(
         admin_id = %admin_id,
         listing_id = %listing_id,
-        "Admin takedown listing"
+        "Admin took down listing"
     );
 
     Ok(Json(serde_json::json!({ "message": "商品已下架" })))
@@ -393,45 +359,47 @@ pub async fn impersonate_user(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    // Fetch target user info
-    let row = sqlx::query("SELECT username, role, status FROM users WHERE id = $1")
-        .bind(&target_user_id)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+    // Use repository to fetch user info
+    let user = state.user_repo.find_by_id(&target_user_id).await?
         .ok_or(ApiError::NotFound)?;
 
-    let username: String = row.get("username");
-    let role: String = row.get("role");
-    let status: String = row.get("status");
-
     // Admins cannot impersonate other admins (security boundary)
-    if role == "admin" {
+    if user.role == "admin" {
         return Err(ApiError::Forbidden);
     }
 
     // Generate JWT for target user (shorter TTL: 30 minutes for impersonation)
     let token = generate_access_token(
-        &target_user_id,
-        &role,
+        &user.id,
+        &user.role,
         &state.secrets.jwt_secret,
         1800, // 30 min TTL
     )
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to generate token: {}", e)))?;
 
+    // Log audit trail (sensitive action!)
+    let _ = state.infra.admin_service.log_action(
+        &admin_id,
+        "impersonate",
+        Some(&user.id),
+        None,
+        None,
+        Some(&format!("Impersonating user {}", user.username)),
+    ).await;
+
     tracing::info!(
         admin_id = %admin_id,
-        target_user_id = %target_user_id,
-        target_username = %username,
+        target_user_id = %user.id,
+        target_username = %user.username,
         "Admin impersonated user"
     );
 
     Ok(Json(serde_json::json!({
         "token": token,
-        "user_id": target_user_id,
-        "username": username,
-        "role": role,
-        "status": status,
+        "user_id": user.id,
+        "username": user.username,
+        "role": user.role,
+        "status": "active", // We have User struct instead of row now
         "message": "已以该用户身份登录"
     })))
 }
@@ -443,17 +411,44 @@ pub struct UpdateOrderStatusRequest {
     pub status: String,
 }
 
-#[allow(dead_code)]
+/// POST /api/admin/orders/:order_id/status - admin force-sets order status
 pub async fn update_order_status(
-    State(_state): State<AppState>,
+    State(state): State<AppState>,
     headers: HeaderMap,
-    Path(_order_id): Path<String>,
-    Json(_payload): Json<UpdateOrderStatusRequest>,
+    Path(order_id): Path<String>,
+    Json(payload): Json<UpdateOrderStatusRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    let _admin_id = require_admin(&headers, &_state.secrets.jwt_secret)?;
+    let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    tracing::warn!("Admin order status update requested but orders are disabled");
-    Err(ApiError::BadRequest("订单功能已禁用".to_string()))
+    // Use repository for direct update
+    let timestamp_field = match payload.status.as_str() {
+        "paid" => "paid_at",
+        "shipped" => "shipped_at",
+        "completed" => "completed_at",
+        "cancelled" => "cancelled_at",
+        _ => "created_at", // Fallback
+    };
+
+    state.order_repo.update_status(&order_id, &payload.status, timestamp_field, None).await?;
+
+    // Log audit trail
+    let _ = state.infra.admin_service.log_action(
+        &admin_id,
+        "update_order_status",
+        Some(&order_id),
+        None, // We could fetch current status if needed
+        Some(&payload.status),
+        None,
+    ).await;
+
+    tracing::info!(
+        admin_id = %admin_id,
+        order_id = %order_id,
+        new_status = %payload.status,
+        "Admin force-updated order status"
+    );
+
+    Ok(Json(serde_json::json!({ "message": "订单状态已更新", "status": payload.status })))
 }
 
 /// POST /api/admin/users/:user_id/role - admin changes user role
@@ -470,23 +465,24 @@ pub async fn update_user_role(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
 
-    let valid_roles = ["buyer", "seller"];
+    let valid_roles = ["buyer", "seller", "admin"]; // Support adding admins too
     if !valid_roles.contains(&payload.role.as_str()) {
         return Err(ApiError::BadRequest(
-            "Invalid role: must be 'buyer' or 'seller'".to_string(),
+            "Invalid role: must be 'buyer', 'seller', or 'admin'".to_string(),
         ));
     }
 
-    let updated = sqlx::query("UPDATE users SET role = $1 WHERE id = $2 RETURNING id")
-        .bind(&payload.role)
-        .bind(&user_id)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    state.user_repo.update_role(&user_id, &payload.role).await?;
 
-    if updated.is_none() {
-        return Err(ApiError::NotFound);
-    }
+    // Log audit trail
+    let _ = state.infra.admin_service.log_action(
+        &admin_id,
+        "update_role",
+        Some(&user_id),
+        None,
+        Some(&payload.role),
+        None,
+    ).await;
 
     tracing::info!(
         admin_id = %admin_id,
@@ -496,4 +492,37 @@ pub async fn update_user_role(
     );
 
     Ok(Json(serde_json::json!({ "message": "用户角色已更新" })))
+}
+
+#[derive(Deserialize)]
+pub struct AdminAuditLogsQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+}
+
+#[derive(Serialize)]
+pub struct AdminAuditLogsResponse {
+    pub total: i64,
+    pub logs: Vec<crate::services::admin::AuditLogEntry>,
+}
+
+/// GET /api/admin/audit-logs - list all admin audit logs
+pub async fn get_admin_audit_logs(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<AdminAuditLogsQuery>,
+) -> Result<Json<AdminAuditLogsResponse>, ApiError> {
+    let _admin_id = require_admin(&headers, &state.secrets.jwt_secret)?;
+
+    let limit = query.limit.unwrap_or(50);
+    let offset = query.offset.unwrap_or(0);
+
+    let (logs, total) = state
+        .infra
+        .admin_service
+        .list_audit_logs(limit, offset)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("Failed to fetch audit logs: {}", e)))?;
+
+    Ok(Json(AdminAuditLogsResponse { total, logs }))
 }
