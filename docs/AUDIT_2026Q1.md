@@ -1,261 +1,114 @@
-# Good4NCU 项目审计报告
+# Good4NCU 项目架构审计与演进规划
 
-> **审计日期**: 2026-03-29  
-> **范围**: 后端 (Rust/Axum) + 移动端 (Flutter) + 数据库 (PostgreSQL/pgvector) + 基础设施  
-> **版本**: v0.1.0
-
----
-
-## 一、项目概况
-
-Good4NCU 是面向中国大学校园的二手交易平台，采用 **AI Agent 驱动** 的架构。
-
-| 层级 | 技术栈 | 规模 |
-|------|--------|------|
-| **后端** | Rust 2021 + Axum 0.8 + sqlx 0.8 | ~17 API 模块, ~11 服务模块 |
-| **移动端** | Flutter (Dart SDK ^3.10.8) | ~17 页面, ~26 服务类 |
-| **数据库** | PostgreSQL + pgvector | 11 迁移文件, 10+ 表 |
-| **AI/LLM** | rig-core 0.33 + Gemini/MiniMax | Intent Router + Marketplace Agent |
-| **部署** | Docker (distroless) | 多阶段构建 |
+> **更新日期**: 2026-03-29 (Phase 1 初期修复后)
+> **受众**: 开发团队与架构师
+> **范围**: 后端 (Rust/Axum) + 移动端 (Flutter) + 数据库 (PostgreSQL/pgvector) + AI 层 + WS 层  
 
 ---
 
-## 二、架构评估
+## 一、项目概况与基线状态
 
-### 2.1 后端架构
+Good4NCU 是面向大学校园的二手交易平台，核心亮点在于**AI Agent 驱动机制**与响应式体验。经过初步治理，目前系统的紧急阻塞漏洞（如 Docker 构建失败、Admin 权限绕开、移动端频繁掉线、单向聊天连接并发错乱）已得到修复。
 
-**优点**:
-- ✅ 分层清晰: API → Service → Repository 三层架构
-- ✅ 事件驱动: 通过 `mpsc` channel 解耦业务事件
-- ✅ 安全头部: 自动注入 HSTS、X-Frame-Options 等
-- ✅ 可观测性: Prometheus 指标 + 结构化 JSON 日志
-- ✅ 配置管理: TOML + 环境变量双层配置，秘钥在 Debug 输出中被脱敏
-
-**问题与隐患**:
-
-| ID | 严重性 | 问题 | 影响 |
-|----|--------|------|------|
-| B-01 | 🔴 严重 | `user_chat.rs` 达 57KB，职责过重 | 维护困难，耦合度极高 |
-| B-02 | 🔴 严重 | `AppState` 为 God Object（含 secrets/infra/agents/5个repo） | 跨模块依赖不清，测试困难 |
-| B-03 | 🟠 高 | Repository 不支持事务传递 (`order.rs:110-111` 注释承认) | 跨表操作的原子性依赖裸 SQL |
-| B-04 | 🟠 高 | `format!` 构建 SQL (`order.rs:295`, `order.rs:202`) | 虽为内部字段名非用户输入，但违背最佳实践 |
-| B-05 | 🟡 中 | `SettlementService` 所有方法返回 `Disabled` | 死代码，增加认知负担 |
-| B-06 | 🟡 中 | `normalize_path` 每次请求编译 3 个 Regex | 性能浪费，应用 `lazy_static` |
-| B-07 | 🟡 中 | Event Bus 阻塞发送 (`handle_chat` 用 `.send().await`) 但 SSE 用 `.try_send()` | 行为不一致，SSE 路径可能丢失事件 |
-
-### 2.2 移动端架构
-
-**优点**:
-- ✅ Shell/Detail 路由分离，底栏行为正确
-- ✅ AI 助手全局化，通过 Provider 管理状态
-- ✅ 自动 Token 刷新 + 401 拦截跳登录
-- ✅ 国际化 (i18n) 完整覆盖
-
-**问题与隐患**:
-
-| ID | 严重性 | 问题 | 影响 |
-|----|--------|------|------|
-| F-01 | 🔴 严重 | `admin_page.dart` 达 39KB，单文件包含整个管理后台 | 编译缓慢，不可维护 |
-| F-02 | 🔴 严重 | `user_chat_page.dart` 达 26KB，混合 UI + 业务逻辑 + WS 处理 | 难以测试和复用 |
-| F-03 | 🟠 高 | 无自动 Token 刷新中间件 — 401 直接跳登录 | 用户体验差，长时间使用后突然被登出 |
-| F-04 | 🟠 高 | `OverlayEntry` 的 Provider 注入是手动传递 | 容易遗漏，已导致过 ProviderNotFound 崩溃 |
-| F-05 | 🟠 高 | GoRouter 的 `redirect` 每次导航都发网络请求 (`_isAdmin()`) | 首次加载慢，网络差时卡死 |
-| F-06 | 🟡 中 | 多个页面直接 `new XxxService()` 创建实例而非注入 | 无法 mock 测试，违背 DI 原则 |
-| F-07 | 🟡 中 | `chat_page.dart` 30KB — AI 聊天页面同样过大 | 同 F-01 |
-| F-08 | 🟡 中 | 无 Flutter 单元测试和 Widget 测试 | 质量无保障 |
-
-### 2.3 数据库架构
-
-**优点**:
-- ✅ 外键约束 + CHECK 约束保证数据完整性
-- ✅ `pgvector` HNSW 索引支持语义搜索
-- ✅ 迁移文件版本化管理
-
-**问题与隐患**:
-
-| ID | 严重性 | 问题 | 影响 |
-|----|--------|------|------|
-| D-01 | 🔴 严重 | 主键为 `TEXT` 类型 (users.id, inventory.id, orders.id) | 索引效率低，JOIN 性能差，无法利用 UUID 原生类型 |
-| D-02 | 🟠 高 | `chat_messages.sender` FK 指向 `users(id)`，但 Agent 消息 sender = `"assistant"` | FK 约束被绕过或 Agent 必须假装是 user 行 |
-| D-03 | 🟠 高 | `documents.embedding` 固定 `vector(768)` 硬编码 | 切换嵌入模型（如 MiniMax 的 1536 维度）需要手动迁移 |
-| D-04 | 🟠 高 | `chat_connections` 唯一约束 `(requester_id, receiver_id)` 单向 | A→B 和 B→A 会创建两个连接 |
-| D-05 | 🟡 中 | `image_data` 和 `audio_data` 存储在 `chat_messages` 表中 (Base64 TEXT) | 表膨胀严重，查询性能下降 |
-| D-06 | 🟡 中 | 无 `updated_at` 列 | 无法追踪记录修改时间 |
-| D-07 | 🟡 中 | `inventory.defects` 为 `TEXT` 存储逗号分隔值 | 无法高效查询和索引 |
+**核心技术栈**:
+- **后端**: Rust 2021 + Axum 0.8 + sqlx 0.8
+- **移动端**: Flutter (Dart SDK ^3.10.8) + Provider + GoRouter
+- **数据层**: PostgreSQL + pgvector
+- **AI/LLM**: rig-core 0.33 + Gemini/MiniMax
 
 ---
 
-## 三、安全审计
+## 二、架构健康度评估
 
-### 3.1 认证与授权
+### 2.1 后端架构 (Axum + sqlx)
+**状态**: `良好，但局部过度耦合`
+- ✅ **优势**: API → Service → Repository 分层清晰；事件驱动 (`mpsc`) 有效解耦了异步任务；统一的安全头部与 JSON 错误遮蔽。
+- ⚠️ **隐患 (巨型类)**: `src/api/user_chat.rs` 高达 1600+ 行（57KB），混杂了模型定义、连接握手、消息处理与 WS 广播，维护认知负担极高。
+- ⚠️ **隐患 (God Object)**: `AppState` 汇聚了所有的 Config, Infra, Secrets, Agent 和所有 Repository，违背接口隔离，导致单元测试 Mock 极其困难。
+- ⚠️ **隐患 (事务控制)**: Repository 层当前设计无法跨方法透传 `&mut Transaction`，跨表业务（如订单状态流转）仍以裸写 SQL 形式硬编码在 Service 中。
 
-| 检查项 | 状态 | 说明 |
+### 2.2 移动端架构 (Flutter)
+**状态**: `良好，UI与状态正在逐步解耦`
+- ✅ **优势**: Shell/Detail 底栏路由成熟；实现了 401 全局拦截并自动静默刷新 Token；Admin 角色判定已引入本地缓存层。
+- ⚠️ **隐患 (巨型页面)**: `admin_page.dart` (近1200行) 和 `user_chat_page.dart` 过于臃肿，UI 树与网络/状态逻辑未分类。
+- ⚠️ **隐患 (依赖注入)**: 多数页面仍有硬编码的 `new XxxService()` 实例创建行为，阻碍了基于接口的 Mock 测试体系。
+- ⚠️ **隐患 (测试覆盖)**: 缺少自动化 Widget 测试与集成测试。
+
+### 2.3 数据库与存储架构
+**状态**: `次优，存有规模化瓶颈`
+- ✅ **优势**: `chat_connections` 现已采用双向 `LEAST/GREATEST` 唯一索引避免分裂；外键体系完整。
+- 🔴 **危急 (性能与成本)**: `chat_messages` 直接以 Base64 TEXT 字段存储图片与音频，表极易膨胀引起全表扫描性能灾难。
+- 🟠 **高 (索引与利用)**: 核心表（如 users, inventory, orders）依然将 UUID 存储为 `TEXT` 类型，而非原生 `UUID`，Join 与内存利用率低。
+- 🟡 **中 (AI 演进)**: `documents.embedding` 维度目前硬编码为 `vector(768)`，若切换千问或 MiniMax 高维模型将面临困难。无通用的 `updated_at` 行级追踪。
+
+### 2.4 AI 子系统与并发链路
+**状态**: `良好，已补齐关键可观测性`
+- ✅ **AI 路由防御**: `IntentRouter` 使用正则表达式+启发式关键词执行 `0 Token` 粗筛与违法词汇阻断，极大地节约了推理成本并避免了 Prompt 注入。
+- ✅ **隔离更新**: `UpdateListingTool` 利用 `spawn_blocking` 在安全的非异步闭包中保持 Postgres 事务锁定，完成 DB Update 与重新 Embedding 的原子化。
+- ✅ **WS 可观测补强（本轮完成）**: 已为 WS 满载丢弃与僵尸连接清理增加指标计数（`ws_messages_dropped_total`, `ws_stale_connections_pruned_total`），并在通道满载时记录告警日志，便于容量治理。
+
+---
+
+## 三、安全与合规审计
+
+| 检查项 | 状态 | 说明与现状 |
 |--------|------|------|
-| 密码哈希 | ✅ | Argon2（阻塞任务中执行） |
-| JWT 签发 | ✅ | 24h 过期 + Refresh Token 轮换 |
-| JWT 密钥长度 | ✅ | 强制 ≥ 32 字符 |
-| 新旧密钥兼容 | ✅ | `jwt_secret_old` 回退机制 |
-| 密码长度限制 | ✅ | 8-128 字符 |
-| 用户名枚举防护 | ✅ | 错误信息不区分"用户不存在"和"密码错误" |
-| Admin 路由保护 | ⚠️ | 仅前端 redirect 检查角色，API 层部分 handler 可能缺少 role 校验 |
-| CSRF 防护 | ❌ | 无 — 依赖 Bearer Token 但 WebSocket 端存在风险 |
-| Rate Limit 绕过 | ⚠️ | 使用 IP 限流，但代理后 IP 可能全部为代理地址 |
-
-### 3.2 数据安全
-
-| 检查项 | 状态 | 说明 |
-|--------|------|------|
-| SQL 注入 | ✅ | 全部使用 sqlx 参数化查询（`format!` 仅用于列名枚举） |
-| XSS | ✅ | API 返回 JSON，X-Content-Type-Options: nosniff |
-| 敏感数据日志泄露 | ✅ | `ApiError::Internal` 隐藏了具体错误，只暴露 "服务器内部错误" |
-| .env 文件保护 | ⚠️ | `.env` 存在于项目根目录 (580 字节)，需确认 `.gitignore` 覆盖 |
-| Base64 媒体存储 | ❌ | 聊天中的图片/音频以 Base64 存入 DB，一旦泄露即获得原始数据 |
-| 内容审核 | ✅ | 文本审核 + 图片审核 worker |
-
-### 3.3 关键安全建议
-
-**S-01 [严重]**: `.env` 文件必须在 `.gitignore` 中，且不应出现在版本库历史中。立即检查 `git log --all --full-history -- .env`。
-
-**S-02 [高]**: Admin API handler（`ban_user`, `update_order_status` 等）应在 handler 层显式验证 `role == "admin"`，不能仅依赖前端路由保护。
-
-**S-03 [高]**: `Dockerfile` 中使用 `distroless` 镜像，但同时有 `RUN useradd` 和 `wget` 健康检查命令 — `distroless` 镜像不包含这些工具。**构建将失败**。
+| **基础密钥** | ✅ 安全 | JWT `secret` 与 `secret_old` 平滑回转；`.env` 未入库；密码 Argon2 处理。 |
+| **API 鉴权** | ✅ 安全 | 管理员路由已全量施加 `require_admin` 严格判定；用户路由有资源归属权判断。 |
+| **SQL/XSS** | ✅ 安全 | 全局 sqlx 参数化查询；移动端和后端没有 HTML 渲染拼接。 |
+| **脱敏策略** | ✅ 合规 | 服务器 500 报错隐藏链路栈；私有商品 Owner 字段对非所有人脱敏。 |
+| **敏感资产** | ❌ 风险 | 聊天图片/语音文件保存在内网数据库，存在极高的库级别内鬼盗取或拖库泄露风险。 |
+| **限流防刷** | ⚠️ 中等 | 当前限流只认 IP，遇反向代理存在全局误杀；针对聊天的限流已切换至 user_key 但未泛化至全局。 |
 
 ---
 
-## 四、性能分析
+## 四、下一阶段演进路线图 (Roadmap)
 
-### 4.1 热点路径
+我们已在 Phase 1 的第一波治理中消除了部署阻断、高危权限和连接分裂等核心问题。接下来的规划主要针对**模块化解耦**与**数据提效**。
 
-| 路径 | 问题 | 建议 |
-|------|------|------|
-| `GoRouter.redirect` | 每次导航均 `await getLoginStatus()` + `await _isAdmin()` (后者发网络请求) | 缓存角色信息到本地，仅登录/刷新时更新 |
-| `normalize_path()` | 每请求编译 3 个正则表达式对象 | 使用 `lazy_static!` 或 `once_cell` 预编译 |
-| `chat_messages` 查询 | Base64 大字段导致全表扫描慢 | 将媒体数据迁移到 OSS，DB 只存 URL |
-| `documents` 向量搜索 | HNSW 索引正确，但表无分区 | 商品量超 10 万后考虑分区 |
-| HTTP Client | `BaseService` 使用 `static final http.Client` 单例 | ✅ 正确，连接复用 |
+### Phase 1 尾声：巨型文件拆解与重构（本周）
+**目标**: 将系统的核心膨胀节点打散，恢复代码可读性与可维能力。
+- [ ] **重构 `user_chat.rs`**：提取为 `src/api/chat/models.rs`, `connection.rs`, `message.rs` 的模块簇。
+- [ ] **重构 `admin_page.dart`**：将各 Tab（统计、订单、审核）拆分至 `lib/pages/admin/tabs/`，抽象 ViewModel。
+- [ ] **重构 `chat_page.dart`**：剥离录音组件与 UI 滚动处理逻辑。
 
-### 4.2 并发与资源
+### Phase 2：数据访问与存储升级（下周）
+**目标**: 解决底层制约上限的严重性能包袱。
+- [🔄] **对象存储剥离（进行中）**：后端已完成 URL 字段兼容迁移第一阶段（`chat_messages.image_url/audio_url`）并保持 base64 兼容读写。
+- [ ] **原生 UUID**：编写 Migration，将所有 `TEXT` ID 在不中断外键约束的前提下原地 ALTER 转型为原生 `UUID`。
+- [ ] **全表时间戳**：注入 `updated_at` PostgreSQL 触发器，协助增量数据同步控制。
+- [ ] **事务传播模式**：改造 Repository 接口特征，使其能够接收 `&mut Transaction` 引用进行复杂跨库事务支持。
 
-| 项目 | 当前值 | 评估 |
-|------|--------|------|
-| DB 连接池 | min=2, max=20 | ✅ 合理 |
-| Event Bus 容量 | 2048 | ✅ 合理 |
-| Rate Limit | 100 req / 60s | ⚠️ 偏松，建议按端点细分 |
-| 请求体限制 | 10 MB | ⚠️ 因 Base64 媒体上传需要，但偏大 |
-| HTTP 超时 (移动端) | GET 15s, POST 30s | ✅ 合理 |
+### Phase 2.1：本轮已完成的数据层兼容改造（新增）
+- [x] `chat_messages` 增加 `image_url/audio_url` 列：`migrations/0013_chat_media_urls.sql`
+- [x] 后端聊天模型与 SQL 双兼容（base64 + URL）：`src/api/user_chat.rs`, `src/services/chat.rs`, `src/repositories/chat_repo.rs`, `src/repositories/traits.rs`, `src/api/mod.rs`, `src/services/mod.rs`
+- [x] 单测回归通过（媒体字段相关）
+- [x] Flutter 聊天渲染已支持 URL 优先、base64 回退：`mobile/lib/models/models.dart`, `mobile/lib/services/chat_service.dart`, `mobile/lib/pages/user_chat_page.dart`, `mobile/lib/pages/chat_page.dart`
 
----
+### Phase 2.2：本轮已完成的体验与可追踪性增强（新增）
+- [x] 聊天语音播放组件（URL 优先 + base64 回退）：`mobile/lib/components/audio_message_player.dart`
+- [x] 双聊天页接入语音播放：`mobile/lib/pages/user_chat_page.dart`, `mobile/lib/pages/chat_page.dart`
+- [x] 数据层 `updated_at` 首批迁移：`migrations/0014_core_updated_at.sql`（users/inventory/orders + 触发器）
 
-## 五、Dockerfile 问题
+### Phase 2.3：本轮已完成的上传链路切流（新增）
+- [x] 新增移动端上传服务（复用 STS + OSS 签名模式）：`mobile/lib/services/upload_service.dart`
+- [x] 私聊语音发送已切换 URL 优先（上传成功发 `audio_url`，失败自动回退 `audio_base64`）：`mobile/lib/pages/user_chat_page.dart`
+- [x] 私聊图片发送已切换 URL 优先（上传成功发 `image_url`，失败自动回退 `image_base64`）：`mobile/lib/pages/user_chat_page.dart`
+- [x] 后端新增媒体路径可观测指标（URL vs base64）：`src/api/metrics.rs`, `src/api/user_chat.rs`
 
-当前 Dockerfile **无法成功构建**。
+### Phase 2.4：本轮已完成的测试环境数据安全修复（新增）
+- [x] 修复“测试误清理生产/开发库”风险：测试基础设施默认改为 `*_test` DB，并强制拦截非测试库清理（除非显式 `ALLOW_NON_TEST_DB_WIPE=1`）
+- [x] 相关代码：`src/test_infra/mod.rs`
 
-```diff
-- FROM gcr.io/distroless/cc-debian12 AS runtime
-+ FROM debian:bookworm-slim AS runtime
+### Phase 3：工程体系现代化与治理（月底）
+**目标**: 提升交付质量流护城河。
+- [ ] **Provider DI 改造**：全面清退 Flutter 层面硬编码的 `new XxxService`，依靠 Provider 容器进行无损注入。
+- [ ] **CI 测试体系**：搭建 GitHub Actions，执行 Docker Multi-stage 编译流体验以及核心 API 断言测试。
+- [ ] **WS 背压补偿（下一步）**：在已有丢弃/清理指标基础上，引入离线消息堆积队列与短轮询降级补偿机制。
 
-- RUN useradd --create-home --shell /bin/bash appuser && \
--     chown -R appuser:appuser /home/appuser
-+ RUN groupadd -r appuser && useradd -r -g appuser -d /home/appuser -s /sbin/nologin appuser && \
-+     mkdir -p /home/appuser && chown -R appuser:appuser /home/appuser
-
-# distroless 没有 shell 也没有 wget
-- HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
--     CMD wget --no-verbose --tries=1 --spider http://localhost:3000/api/health || exit 1
-+ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-+     CMD ["/usr/local/bin/good4ncu", "--health-check"]
-```
-
-**原因**: `distroless` 镜像不包含 shell、`useradd`、`wget` 等工具。要么改用 `debian:slim`，要么移除所有 shell 依赖命令。
-
----
-
-## 六、技术债清单
-
-### 6.1 优先级 P0（阻塞发布）
-
-| # | 项目 | 描述 | 投入估计 |
-|---|------|------|----------|
-| 1 | Dockerfile 修复 | distroless 镜像与 shell 命令冲突 | 0.5h |
-| 2 | Admin API 权限校验 | 所有 admin handler 显式验证 role | 2h |
-| 3 | 移动端自动 Token 刷新 | BaseService 拦截 401，自动 refresh 后重试 | 4h |
-
-### 6.2 优先级 P1（核心体验）
-
-| # | 项目 | 描述 | 投入估计 |
-|---|------|------|----------|
-| 4 | 拆分巨型文件 | `user_chat.rs` (57KB), `admin_page.dart` (39KB), `chat_page.dart` (30KB) | 8h |
-| 5 | 媒体存储上云 | 聊天图片/音频从 Base64 存 DB 改为 OSS URL | 6h |
-| 6 | 数据库主键类型 | `TEXT` → `UUID` 原生类型迁移 | 4h |
-| 7 | 双向聊天连接 | 修复 `chat_connections` 唯一约束为双向 | 2h |
-| 8 | GoRouter redirect 优化 | 缓存用户角色，避免每次导航发网络请求 | 2h |
-
-### 6.3 优先级 P2（工程质量）
-
-| # | 项目 | 描述 | 投入估计 |
-|---|------|------|----------|
-| 9 | Flutter 测试覆盖 | Widget 测试 + Service Mock 测试 | 12h |
-| 10 | 正则表达式预编译 | `normalize_path` 使用 `lazy_static` | 0.5h |
-| 11 | 依赖注入改造 | 页面不再 `new Service()`，改为 Provider 注入 | 6h |
-| 12 | Repository 事务支持 | 允许 Repository 方法接受 `&mut Transaction` 参数 | 4h |
-| 13 | Event Bus 一致性 | 统一 `send` / `try_send` 策略，增加失败补偿 | 2h |
-| 14 | 移除死代码 | `SettlementService` 空壳、`user_center_page.dart` 等 | 1h |
-| 15 | `updated_at` 列 | 所有核心表添加 `updated_at` 触发器 | 2h |
-
----
-
-## 七、演进路线图
-
-### Phase 1: 稳定化（当前 → 2 周内）
-
-**目标**: 消除所有 P0 阻塞项，修复已知崩溃路径。
-
-- [x] Flutter 布局崩溃修复 (StackFit.expand + Positioned guard)
-- [x] ProviderNotFoundException 修复 (OverlayEntry provider injection)
-- [ ] Dockerfile 修复 (distroless → debian:slim)
-- [ ] Admin API 权限校验
-- [ ] 自动 Token 刷新
-- [ ] 巨型文件拆分
-- [ ] GoRouter 优化
-- [ ] 双向聊天连接修复
-
-### Phase 2: 数据层升级（2-4 周）
-
-- [ ] 主键类型迁移 `TEXT → UUID`
-- [ ] 聊天媒体从 DB 迁移到 OSS（仅存 URL）
-- [ ] 添加 `updated_at` 列 + 审计触发器
-- [ ] `documents.embedding` 维度参数化
-- [ ] `inventory.defects` 改为 `TEXT[]` 数组类型
-
-### Phase 3: 架构现代化（1-2 月）
-
-- [ ] **后端**: Repository 支持事务传递，AppState 拆分为 Sub-State
-- [ ] **移动端**: Provider 依赖注入全覆盖，Widget 测试 ≥ 60% 覆盖率
-- [ ] **CI/CD**: GitHub Actions 自动化测试 + Docker 构建 + 数据库迁移校验
-- [ ] **可观测性**: OpenTelemetry Tracing 替代纯日志
-- [ ] **支付集成**: SettlementService 对接真实支付网关
-
-### Phase 4: 规模化准备（3-6 月）
-
-- [ ] Redis 分布式 Rate Limiter（替代进程内 Moka 缓存）
-- [ ] 读写分离：向量搜索走只读副本
-- [ ] 用户画像系统：基于浏览/购买行为的推荐
-- [ ] 消息推送：APNs / FCM 集成
-- [ ] 邮箱验证流程完整实现
-
----
-
-## 八、正面评价
-
-尽管存在技术债，项目整体架构设计是**合理且有远见的**：
-
-1. **AI-first 设计**: Intent Router → LLM Agent 的分层模式有效控制了 LLM Token 消耗
-2. **安全意识强**: Argon2 哈希、JWT 密钥轮换、结构化错误消息（不泄露内部信息）
-3. **事件驱动**: `mpsc` event bus 为后续微服务拆分留足空间
-4. **国际化完备**: 中英双语支持，l10n 覆盖完整
-5. **配置层优秀**: TOML + env vars 双层优先级，Debug 输出自动脱敏
-6. **内容审核前置**: 文本 + 图片审核在消息持久化前执行
-
----
-
-> 本审计基于源码静态分析，未进行运行时渗透测试或压力测试。建议在 Phase 1 完成后进行专项安全评估。
+### Phase 3.1：本轮已完成的并发链路治理（新增）
+- [x] WS 满载丢弃指标：`src/api/metrics.rs`
+- [x] WS 僵尸连接清理指标：`src/api/metrics.rs`
+- [x] WS 广播满载告警：`src/api/ws.rs`
+- [x] 指标全局注册与注入：`src/main.rs`
+- [ ] **动态 Embedding**：增加 `vector` 维度启动化配置系统，以便自由切换各类规模的私有 LLM 服务引擎。
