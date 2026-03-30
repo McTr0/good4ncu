@@ -50,49 +50,75 @@ async fn process_payment_timeouts(
         let listing_id: String = row.get("listing_id");
         let buyer_id: String = row.get("buyer_id");
 
-        let mut tx = db.begin().await?;
+        let process_result: anyhow::Result<Option<bool>> = async {
+            let mut tx = db.begin().await?;
 
-        // 1. Update order status
-        let order_update = sqlx::query(
-            "UPDATE orders
-             SET status = 'cancelled', cancellation_reason = '超时未支付', cancelled_at = NOW()
-             WHERE id = $1 AND status = 'pending' AND created_at < NOW() - INTERVAL '30 minutes'",
-        )
-        .bind(&order_id)
-        .execute(&mut *tx)
-        .await?;
+            // 1. Update order status first to keep lock order consistent with other flows.
+            let order_update = sqlx::query(
+                "UPDATE orders
+                 SET status = 'cancelled', cancellation_reason = '超时未支付', cancelled_at = NOW()
+                 WHERE id = $1 AND status = 'pending' AND created_at < NOW() - INTERVAL '30 minutes'",
+            )
+            .bind(&order_id)
+            .execute(&mut *tx)
+            .await?;
 
-        if order_update.rows_affected() == 0 {
-            tx.rollback().await?;
-            continue;
+            if order_update.rows_affected() == 0 {
+                return Ok(None);
+            }
+
+            // 2. Serialize relist decision per listing across workers.
+            let listing_lock = sqlx::query("SELECT 1 FROM inventory WHERE id = $1 FOR UPDATE")
+                .bind(&listing_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            if listing_lock.is_none() {
+                return Ok(None);
+            }
+
+            let relist_update = sqlx::query(
+                r#"UPDATE inventory
+                                 SET status = 'active'
+                                 WHERE id = $1
+                                     AND status = 'sold'
+                                     AND NOT EXISTS (
+                                             SELECT 1
+                                             FROM orders o
+                                             WHERE o.listing_id = $1
+                                                 AND o.status IN ('pending', 'paid', 'shipped')
+                                     )"#,
+            )
+            .bind(&listing_id)
+            .execute(&mut *tx)
+            .await?;
+
+            let relisted = relist_update.rows_affected() > 0;
+            if !relisted {
+                tracing::info!(
+                    %order_id,
+                    %listing_id,
+                    "Cancelled timeout order without relisting due to listing state or another active order"
+                );
+            }
+
+            tx.commit().await?;
+            Ok(Some(relisted))
         }
+        .await;
 
-        // 2. Re-list the item (crucial!)
-        let relist_update = sqlx::query(
-            r#"UPDATE inventory
-                             SET status = 'active'
-                             WHERE id = $1
-                                 AND status = 'sold'
-                                 AND NOT EXISTS (
-                                         SELECT 1
-                                         FROM orders o
-                                         WHERE o.listing_id = $1
-                                             AND o.status IN ('pending', 'paid', 'shipped')
-                                 )"#,
-        )
-        .bind(&listing_id)
-        .execute(&mut *tx)
-        .await?;
-
-        let relisted = relist_update.rows_affected() > 0;
-        if !relisted {
-            tracing::info!(
-                %order_id,
-                %listing_id,
-                "Cancelled timeout order without relisting due to listing state or another active order"
-            );
-        }
-        tx.commit().await?;
+        let relisted = match process_result {
+            Ok(Some(relisted)) => relisted,
+            Ok(None) => continue,
+            Err(error) => {
+                tracing::warn!(
+                    %order_id,
+                    %listing_id,
+                    %error,
+                    "Failed to process timeout order"
+                );
+                continue;
+            }
+        };
 
         // 3. Notify buyer
         let notif_id = Uuid::new_v4().to_string();
