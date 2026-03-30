@@ -324,7 +324,9 @@ impl ListingRepository for PostgresListingRepository {
             q = q.bind((v * 100.0).round() as i32);
         }
         if let Some(ref v) = input.defects {
-            q = q.bind(serde_json::to_string(v).unwrap());
+            let defects_json = serde_json::to_string(v)
+                .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
+            q = q.bind(defects_json);
         }
         if let Some(ref v) = input.description {
             q = q.bind(v);

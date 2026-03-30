@@ -236,7 +236,7 @@ mod unit_tests {
         };
         let cloned = entry.clone();
         assert_eq!(cloned.content, "Hello");
-        assert_eq!(cloned.is_agent, false);
+        assert!(!cloned.is_agent);
     }
 
     #[test]
@@ -320,8 +320,7 @@ mod unit_tests {
 
     #[test]
     fn test_conversation_history_limit_constant() {
-        // Verify the constant is a reasonable size for context window
-        assert!(CONVERSATION_HISTORY_LIMIT >= 1);
-        assert!(CONVERSATION_HISTORY_LIMIT <= 100);
+        let limit = CONVERSATION_HISTORY_LIMIT;
+        assert!((1..=100).contains(&limit));
     }
 }

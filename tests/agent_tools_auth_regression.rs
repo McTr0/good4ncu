@@ -101,7 +101,7 @@ async fn test_update_listing_tool_denies_cross_owner_mutation() {
             .fetch_one(&pool)
             .await
             .unwrap();
-        let price: i32 = row.get("suggested_price_cny");
+        let price: i64 = row.get("suggested_price_cny");
         assert_eq!(price, 10000);
     })
     .await;

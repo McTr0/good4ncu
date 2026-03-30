@@ -60,7 +60,8 @@ async fn run_health_check() -> Result<()> {
 
 /// Promote a user to admin role.
 async fn run_admin_promote(username: &str) -> Result<()> {
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url =
+        env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
 
     let pool = PgPool::connect(&database_url).await?;
 

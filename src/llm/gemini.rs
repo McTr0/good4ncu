@@ -28,9 +28,7 @@ pub struct GeminiProvider {
 
 impl GeminiProvider {
     pub fn new(api_key: &str, embedding_dim: usize) -> anyhow::Result<Self> {
-        let reqwest_client = reqwest::Client::builder()
-            .build()
-            .expect("Failed to build reqwest client");
+        let reqwest_client = reqwest::Client::builder().build()?;
 
         let client = gemini::Client::builder()
             .api_key(api_key)

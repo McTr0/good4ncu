@@ -43,9 +43,7 @@ impl MiniMaxProvider {
             .base_url(base_url)
             .build()?;
 
-        let reqwest_client = reqwest::Client::builder()
-            .build()
-            .expect("Failed to build reqwest client");
+        let reqwest_client = reqwest::Client::builder().build()?;
         let embedding_client = gemini::Client::builder()
             .api_key(gemini_api_key)
             .http_client(reqwest_client)

@@ -398,7 +398,7 @@ mod tests {
         // Should fail immediately since no CLI channel is configured
         let _request = HitlRequest {
             id: "test-1".to_string(),
-            proposed_price: 100_00, // 100.00 CNY
+            proposed_price: 10_000, // 100.00 CNY
             reason: "Test".to_string(),
             status: "pending".to_string(),
             counter_price: None,
@@ -411,7 +411,7 @@ mod tests {
     fn test_hitl_request_structure() {
         let req = HitlRequest {
             id: "req-123".to_string(),
-            proposed_price: 500_00,
+            proposed_price: 50_000,
             reason: "Price is too high".to_string(),
             status: "pending".to_string(),
             counter_price: None,
@@ -422,10 +422,10 @@ mod tests {
 
     #[test]
     fn test_hitl_result_countered() {
-        let result = HitlResult::Countered(350_00);
+        let result = HitlResult::Countered(35_000);
         // Verify the enum variant carries the correct price
         match result {
-            HitlResult::Countered(price) => assert_eq!(price, 350_00),
+            HitlResult::Countered(price) => assert_eq!(price, 35_000),
             _ => panic!("Expected Countered variant"),
         }
     }
@@ -537,7 +537,7 @@ mod tests {
     fn test_hitl_request_serialization() {
         let request = HitlRequest {
             id: "req-abc".to_string(),
-            proposed_price: 500_00,
+            proposed_price: 50_000,
             reason: "Test reason".to_string(),
             status: "pending".to_string(),
             counter_price: None,
