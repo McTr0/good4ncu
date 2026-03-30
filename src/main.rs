@@ -44,6 +44,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Metrics service — shared across all request handlers
     let metrics = Arc::new(api::metrics::MetricsService::new());
+    let _ = api::metrics::GLOBAL_METRICS.set(Arc::clone(&metrics));
     tracing::info!("Metrics service initialized");
 
     // Single PgPool for relational + vector data (pgvector lives in the same Postgres instance)

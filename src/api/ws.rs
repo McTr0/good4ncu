@@ -46,19 +46,41 @@ pub fn new_ws_state() -> Arc<WsConnections> {
 /// Global broadcast — pushes a JSON payload to ALL active connections for a user.
 /// Automatically removes dead senders (channel closed).
 pub fn broadcast_to_user(user_id: &str, payload: &str) {
+    let metrics = crate::api::metrics::GLOBAL_METRICS.get().cloned();
+
     if let Some(connections) = WS_CONNECTIONS.get(user_id) {
         let mut dead_indices = vec![];
         for (i, tx) in connections.value().iter().enumerate() {
-            if tx.try_send(Message::Text(payload.into())).is_err() {
-                dead_indices.push(i);
+            match tx.try_send(Message::Text(payload.into())) {
+                Ok(_) => {}
+                Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                    dead_indices.push(i);
+                    if let Some(metrics) = metrics.as_ref() {
+                        metrics.record_ws_message_dropped();
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                    if let Some(metrics) = metrics.as_ref() {
+                        metrics.record_ws_message_dropped();
+                    }
+                    tracing::warn!(
+                        user_id = %user_id,
+                        connection_index = i,
+                        "WS outbound buffer full; dropping message"
+                    );
+                }
             }
         }
         drop(connections);
         // Remove dead connections (reverse order to preserve indices).
         if !dead_indices.is_empty() {
+            let pruned = dead_indices.len();
             if let Some(mut connections) = WS_CONNECTIONS.get_mut(user_id) {
                 for i in dead_indices.into_iter().rev() {
                     connections.value_mut().remove(i);
+                }
+                if let Some(metrics) = metrics.as_ref() {
+                    metrics.record_ws_stale_pruned(pruned);
                 }
                 if connections.value().is_empty() {
                     drop(connections);
@@ -218,7 +240,11 @@ async fn handle_socket(socket: WebSocket, user_id: String) {
             Some(Ok(WsMsg::Ping(data))) => {
                 // Relay ping data to sender task for pong response.
                 // If the channel is full (sender stalled), just drop and continue.
-                let _ = ping_tx.try_send(data.to_vec());
+                if ping_tx.try_send(data.to_vec()).is_err() {
+                    if let Some(metrics) = crate::api::metrics::GLOBAL_METRICS.get() {
+                        metrics.record_ws_message_dropped();
+                    }
+                }
             }
             Some(Ok(_)) => {} // Ignore other client→server messages.
             Some(Err(e)) => {
@@ -230,7 +256,14 @@ async fn handle_socket(socket: WebSocket, user_id: String) {
 
     // Socket closed. Clean up: remove this specific tx from the user's connection list.
     if let Some(mut connections) = WS_CONNECTIONS.get_mut(&user_id) {
+        let before = connections.value().len();
         connections.value_mut().retain(|t| !t.is_closed());
+        let pruned = before.saturating_sub(connections.value().len());
+        if pruned > 0 {
+            if let Some(metrics) = crate::api::metrics::GLOBAL_METRICS.get() {
+                metrics.record_ws_stale_pruned(pruned);
+            }
+        }
         if connections.value().is_empty() {
             drop(connections);
             WS_CONNECTIONS.remove(&user_id);
