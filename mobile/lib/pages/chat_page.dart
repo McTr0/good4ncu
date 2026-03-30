@@ -11,6 +11,7 @@ import '../services/api_service.dart';
 import '../services/sse_service.dart';
 import '../services/ws_service.dart';
 import '../models/models.dart';
+import '../components/audio_message_player.dart';
 
 /// Negotiation action card shown in the chat for HITL requests.
 class NegotiationCard extends StatelessWidget {
@@ -102,7 +103,10 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
   Future<void> _approve() async {
     setState(() => _isLoading = true);
     try {
-      await widget.apiService.respondNegotiation(widget.request.id, action: 'approve');
+      await widget.apiService.respondNegotiation(
+        widget.request.id,
+        action: 'approve',
+      );
       widget.onUpdated();
     } catch (e) {
       _showError('操作失败: $e');
@@ -114,7 +118,10 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
   Future<void> _reject() async {
     setState(() => _isLoading = true);
     try {
-      await widget.apiService.respondNegotiation(widget.request.id, action: 'reject');
+      await widget.apiService.respondNegotiation(
+        widget.request.id,
+        action: 'reject',
+      );
       widget.onUpdated();
     } catch (e) {
       _showError('操作失败: $e');
@@ -165,7 +172,10 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
                 const SizedBox(width: 8),
                 Text(
                   l.buyerInitiatedNegotiation,
-                  style: TextStyle(fontWeight: FontWeight.bold, color: Colors.grey[800]),
+                  style: TextStyle(
+                    fontWeight: FontWeight.bold,
+                    color: Colors.grey[800],
+                  ),
                 ),
               ],
             ),
@@ -201,7 +211,9 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
                       onPressed: _reject,
                       icon: const Icon(Icons.close, size: 16),
                       label: const Text('拒绝'),
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                      ),
                     ),
                   ),
                 ],
@@ -212,15 +224,22 @@ class _SellerPendingCardState extends State<_SellerPendingCard> {
                   Expanded(
                     child: TextField(
                       controller: _counterController,
-                      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                      keyboardType: const TextInputType.numberWithOptions(
+                        decimal: true,
+                      ),
                       inputFormatters: [
-                        FilteringTextInputFormatter.allow(RegExp(r'^\d*\.?\d{0,2}')),
+                        FilteringTextInputFormatter.allow(
+                          RegExp(r'^\d*\.?\d{0,2}'),
+                        ),
                       ],
                       decoration: const InputDecoration(
                         hintText: '还价金额',
                         isDense: true,
                         border: OutlineInputBorder(),
-                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
                       ),
                     ),
                   ),
@@ -347,7 +366,9 @@ class _BuyerCounteredCardState extends State<_BuyerCounteredCard> {
                       onPressed: _reject,
                       icon: const Icon(Icons.close, size: 16),
                       label: const Text('拒绝'),
-                      style: OutlinedButton.styleFrom(foregroundColor: Colors.red),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.red,
+                      ),
                     ),
                   ),
                 ],
@@ -385,7 +406,10 @@ class _StatusBadge extends StatelessWidget {
         children: [
           Icon(icon, color: color, size: 16),
           const SizedBox(width: 6),
-          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w500)),
+          Text(
+            label,
+            style: TextStyle(color: color, fontWeight: FontWeight.w500),
+          ),
         ],
       ),
     );
@@ -428,11 +452,13 @@ class _ChatPageState extends State<ChatPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final l = AppLocalizations.of(context)!;
       setState(() {
-        _messages.add(ChatMessage(
-          sender: 'bot',
-          content: l.aiGreeting,
-          timestamp: DateTime.now(),
-        ));
+        _messages.add(
+          ChatMessage(
+            sender: 'bot',
+            content: l.aiGreeting,
+            timestamp: DateTime.now(),
+          ),
+        );
       });
     });
   }
@@ -473,10 +499,7 @@ class _ChatPageState extends State<ChatPage> {
         content: Text('${notif.title}: ${notif.body}'),
         duration: const Duration(seconds: 4),
         action: notif.negotiationId != null
-            ? SnackBarAction(
-                label: '查看',
-                onPressed: _loadNegotiations,
-              )
+            ? SnackBarAction(label: '查看', onPressed: _loadNegotiations)
             : null,
       ),
     );
@@ -527,8 +550,12 @@ class _ChatPageState extends State<ChatPage> {
     } else {
       if (await _audioRecorder.hasPermission()) {
         final directory = await getTemporaryDirectory();
-        final path = '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.ogg';
-        await _audioRecorder.start(const RecordConfig(encoder: AudioEncoder.opus), path: path);
+        final path =
+            '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.ogg';
+        await _audioRecorder.start(
+          const RecordConfig(encoder: AudioEncoder.opus),
+          path: path,
+        );
         setState(() {
           _isRecording = true;
           _recordingSeconds = 0;
@@ -548,7 +575,11 @@ class _ChatPageState extends State<ChatPage> {
   /// Send a message using SSE streaming (token-by-token render).
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty && _selectedImageBase64 == null && _selectedAudioBase64 == null) return;
+    if (text.isEmpty &&
+        _selectedImageBase64 == null &&
+        _selectedAudioBase64 == null) {
+      return;
+    }
 
     final userMsg = ChatMessage(
       sender: 'user',
@@ -568,12 +599,14 @@ class _ChatPageState extends State<ChatPage> {
 
     // Append a placeholder streaming message.
     final botMsgIndex = _messages.length;
-    _messages.add(ChatMessage(
-      sender: 'bot',
-      content: '',
-      timestamp: DateTime.now(),
-      isPartial: true,
-    ));
+    _messages.add(
+      ChatMessage(
+        sender: 'bot',
+        content: '',
+        timestamp: DateTime.now(),
+        isPartial: true,
+      ),
+    );
 
     try {
       // Connect SSE stream with timeout.
@@ -592,7 +625,10 @@ class _ChatPageState extends State<ChatPage> {
       }
       if (!connected && mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('连接失败，请检查网络'), backgroundColor: Colors.red),
+          const SnackBar(
+            content: Text('连接失败，请检查网络'),
+            backgroundColor: Colors.red,
+          ),
         );
         setState(() => _isStreaming = false);
         return;
@@ -682,7 +718,10 @@ class _ChatPageState extends State<ChatPage> {
                       children: [
                         CircularProgressIndicator(strokeWidth: 2),
                         SizedBox(width: 8),
-                        Text('AI 正在输入...', style: TextStyle(color: Colors.grey)),
+                        Text(
+                          'AI 正在输入...',
+                          style: TextStyle(color: Colors.grey),
+                        ),
                       ],
                     ),
                   ),
@@ -713,7 +752,8 @@ class _ChatPageState extends State<ChatPage> {
                   top: 0,
                   child: IconButton(
                     icon: const Icon(Icons.close, color: Colors.red),
-                    onPressed: () => setState(() => _selectedImageBase64 = null),
+                    onPressed: () =>
+                        setState(() => _selectedImageBase64 = null),
                   ),
                 ),
               ],
@@ -729,20 +769,26 @@ class _ChatPageState extends State<ChatPage> {
                 const SizedBox(width: 8),
                 Text(
                   '录音中 ${_recordingSeconds}s / 60s',
-                  style: TextStyle(color: Colors.red, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
                 const SizedBox(width: 8),
                 // Simple waveform animation
                 Row(
-                  children: List.generate(5, (i) => Container(
-                    width: 3,
-                    height: 8 + (i % 2 == 0 ? 4 : 0),
-                    margin: const EdgeInsets.symmetric(horizontal: 1),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade300,
-                      borderRadius: BorderRadius.circular(2),
+                  children: List.generate(
+                    5,
+                    (i) => Container(
+                      width: 3,
+                      height: 8 + (i % 2 == 0 ? 4 : 0),
+                      margin: const EdgeInsets.symmetric(horizontal: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.red.shade300,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
                     ),
-                  )),
+                  ),
                 ),
               ],
             ),
@@ -753,7 +799,10 @@ class _ChatPageState extends State<ChatPage> {
             children: [
               IconButton(icon: const Icon(Icons.image), onPressed: _pickImage),
               IconButton(
-                icon: Icon(_isRecording ? Icons.stop : Icons.mic, color: _isRecording ? Colors.red : null),
+                icon: Icon(
+                  _isRecording ? Icons.stop : Icons.mic,
+                  color: _isRecording ? Colors.red : null,
+                ),
                 onPressed: _toggleRecording,
               ),
               Expanded(
@@ -761,14 +810,19 @@ class _ChatPageState extends State<ChatPage> {
                   controller: _controller,
                   decoration: InputDecoration(
                     hintText: l.typeMessage,
-                    border: const OutlineInputBorder(borderRadius: BorderRadius.all(Radius.circular(24))),
+                    border: const OutlineInputBorder(
+                      borderRadius: BorderRadius.all(Radius.circular(24)),
+                    ),
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16),
                   ),
                   onSubmitted: (_) => _sendMessage(),
                 ),
               ),
               IconButton(
-                icon: Icon(Icons.send, color: _isStreaming ? Colors.grey : const Color(0xFF6366F1)),
+                icon: Icon(
+                  Icons.send,
+                  color: _isStreaming ? Colors.grey : const Color(0xFF6366F1),
+                ),
                 onPressed: _isStreaming ? null : _sendMessage,
               ),
             ],
@@ -787,7 +841,12 @@ class _ChatPageState extends State<ChatPage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Builder(builder: (ctx) => Text(AppLocalizations.of(ctx)!.negotiationDetails, style: Theme.of(ctx).textTheme.titleLarge)),
+            Builder(
+              builder: (ctx) => Text(
+                AppLocalizations.of(ctx)!.negotiationDetails,
+                style: Theme.of(ctx).textTheme.titleLarge,
+              ),
+            ),
             const SizedBox(height: 12),
             Text('商品: ${req.listingId}'),
             Text('买家报价: ¥${req.proposedPrice.toStringAsFixed(2)}'),
@@ -851,7 +910,14 @@ class _HitlChip extends StatelessWidget {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(label, style: TextStyle(color: tagColor, fontWeight: FontWeight.bold, fontSize: 12)),
+            Text(
+              label,
+              style: TextStyle(
+                color: tagColor,
+                fontWeight: FontWeight.bold,
+                fontSize: 12,
+              ),
+            ),
             Text(
               '¥${request.proposedPrice.toStringAsFixed(0)}',
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
@@ -903,7 +969,9 @@ class _ChatBubble extends StatelessWidget {
     }
 
     return Column(
-      crossAxisAlignment: isUser ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+      crossAxisAlignment: isUser
+          ? CrossAxisAlignment.end
+          : CrossAxisAlignment.start,
       children: [
         Align(
           alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -916,29 +984,51 @@ class _ChatBubble extends StatelessWidget {
             decoration: BoxDecoration(
               color: isUser ? const Color(0xFF6366F1) : Colors.grey[200],
               borderRadius: BorderRadius.circular(16).copyWith(
-                bottomRight: isUser ? const Radius.circular(0) : const Radius.circular(16),
-                bottomLeft: !isUser ? const Radius.circular(0) : const Radius.circular(16),
+                bottomRight: isUser
+                    ? const Radius.circular(0)
+                    : const Radius.circular(16),
+                bottomLeft: !isUser
+                    ? const Radius.circular(0)
+                    : const Radius.circular(16),
               ),
             ),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                if (message.imageBase64 != null)
+                if ((message.imageUrl != null &&
+                        message.imageUrl!.isNotEmpty) ||
+                    (message.imageBase64 != null &&
+                        message.imageBase64!.isNotEmpty))
                   Padding(
                     padding: const EdgeInsets.only(bottom: 8.0),
                     child: ClipRRect(
                       borderRadius: BorderRadius.circular(8),
-                      child: Image.memory(base64Decode(message.imageBase64!)),
+                      child:
+                          message.imageUrl != null &&
+                              message.imageUrl!.isNotEmpty
+                          ? Image.network(
+                              message.imageUrl!,
+                              errorBuilder: (context, error, stackTrace) {
+                                if (message.imageBase64 != null &&
+                                    message.imageBase64!.isNotEmpty) {
+                                  return Image.memory(
+                                    base64Decode(message.imageBase64!),
+                                  );
+                                }
+                                return const SizedBox.shrink();
+                              },
+                            )
+                          : Image.memory(base64Decode(message.imageBase64!)),
                     ),
                   ),
-                if (message.audioBase64 != null)
-                  Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.mic, size: 16),
-                      const SizedBox(width: 4),
-                      Text('Voice Message', style: TextStyle(fontSize: 12, color: isUser ? Colors.white : Colors.black87)),
-                    ],
+                if ((message.audioUrl != null &&
+                        message.audioUrl!.isNotEmpty) ||
+                    (message.audioBase64 != null &&
+                        message.audioBase64!.isNotEmpty))
+                  AudioMessagePlayer(
+                    audioUrl: message.audioUrl,
+                    audioBase64: message.audioBase64,
+                    isMe: isUser,
                   ),
                 Text(
                   message.content,
@@ -949,7 +1039,10 @@ class _ChatBubble extends StatelessWidget {
                   softWrap: true,
                 ),
                 if (message.isPartial)
-                  const Text('▊', style: TextStyle(color: Colors.grey)), // Typing cursor
+                  const Text(
+                    '▊',
+                    style: TextStyle(color: Colors.grey),
+                  ), // Typing cursor
               ],
             ),
           ),

@@ -227,6 +227,10 @@ pub struct ChatMessage {
     pub sender: String,
     pub receiver: Option<String>,
     pub content: String,
+    pub image_data: Option<String>,
+    pub audio_data: Option<String>,
+    pub image_url: Option<String>,
+    pub audio_url: Option<String>,
     pub is_agent: bool,
     pub edited_at: Option<chrono::DateTime<chrono::Utc>>,
     pub created_at: chrono::DateTime<chrono::Utc>,
@@ -246,6 +250,8 @@ pub trait ChatRepository: Send + Sync {
         content: &str,
         image_data: Option<&str>,
         audio_data: Option<&str>,
+        image_url: Option<&str>,
+        audio_url: Option<&str>,
     ) -> Result<(), ApiError>;
 
     /// Get conversation history (up to CONVERSATION_HISTORY_LIMIT entries).

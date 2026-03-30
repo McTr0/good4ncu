@@ -89,6 +89,8 @@ pub struct SendMessageBody {
     pub content: String,
     pub image_base64: Option<String>,
     pub audio_base64: Option<String>,
+    pub image_url: Option<String>,
+    pub audio_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -104,6 +106,8 @@ pub struct SendMessageResponse {
     pub read_at: Option<String>,
     pub image_data: Option<String>,
     pub audio_data: Option<String>,
+    pub image_url: Option<String>,
+    pub audio_url: Option<String>,
     /// 消息状态: sending | sent | delivered | read | failed
     pub status: String,
 }
@@ -126,6 +130,8 @@ pub struct MessageEntry {
     pub read_by: Option<String>,
     pub image_data: Option<String>,
     pub audio_data: Option<String>,
+    pub image_url: Option<String>,
+    pub audio_url: Option<String>,
     /// 编辑状态: sending | sent | delivered | read | failed
     pub status: String,
     /// 已编辑时间
@@ -209,6 +215,8 @@ struct WsNewMessageEvent {
     read_at: Option<String>,
     image_data: Option<String>,
     audio_data: Option<String>,
+    image_url: Option<String>,
+    audio_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -253,22 +261,55 @@ pub async fn connect_request(
     }
 
     let connection_id: String = {
-        let row = sqlx::query(
-            r#"INSERT INTO chat_connections (requester_id, receiver_id, status)
-               VALUES ($1, $2, 'pending')
-               ON CONFLICT (requester_id, receiver_id)
-               DO UPDATE SET status = 'pending', established_at = NULL
-               RETURNING id"#,
+        let existing = sqlx::query(
+            "SELECT id, status FROM chat_connections 
+             WHERE LEAST(requester_id, receiver_id) = LEAST($1, $2)
+               AND GREATEST(requester_id, receiver_id) = GREATEST($1, $2)",
         )
         .bind(&requester_id)
         .bind(&body.receiver_id)
-        .fetch_one(&state.infra.db)
+        .fetch_optional(&state.infra.db)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-        let uuid_val: uuid::Uuid = row
-            .try_get("id")
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-        uuid_val.to_string()
+
+        match existing {
+            Some(row) => {
+                let id: uuid::Uuid = row
+                    .try_get("id")
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+                let status: String = row.get("status");
+
+                if status != "connected" {
+                    sqlx::query(
+                        "UPDATE chat_connections SET status = 'pending', requester_id = $1, receiver_id = $2, established_at = NULL WHERE id = $3"
+                    )
+                    .bind(&requester_id)
+                    .bind(&body.receiver_id)
+                    .bind(id)
+                    .execute(&state.infra.db)
+                    .await
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+                }
+                id.to_string()
+            }
+            None => {
+                let row = sqlx::query(
+                    r#"INSERT INTO chat_connections (requester_id, receiver_id, status)
+                       VALUES ($1, $2, 'pending')
+                       RETURNING id"#,
+                )
+                .bind(&requester_id)
+                .bind(&body.receiver_id)
+                .fetch_one(&state.infra.db)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+                let uuid_val: uuid::Uuid = row
+                    .try_get("id")
+                    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+                uuid_val.to_string()
+            }
+        }
     };
 
     let requester_username: Option<String> =
@@ -545,7 +586,7 @@ pub async fn get_connection_messages(
     }
 
     let rows = sqlx::query(
-        r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data, edited_at, status
+        r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data, image_url, audio_url, edited_at, status
            FROM chat_messages
            WHERE conversation_id = $1::text
            ORDER BY id DESC
@@ -623,6 +664,8 @@ pub async fn get_connection_messages(
                 read_by: row.try_get("read_by").ok().flatten(),
                 image_data: row.try_get("image_data").ok().flatten(),
                 audio_data: row.try_get("audio_data").ok().flatten(),
+                image_url: row.try_get("image_url").ok().flatten(),
+                audio_url: row.try_get("audio_url").ok().flatten(),
                 edited_at: edited_at.map(|dt| dt.to_rfc3339()),
                 status,
             }
@@ -712,8 +755,8 @@ pub async fn send_connection_message(
     let read_at_str = read_at.map(|dt| dt.to_rfc3339());
 
     let row = sqlx::query(
-        r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, read_at, read_by, status)
-           VALUES ($1::text, 'direct', $2, $3, false, $4, $5, $6, $7, $2, 'sent')
+        r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, image_url, audio_url, read_at, read_by, status)
+           VALUES ($1::text, 'direct', $2, $3, false, $4, $5, $6, $7, $8, $9, $2, 'sent')
            RETURNING id, timestamp"#,
     )
     .bind(&connection_id)
@@ -722,6 +765,8 @@ pub async fn send_connection_message(
     .bind(&body.content)
     .bind(&body.image_base64)
     .bind(&body.audio_base64)
+    .bind(&body.image_url)
+    .bind(&body.audio_url)
     .bind(read_at)
     .fetch_one(&state.infra.db)
     .await
@@ -731,6 +776,12 @@ pub async fn send_connection_message(
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
 
     state.infra.metrics.record_chat_message();
+    if body.image_url.is_some() || body.audio_url.is_some() {
+        state.infra.metrics.record_chat_media_url_message();
+    }
+    if body.image_base64.is_some() || body.audio_base64.is_some() {
+        state.infra.metrics.record_chat_media_base64_message();
+    }
 
     // Update unread_count for the receiver (if human connection exists)
     if let Some(uuid) = connection_uuid {
@@ -760,6 +811,8 @@ pub async fn send_connection_message(
         read_at: read_at_str.clone(),
         image_data: body.image_base64.clone(),
         audio_data: body.audio_base64.clone(),
+        image_url: body.image_url.clone(),
+        audio_url: body.audio_url.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
     if let Some(ref recv) = receiver {
@@ -775,6 +828,8 @@ pub async fn send_connection_message(
         read_at: read_at_str,
         image_data: body.image_base64,
         audio_data: body.audio_base64,
+        image_url: body.image_url,
+        audio_url: body.audio_url,
         status: "sent".to_string(),
     }))
 }
@@ -1183,6 +1238,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };
@@ -1208,6 +1265,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };
@@ -1235,6 +1294,8 @@ mod tests {
             read_by: Some("user-1".to_string()),
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "read".to_string(),
             edited_at: None,
         };
@@ -1258,6 +1319,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "delivered".to_string(),
             edited_at: None,
         };
@@ -1279,6 +1342,8 @@ mod tests {
             read_by: None,
             image_data: Some("data:image/png;base64,abc123".to_string()),
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };
@@ -1299,6 +1364,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: Some("data:audio/webm;base64,xyz789".to_string()),
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };
@@ -1382,11 +1449,13 @@ mod tests {
 
     #[test]
     fn test_send_message_body_deserialization() {
-        let json = r#"{"content": "Hello!", "image_base64": null, "audio_base64": null}"#;
+        let json = r#"{"content": "Hello!", "image_base64": null, "audio_base64": null, "image_url": null, "audio_url": null}"#;
         let body: SendMessageBody = serde_json::from_str(json).unwrap();
         assert_eq!(body.content, "Hello!");
         assert!(body.image_base64.is_none());
         assert!(body.audio_base64.is_none());
+        assert!(body.image_url.is_none());
+        assert!(body.audio_url.is_none());
     }
 
     #[test]
@@ -1394,11 +1463,17 @@ mod tests {
         let json = r#"{
             "content": "Image message",
             "image_base64": "base64data",
-            "audio_base64": null
+            "audio_base64": null,
+            "image_url": "https://cdn.example.com/i.jpg",
+            "audio_url": null
         }"#;
         let body: SendMessageBody = serde_json::from_str(json).unwrap();
         assert_eq!(body.content, "Image message");
         assert_eq!(body.image_base64, Some("base64data".to_string()));
+        assert_eq!(
+            body.image_url,
+            Some("https://cdn.example.com/i.jpg".to_string())
+        );
     }
 
     #[test]
@@ -1412,6 +1487,8 @@ mod tests {
             read_at: Some("2024-01-01T00:00:01Z".to_string()),
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -1432,6 +1509,8 @@ mod tests {
             read_at: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sending".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
@@ -1451,11 +1530,33 @@ mod tests {
             read_at: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
         };
         let json = serde_json::to_string(&resp).unwrap();
         // The sent_at field should be serialized as "timestamp"
         assert!(json.contains("\"timestamp\":\"2024-01-01T12:34:56Z\""));
+    }
+
+    #[test]
+    fn test_send_message_response_includes_url_fields() {
+        let resp = SendMessageResponse {
+            message_id: 7,
+            sender: "user-1".to_string(),
+            content: "with url".to_string(),
+            conversation_id: "conv-1".to_string(),
+            sent_at: "2024-01-01T12:34:56Z".to_string(),
+            read_at: None,
+            image_data: None,
+            audio_data: None,
+            image_url: Some("https://cdn.example.com/a.jpg".to_string()),
+            audio_url: Some("https://cdn.example.com/b.m4a".to_string()),
+            status: "sent".to_string(),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"image_url\":\"https://cdn.example.com/a.jpg\""));
+        assert!(json.contains("\"audio_url\":\"https://cdn.example.com/b.m4a\""));
     }
 
     #[test]
@@ -1591,6 +1692,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };
@@ -1612,6 +1715,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };
@@ -1636,6 +1741,8 @@ mod tests {
             read_by: None,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
             status: "sent".to_string(),
             edited_at: None,
         };

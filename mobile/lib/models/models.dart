@@ -237,6 +237,8 @@ class ChatMessage {
   final String content;
   final String? imageBase64;
   final String? audioBase64;
+  final String? imageUrl;
+  final String? audioUrl;
   final DateTime timestamp;
 
   /// True while the SSE stream is still delivering tokens (typing indicator).
@@ -247,6 +249,8 @@ class ChatMessage {
     required this.content,
     this.imageBase64,
     this.audioBase64,
+    this.imageUrl,
+    this.audioUrl,
     required this.timestamp,
     this.isPartial = false,
   });
@@ -256,6 +260,8 @@ class ChatMessage {
     String? content,
     String? imageBase64,
     String? audioBase64,
+    String? imageUrl,
+    String? audioUrl,
     DateTime? timestamp,
     bool? isPartial,
   }) {
@@ -264,6 +270,8 @@ class ChatMessage {
       content: content ?? this.content,
       imageBase64: imageBase64 ?? this.imageBase64,
       audioBase64: audioBase64 ?? this.audioBase64,
+      imageUrl: imageUrl ?? this.imageUrl,
+      audioUrl: audioUrl ?? this.audioUrl,
       timestamp: timestamp ?? this.timestamp,
       isPartial: isPartial ?? this.isPartial,
     );
@@ -273,6 +281,8 @@ class ChatMessage {
     'message': content,
     'image': imageBase64,
     'audio': audioBase64,
+    'image_url': imageUrl,
+    'audio_url': audioUrl,
   };
 }
 
@@ -350,6 +360,8 @@ class ConversationMessage {
   final String content;
   final String? imageBase64;
   final String? audioBase64;
+  final String? imageUrl;
+  final String? audioUrl;
   final DateTime sentAt;
   final DateTime? readAt;
 
@@ -366,6 +378,8 @@ class ConversationMessage {
     required this.content,
     this.imageBase64,
     this.audioBase64,
+    this.imageUrl,
+    this.audioUrl,
     required this.sentAt,
     this.readAt,
     this.status = 'sent',
@@ -380,6 +394,8 @@ class ConversationMessage {
       content: json['content'] ?? '',
       imageBase64: json['image_base64'] ?? json['image_data'],
       audioBase64: json['audio_base64'] ?? json['audio_data'],
+      imageUrl: json['image_url'],
+      audioUrl: json['audio_url'],
       sentAt: json['sent_at'] != null
           ? DateTime.parse(json['sent_at'].toString())
           : json['timestamp'] != null
@@ -415,6 +431,8 @@ class ConversationMessage {
     String? content,
     String? imageBase64,
     String? audioBase64,
+    String? imageUrl,
+    String? audioUrl,
     DateTime? sentAt,
     DateTime? readAt,
     String? status,
@@ -427,6 +445,8 @@ class ConversationMessage {
       content: content ?? this.content,
       imageBase64: imageBase64 ?? this.imageBase64,
       audioBase64: audioBase64 ?? this.audioBase64,
+      imageUrl: imageUrl ?? this.imageUrl,
+      audioUrl: audioUrl ?? this.audioUrl,
       sentAt: sentAt ?? this.sentAt,
       readAt: readAt ?? this.readAt,
       status: status ?? this.status,

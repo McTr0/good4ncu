@@ -546,6 +546,8 @@ async fn handle_chat(
         &payload.message,
         payload.image.as_deref(),
         payload.audio.as_deref(),
+        None,
+        None,
     );
 
     let log_result = log_user.await;
@@ -611,6 +613,8 @@ async fn handle_chat(
         None,
         true,
         &reply,
+        None,
+        None,
         None,
         None,
     );
@@ -778,6 +782,8 @@ async fn handle_chat_stream(
         _receiver.as_deref(),
         false,
         &params.message,
+        None,
+        None,
         None,
         None,
     );

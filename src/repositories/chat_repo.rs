@@ -29,10 +29,12 @@ impl ChatRepository for PostgresChatRepository {
         content: &str,
         image_data: Option<&str>,
         audio_data: Option<&str>,
+        image_url: Option<&str>,
+        audio_url: Option<&str>,
     ) -> Result<(), ApiError> {
         sqlx::query(
-            "INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, image_url, audio_url) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(conversation_id)
         .bind(listing_id)
@@ -42,6 +44,8 @@ impl ChatRepository for PostgresChatRepository {
         .bind(content)
         .bind(image_data)
         .bind(audio_data)
+        .bind(image_url)
+        .bind(audio_url)
         .execute(&self.pool)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
@@ -54,7 +58,7 @@ impl ChatRepository for PostgresChatRepository {
     ) -> Result<Vec<ChatHistoryEntry>, ApiError> {
         const LIMIT: i64 = 10;
         let rows = sqlx::query(
-            "SELECT sender, content, is_agent, image_data, audio_data FROM chat_messages \
+            "SELECT sender, content, is_agent, image_data, audio_data, image_url, audio_url FROM chat_messages \
              WHERE conversation_id = $1 ORDER BY id ASC LIMIT $2",
         )
         .bind(conversation_id)
@@ -68,12 +72,16 @@ impl ChatRepository for PostgresChatRepository {
             .map(|row| {
                 let image_data: Option<String> = row.try_get("image_data").ok().flatten();
                 let audio_data: Option<String> = row.try_get("audio_data").ok().flatten();
+                let image_url: Option<String> = row.try_get("image_url").ok().flatten();
+                let audio_url: Option<String> = row.try_get("audio_url").ok().flatten();
                 ChatHistoryEntry {
                     sender: row.get("sender"),
                     content: row.get("content"),
                     is_agent: row.get("is_agent"),
                     image_data,
                     audio_data,
+                    image_url,
+                    audio_url,
                 }
             })
             .collect())
@@ -144,10 +152,10 @@ impl ChatRepository for PostgresChatRepository {
         limit: i64,
     ) -> Result<(Vec<ChatMessage>, i64), ApiError> {
         let query = if before.is_some() {
-            "SELECT id, conversation_id, sender, receiver, content, is_agent, edited_at, created_at \
+            "SELECT id, conversation_id, sender, receiver, content, image_data, audio_data, image_url, audio_url, is_agent, edited_at, created_at \
              FROM chat_messages WHERE conversation_id = $1 AND id < $2 ORDER BY id DESC LIMIT $3"
         } else {
-            "SELECT id, conversation_id, sender, receiver, content, is_agent, edited_at, created_at \
+            "SELECT id, conversation_id, sender, receiver, content, image_data, audio_data, image_url, audio_url, is_agent, edited_at, created_at \
              FROM chat_messages WHERE conversation_id = $1 ORDER BY id DESC LIMIT $2"
         };
 

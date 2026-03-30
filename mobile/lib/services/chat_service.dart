@@ -79,11 +79,15 @@ class ChatService extends BaseService {
     required String content,
     String? imageBase64,
     String? audioBase64,
+    String? imageUrl,
+    String? audioUrl,
   }) async {
     final headers = await authHeaders();
     final body = <String, dynamic>{'content': content};
     if (imageBase64 != null) body['image_base64'] = imageBase64;
     if (audioBase64 != null) body['audio_base64'] = audioBase64;
+    if (imageUrl != null) body['image_url'] = imageUrl;
+    if (audioUrl != null) body['audio_url'] = audioUrl;
 
     final response = await post(
       Uri.parse('$baseUrl/api/chat/conversations/$conversationId/messages'),

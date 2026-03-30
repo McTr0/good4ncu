@@ -123,6 +123,8 @@ impl ServiceManager {
                                 &content,
                                 image_data.as_deref(),
                                 audio_data.as_deref(),
+                                None,
+                                None,
                             )
                             .await
                         {

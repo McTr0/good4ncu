@@ -16,6 +16,10 @@ pub struct ChatHistoryEntry {
     pub image_data: Option<String>,
     #[allow(dead_code)]
     pub audio_data: Option<String>,
+    #[allow(dead_code)]
+    pub image_url: Option<String>,
+    #[allow(dead_code)]
+    pub audio_url: Option<String>,
 }
 
 #[derive(Clone)]
@@ -41,10 +45,12 @@ impl ChatService {
         content: &str,
         image_data: Option<&str>,
         audio_data: Option<&str>,
+        image_url: Option<&str>,
+        audio_url: Option<&str>,
     ) -> Result<()> {
         sqlx::query(
-            "INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, image_url, audio_url) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(conversation_id)
         .bind(listing_id)
@@ -54,6 +60,8 @@ impl ChatService {
         .bind(content)
         .bind(image_data)
         .bind(audio_data)
+        .bind(image_url)
+        .bind(audio_url)
         .execute(&self.db)
         .await?;
         Ok(())
@@ -66,7 +74,7 @@ impl ChatService {
         conversation_id: &str,
     ) -> Result<Vec<ChatHistoryEntry>> {
         let rows = sqlx::query(
-            "SELECT sender, content, is_agent, image_data, audio_data FROM chat_messages \
+            "SELECT sender, content, is_agent, image_data, audio_data, image_url, audio_url FROM chat_messages \
              WHERE conversation_id = $1 ORDER BY id ASC LIMIT $2",
         )
         .bind(conversation_id)
@@ -79,12 +87,16 @@ impl ChatService {
             .map(|row| {
                 let image_data: Option<String> = row.try_get("image_data").ok().flatten();
                 let audio_data: Option<String> = row.try_get("audio_data").ok().flatten();
+                let image_url: Option<String> = row.try_get("image_url").ok().flatten();
+                let audio_url: Option<String> = row.try_get("audio_url").ok().flatten();
                 ChatHistoryEntry {
                     sender: Row::get(&row, "sender"),
                     content: Row::get(&row, "content"),
                     is_agent: Row::get(&row, "is_agent"),
                     image_data,
                     audio_data,
+                    image_url,
+                    audio_url,
                 }
             })
             .collect())
@@ -219,6 +231,8 @@ mod unit_tests {
             is_agent: false,
             image_data: None,
             audio_data: None,
+            image_url: None,
+            audio_url: None,
         };
         let cloned = entry.clone();
         assert_eq!(cloned.content, "Hello");
@@ -233,9 +247,13 @@ mod unit_tests {
             is_agent: true,
             image_data: Some("base64image".to_string()),
             audio_data: Some("base64audio".to_string()),
+            image_url: Some("https://example.com/image.jpg".to_string()),
+            audio_url: Some("https://example.com/audio.m4a".to_string()),
         };
         assert!(entry.image_data.is_some());
         assert!(entry.audio_data.is_some());
+        assert!(entry.image_url.is_some());
+        assert!(entry.audio_url.is_some());
         assert_eq!(entry.sender, "user-1");
     }
 

@@ -1,13 +1,16 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../services/upload_service.dart';
 import '../services/ws_service.dart';
 import '../theme/app_theme.dart';
+import '../components/audio_message_player.dart';
 
 /// 私聊页面
 class UserChatPage extends StatefulWidget {
@@ -28,6 +31,8 @@ class UserChatPage extends StatefulWidget {
 
 class _UserChatPageState extends State<UserChatPage> {
   final ApiService _apiService = ApiService();
+  final UploadService _uploadService = UploadService();
+  final ImagePicker _imagePicker = ImagePicker();
   final TextEditingController _textController = TextEditingController();
   final ScrollController _scrollController = ScrollController();
   final AudioRecorder _audioRecorder = AudioRecorder();
@@ -114,7 +119,9 @@ class _UserChatPageState extends State<UserChatPage> {
   }
 
   Future<void> _markConnectionAsRead() async {
-    await _apiService.markConnectionAsRead(widget.conversationId).catchError((_) {});
+    await _apiService
+        .markConnectionAsRead(widget.conversationId)
+        .catchError((_) {});
   }
 
   Future<void> _connectWs() async {
@@ -177,9 +184,7 @@ class _UserChatPageState extends State<UserChatPage> {
       barrierDismissible: false,
       builder: (ctx) => AlertDialog(
         title: const Text('连接请求'),
-        content: Text(
-          '${notif.title}\n\n${notif.body}\n\n确认后将开启消息已读功能',
-        ),
+        content: Text('${notif.title}\n\n${notif.body}\n\n确认后将开启消息已读功能'),
         actions: [
           TextButton(
             onPressed: () {
@@ -243,11 +248,16 @@ class _UserChatPageState extends State<UserChatPage> {
 
   /// 确认编辑
   Future<void> _confirmEdit() async {
-    if (_editingMessageId == null || _textController.text.trim().isEmpty) return;
+    if (_editingMessageId == null || _textController.text.trim().isEmpty) {
+      return;
+    }
 
     final newContent = _textController.text.trim();
     try {
-      final updated = await _apiService.editMessage(_editingMessageId!, newContent);
+      final updated = await _apiService.editMessage(
+        _editingMessageId!,
+        newContent,
+      );
       if (!mounted) return;
       setState(() {
         final idx = _messages.indexWhere((m) => m.id == _editingMessageId);
@@ -319,6 +329,97 @@ class _UserChatPageState extends State<UserChatPage> {
     }
   }
 
+  Future<void> _pickAndSendImage() async {
+    if (_connectionStatus != 'connected') {
+      _showSnackBar('等待连接建立后再发送消息');
+      return;
+    }
+
+    final picked = await _imagePicker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 65,
+      maxWidth: 1280,
+    );
+    if (picked == null) {
+      return;
+    }
+
+    final bytes = await picked.readAsBytes();
+    final imageBase64 = base64Encode(bytes);
+    final tempMsg = ConversationMessage(
+      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      conversationId: widget.conversationId,
+      senderId: _currentUserId ?? '',
+      content: '[图片消息]',
+      imageBase64: imageBase64,
+      imageUrl: null,
+      sentAt: DateTime.now(),
+      status: 'sending',
+    );
+
+    setState(() {
+      _messages.add(tempMsg);
+      _isSending = true;
+    });
+    _scrollToBottom();
+
+    try {
+      String? uploadedImageUrl;
+      try {
+        final extension = _inferImageExtension(picked.path);
+        final contentType = _contentTypeForImageExtension(extension);
+        uploadedImageUrl = await _uploadService.uploadImageBytes(
+          bytes,
+          extension: extension,
+          contentType: contentType,
+        );
+      } catch (_) {
+        uploadedImageUrl = null;
+      }
+
+      final reply = await _apiService.sendMessage(
+        widget.conversationId,
+        content: '[图片消息]',
+        imageBase64: uploadedImageUrl == null ? imageBase64 : null,
+        imageUrl: uploadedImageUrl,
+      );
+      if (!mounted) return;
+      setState(() {
+        final idx = _messages.indexWhere((m) => m.id == tempMsg.id);
+        if (idx >= 0) {
+          _messages[idx] = reply;
+        }
+        _isSending = false;
+      });
+      _scrollToBottom();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _messages.removeWhere((m) => m.id == tempMsg.id);
+        _isSending = false;
+      });
+      _showSnackBar('发送失败: $e');
+    }
+  }
+
+  String _inferImageExtension(String path) {
+    final lower = path.toLowerCase();
+    if (lower.endsWith('.png')) return 'png';
+    if (lower.endsWith('.webp')) return 'webp';
+    return 'jpg';
+  }
+
+  String _contentTypeForImageExtension(String ext) {
+    switch (ext) {
+      case 'png':
+        return 'image/png';
+      case 'webp':
+        return 'image/webp';
+      default:
+        return 'image/jpeg';
+    }
+  }
+
   /// 切换录音状态
   Future<void> _toggleRecording() async {
     if (_isRecording) {
@@ -328,14 +429,15 @@ class _UserChatPageState extends State<UserChatPage> {
         final bytes = await File(path).readAsBytes();
         final audioBase64 = base64Encode(bytes);
         setState(() => _isRecording = false);
-        await _sendAudioMessage(audioBase64);
+        await _sendAudioMessage(audioBase64, bytes);
       } else {
         setState(() => _isRecording = false);
       }
     } else {
       if (await _audioRecorder.hasPermission()) {
         final directory = await getTemporaryDirectory();
-        final path = '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.ogg';
+        final path =
+            '${directory.path}/audio_${DateTime.now().millisecondsSinceEpoch}.ogg';
         await _audioRecorder.start(
           const RecordConfig(encoder: AudioEncoder.opus),
           path: path,
@@ -356,7 +458,10 @@ class _UserChatPageState extends State<UserChatPage> {
     }
   }
 
-  Future<void> _sendAudioMessage(String audioBase64) async {
+  Future<void> _sendAudioMessage(
+    String audioBase64,
+    List<int> audioBytes,
+  ) async {
     if (_connectionStatus != 'connected') {
       _showSnackBar('等待连接建立后再发送消息');
       return;
@@ -368,6 +473,7 @@ class _UserChatPageState extends State<UserChatPage> {
       senderId: _currentUserId ?? '',
       content: '[语音消息]',
       audioBase64: audioBase64,
+      audioUrl: null,
       sentAt: DateTime.now(),
       status: 'sending',
     );
@@ -379,10 +485,18 @@ class _UserChatPageState extends State<UserChatPage> {
     _scrollToBottom();
 
     try {
+      String? uploadedAudioUrl;
+      try {
+        uploadedAudioUrl = await _uploadService.uploadAudioBytes(audioBytes);
+      } catch (_) {
+        uploadedAudioUrl = null;
+      }
+
       final reply = await _apiService.sendMessage(
         widget.conversationId,
         content: '[语音消息]',
-        audioBase64: audioBase64,
+        audioBase64: uploadedAudioUrl == null ? audioBase64 : null,
+        audioUrl: uploadedAudioUrl,
       );
       if (!mounted) return;
       setState(() {
@@ -430,7 +544,10 @@ class _UserChatPageState extends State<UserChatPage> {
         title: Row(
           mainAxisSize: MainAxisSize.min,
           children: [
-            ConnectionIndicator(status: _connectionStatus, isWsConnected: WsService.instance.isConnected),
+            ConnectionIndicator(
+              status: _connectionStatus,
+              isWsConnected: WsService.instance.isConnected,
+            ),
             const SizedBox(width: 8),
             Text(widget.otherUsername),
           ],
@@ -475,10 +592,7 @@ class _UserChatPageState extends State<UserChatPage> {
           children: [
             Text('加载失败: $_error'),
             const SizedBox(height: 16),
-            ElevatedButton(
-              onPressed: _loadMessages,
-              child: const Text('重试'),
-            ),
+            ElevatedButton(onPressed: _loadMessages, child: const Text('重试')),
           ],
         ),
       );
@@ -516,12 +630,13 @@ class _UserChatPageState extends State<UserChatPage> {
         child: Row(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(Icons.hourglass_empty, color: Colors.orange.shade700, size: 18),
-            const SizedBox(width: 8),
-            Text(
-              '等待对方接受连接',
-              style: TextStyle(color: Colors.orange.shade700),
+            Icon(
+              Icons.hourglass_empty,
+              color: Colors.orange.shade700,
+              size: 18,
             ),
+            const SizedBox(width: 8),
+            Text('等待对方接受连接', style: TextStyle(color: Colors.orange.shade700)),
           ],
         ),
       );
@@ -542,13 +657,13 @@ class _UserChatPageState extends State<UserChatPage> {
             const SizedBox(width: 8),
             Text(
               '录音中 ${_recordingSeconds}s / 60s',
-              style: TextStyle(color: Colors.red.shade700, fontWeight: FontWeight.bold),
+              style: TextStyle(
+                color: Colors.red.shade700,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const Spacer(),
-            TextButton(
-              onPressed: _toggleRecording,
-              child: const Text('停止'),
-            ),
+            TextButton(onPressed: _toggleRecording, child: const Text('停止')),
           ],
         ),
       );
@@ -558,16 +673,20 @@ class _UserChatPageState extends State<UserChatPage> {
       padding: const EdgeInsets.all(8),
       decoration: BoxDecoration(
         color: Theme.of(context).cardTheme.color,
-        border: Border(
-          top: BorderSide(color: Theme.of(context).dividerColor),
-        ),
+        border: Border(top: BorderSide(color: Theme.of(context).dividerColor)),
       ),
       child: SafeArea(
         child: Row(
           children: [
             IconButton(
-              icon: Icon(_isRecording ? Icons.stop : Icons.mic,
-                  color: _isRecording ? Colors.red : null),
+              icon: const Icon(Icons.image),
+              onPressed: _isSending ? null : _pickAndSendImage,
+            ),
+            IconButton(
+              icon: Icon(
+                _isRecording ? Icons.stop : Icons.mic,
+                color: _isRecording ? Colors.red : null,
+              ),
               onPressed: _toggleRecording,
             ),
             if (_editingMessageId != null)
@@ -594,9 +713,15 @@ class _UserChatPageState extends State<UserChatPage> {
             ),
             const SizedBox(width: 8),
             IconButton(
-              icon: Icon(_editingMessageId != null ? Icons.check : Icons.send,
-                  color: _editingMessageId != null ? Colors.green : AppTheme.primary),
-              onPressed: _editingMessageId != null ? _confirmEdit : _sendMessage,
+              icon: Icon(
+                _editingMessageId != null ? Icons.check : Icons.send,
+                color: _editingMessageId != null
+                    ? Colors.green
+                    : AppTheme.primary,
+              ),
+              onPressed: _editingMessageId != null
+                  ? _confirmEdit
+                  : _sendMessage,
             ),
           ],
         ),
@@ -609,7 +734,11 @@ class ConnectionIndicator extends StatefulWidget {
   final String? status;
   final bool isWsConnected;
 
-  const ConnectionIndicator({super.key, this.status, this.isWsConnected = false});
+  const ConnectionIndicator({
+    super.key,
+    this.status,
+    this.isWsConnected = false,
+  });
 
   @override
   State<ConnectionIndicator> createState() => ConnectionIndicatorState();
@@ -647,10 +776,7 @@ class ConnectionIndicatorState extends State<ConnectionIndicator>
       dot = Container(
         width: 8,
         height: 8,
-        decoration: BoxDecoration(
-          color: color,
-          shape: BoxShape.circle,
-        ),
+        decoration: BoxDecoration(color: color, shape: BoxShape.circle),
       );
     } else {
       switch (widget.status) {
@@ -660,10 +786,7 @@ class ConnectionIndicatorState extends State<ConnectionIndicator>
           dot = Container(
             width: 8,
             height: 8,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           );
           break;
         case 'pending':
@@ -672,10 +795,7 @@ class ConnectionIndicatorState extends State<ConnectionIndicator>
           dot = Container(
             width: 8,
             height: 8,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           );
           break;
         case 'connecting':
@@ -699,10 +819,7 @@ class ConnectionIndicatorState extends State<ConnectionIndicator>
           dot = Container(
             width: 8,
             height: 8,
-            decoration: BoxDecoration(
-              color: color,
-              shape: BoxShape.circle,
-            ),
+            decoration: BoxDecoration(color: color, shape: BoxShape.circle),
           );
           break;
       }
@@ -754,45 +871,58 @@ class MessageBubble extends StatelessWidget {
           decoration: BoxDecoration(
             color: isMe ? AppTheme.primary : Colors.grey[200],
             borderRadius: BorderRadius.circular(16).copyWith(
-              bottomRight: isMe ? const Radius.circular(0) : const Radius.circular(16),
-              bottomLeft: !isMe ? const Radius.circular(0) : const Radius.circular(16),
+              bottomRight: isMe
+                  ? const Radius.circular(0)
+                  : const Radius.circular(16),
+              bottomLeft: !isMe
+                  ? const Radius.circular(0)
+                  : const Radius.circular(16),
             ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (message.imageBase64 != null)
+              if ((message.imageUrl != null && message.imageUrl!.isNotEmpty) ||
+                  (message.imageBase64 != null &&
+                      message.imageBase64!.isNotEmpty))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(8),
-                    child: Image.memory(
-                      base64Decode(message.imageBase64!),
-                      width: 200,
-                      fit: BoxFit.cover,
-                    ),
+                    child:
+                        message.imageUrl != null && message.imageUrl!.isNotEmpty
+                        ? Image.network(
+                            message.imageUrl!,
+                            width: 200,
+                            fit: BoxFit.cover,
+                            errorBuilder: (context, error, stackTrace) {
+                              if (message.imageBase64 != null &&
+                                  message.imageBase64!.isNotEmpty) {
+                                return Image.memory(
+                                  base64Decode(message.imageBase64!),
+                                  width: 200,
+                                  fit: BoxFit.cover,
+                                );
+                              }
+                              return const SizedBox.shrink();
+                            },
+                          )
+                        : Image.memory(
+                            base64Decode(message.imageBase64!),
+                            width: 200,
+                            fit: BoxFit.cover,
+                          ),
                   ),
                 ),
-              if (message.audioBase64 != null)
+              if ((message.audioUrl != null && message.audioUrl!.isNotEmpty) ||
+                  (message.audioBase64 != null &&
+                      message.audioBase64!.isNotEmpty))
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(
-                        Icons.mic,
-                        size: 16,
-                        color: isMe ? Colors.white : Colors.black87,
-                      ),
-                      const SizedBox(width: 4),
-                      Text(
-                        '语音消息',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: isMe ? Colors.white70 : Colors.black54,
-                        ),
-                      ),
-                    ],
+                  child: AudioMessagePlayer(
+                    audioUrl: message.audioUrl,
+                    audioBase64: message.audioBase64,
+                    isMe: isMe,
                   ),
                 ),
               Text(
@@ -839,10 +969,7 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ),
                   ],
-                  if (isMe) ...[
-                    const SizedBox(width: 4),
-                    _buildStatus(),
-                  ],
+                  if (isMe) ...[const SizedBox(width: 4), _buildStatus()],
                 ],
               ),
             ],
@@ -864,13 +991,13 @@ class MessageBubble extends StatelessWidget {
             SizedBox(
               width: 8,
               height: 8,
-              child: CircularProgressIndicator(strokeWidth: 1, color: Colors.white54),
+              child: CircularProgressIndicator(
+                strokeWidth: 1,
+                color: Colors.white54,
+              ),
             ),
             SizedBox(width: 2),
-            Text(
-              '发送中',
-              style: TextStyle(fontSize: 10, color: Colors.white54),
-            ),
+            Text('发送中', style: TextStyle(fontSize: 10, color: Colors.white54)),
           ],
         );
       case 'sent':
