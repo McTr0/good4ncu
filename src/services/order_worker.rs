@@ -349,6 +349,27 @@ mod tests {
         .expect("insert order");
     }
 
+    async fn insert_shipped_order(
+        pool: &PgPool,
+        order_id: &str,
+        listing_id: &str,
+        buyer_id: &str,
+        seller_id: &str,
+    ) {
+        sqlx::query(
+            r#"INSERT INTO orders
+               (id, listing_id, buyer_id, seller_id, final_price, status, shipped_at)
+               VALUES ($1, $2, $3, $4, 1000, 'shipped', NOW() - INTERVAL '8 days')"#,
+        )
+        .bind(order_id)
+        .bind(listing_id)
+        .bind(buyer_id)
+        .bind(seller_id)
+        .execute(pool)
+        .await
+        .expect("insert shipped order");
+    }
+
     #[tokio::test]
     async fn test_process_payment_timeouts_cancels_order_and_relists_inventory() {
         with_local_test_pool(|pool| async move {
@@ -509,6 +530,208 @@ mod tests {
             .expect("select notification body")
             .get("body");
             assert_eq!(notif_body, "由于您未在30分钟内完成支付，订单已自动取消");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_process_payment_timeouts_is_idempotent_on_repeat_run() {
+        with_local_test_pool(|pool| async move {
+            let seller_id = Uuid::new_v4().to_string();
+            let buyer_id = Uuid::new_v4().to_string();
+            let listing_id = Uuid::new_v4().to_string();
+            let order_id = Uuid::new_v4().to_string();
+
+            insert_user(&pool, &seller_id, "seller_timeout_idempotent").await;
+            insert_user(&pool, &buyer_id, "buyer_timeout_idempotent").await;
+            insert_listing(&pool, &listing_id, &seller_id, "sold").await;
+            insert_expired_pending_order(&pool, &order_id, &listing_id, &buyer_id, &seller_id).await;
+
+            let pushes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let pushes_for_cb = Arc::clone(&pushes);
+            let broadcast: NotificationBroadcast = Arc::new(move |uid, _payload| {
+                if let Ok(mut lock) = pushes_for_cb.lock() {
+                    lock.push(uid);
+                }
+            });
+
+            process_payment_timeouts(&pool, &broadcast)
+                .await
+                .expect("first timeout run");
+
+            let order_status_after_first: String =
+                sqlx::query("SELECT status FROM orders WHERE id = $1")
+                    .bind(&order_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("select order status after first run")
+                    .get("status");
+            assert_eq!(order_status_after_first, "cancelled");
+
+            let notif_count_after_first: i64 = sqlx::query(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id = $1 AND event_type = 'order_cancelled_timeout'",
+            )
+            .bind(&buyer_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count timeout notifications after first run")
+            .get("c");
+            assert_eq!(notif_count_after_first, 1);
+
+            let pushes_after_first = pushes.lock().expect("broadcast mutex lock").clone();
+            assert_eq!(pushes_after_first, vec![buyer_id.clone()]);
+
+            process_payment_timeouts(&pool, &broadcast)
+                .await
+                .expect("second timeout run");
+
+            let order_status: String = sqlx::query("SELECT status FROM orders WHERE id = $1")
+                .bind(&order_id)
+                .fetch_one(&pool)
+                .await
+                .expect("select order status")
+                .get("status");
+            assert_eq!(order_status, "cancelled");
+
+            let inventory_status: String = sqlx::query("SELECT status FROM inventory WHERE id = $1")
+                .bind(&listing_id)
+                .fetch_one(&pool)
+                .await
+                .expect("select inventory status")
+                .get("status");
+            assert_eq!(inventory_status, "active");
+
+            let notif_count: i64 = sqlx::query(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id = $1 AND event_type = 'order_cancelled_timeout'",
+            )
+            .bind(&buyer_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count timeout notifications")
+            .get("c");
+            assert_eq!(notif_count, 1);
+
+            let pushes_snapshot = pushes.lock().expect("broadcast mutex lock").clone();
+            assert_eq!(pushes_snapshot, vec![buyer_id]);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_process_auto_completions_is_idempotent_on_repeat_run() {
+        with_local_test_pool(|pool| async move {
+            let seller_id = Uuid::new_v4().to_string();
+            let buyer_id = Uuid::new_v4().to_string();
+            let listing_id = Uuid::new_v4().to_string();
+            let order_id = Uuid::new_v4().to_string();
+
+            insert_user(&pool, &seller_id, "seller_complete_idempotent").await;
+            insert_user(&pool, &buyer_id, "buyer_complete_idempotent").await;
+            insert_listing(&pool, &listing_id, &seller_id, "sold").await;
+            insert_shipped_order(&pool, &order_id, &listing_id, &buyer_id, &seller_id).await;
+
+            let pushes: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let pushes_for_cb = Arc::clone(&pushes);
+            let broadcast: NotificationBroadcast = Arc::new(move |uid, _payload| {
+                if let Ok(mut lock) = pushes_for_cb.lock() {
+                    lock.push(uid);
+                }
+            });
+
+            process_auto_completions(&pool, &broadcast)
+                .await
+                .expect("first completion run");
+
+            let order_row_after_first =
+                sqlx::query("SELECT status, completed_at FROM orders WHERE id = $1")
+                    .bind(&order_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("select completed order after first run");
+            let order_status_after_first: String = order_row_after_first.get("status");
+            let completed_at_after_first: chrono::DateTime<chrono::Utc> =
+                order_row_after_first
+                    .try_get("completed_at")
+                    .expect("completed_at should be set after first run");
+            assert_eq!(order_status_after_first, "completed");
+
+            let buyer_notif_count_after_first: i64 = sqlx::query(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id = $1 AND event_type = 'order_auto_completed'",
+            )
+            .bind(&buyer_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count buyer notifications after first run")
+            .get("c");
+            assert_eq!(buyer_notif_count_after_first, 1);
+
+            let seller_notif_count_after_first: i64 = sqlx::query(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id = $1 AND event_type = 'order_auto_completed'",
+            )
+            .bind(&seller_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count seller notifications after first run")
+            .get("c");
+            assert_eq!(seller_notif_count_after_first, 1);
+
+            let pushes_after_first = pushes.lock().expect("broadcast mutex lock").clone();
+            let buyer_pushes_after_first =
+                pushes_after_first.iter().filter(|uid| *uid == &buyer_id).count();
+            let seller_pushes_after_first = pushes_after_first
+                .iter()
+                .filter(|uid| *uid == &seller_id)
+                .count();
+            assert_eq!(pushes_after_first.len(), 2);
+            assert_eq!(buyer_pushes_after_first, 1);
+            assert_eq!(seller_pushes_after_first, 1);
+
+            process_auto_completions(&pool, &broadcast)
+                .await
+                .expect("second completion run");
+
+            let order_row = sqlx::query("SELECT status, completed_at FROM orders WHERE id = $1")
+                .bind(&order_id)
+                .fetch_one(&pool)
+                .await
+                .expect("select completed order");
+            let order_status: String = order_row.get("status");
+            let completed_at: Option<chrono::DateTime<chrono::Utc>> =
+                order_row.try_get("completed_at").ok();
+            assert_eq!(order_status, "completed");
+            assert!(completed_at.is_some());
+            assert_eq!(
+                completed_at,
+                Some(completed_at_after_first),
+                "completed_at should remain unchanged on second idempotent run"
+            );
+
+            let buyer_notif_count: i64 = sqlx::query(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id = $1 AND event_type = 'order_auto_completed'",
+            )
+            .bind(&buyer_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count buyer completion notifications")
+            .get("c");
+            assert_eq!(buyer_notif_count, 1);
+
+            let seller_notif_count: i64 = sqlx::query(
+                "SELECT COUNT(*) AS c FROM notifications WHERE user_id = $1 AND event_type = 'order_auto_completed'",
+            )
+            .bind(&seller_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count seller completion notifications")
+            .get("c");
+            assert_eq!(seller_notif_count, 1);
+
+            let pushes_snapshot = pushes.lock().expect("broadcast mutex lock").clone();
+            let buyer_pushes = pushes_snapshot.iter().filter(|uid| *uid == &buyer_id).count();
+            let seller_pushes = pushes_snapshot.iter().filter(|uid| *uid == &seller_id).count();
+            assert_eq!(pushes_snapshot.len(), 2);
+            assert_eq!(buyer_pushes, 1);
+            assert_eq!(seller_pushes, 1);
         })
         .await;
     }
