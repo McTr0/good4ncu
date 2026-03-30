@@ -38,3 +38,56 @@ pub fn require_admin(
 
     Ok(user_id)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::api::auth::generate_access_token;
+
+    const SECRET: &str = "test_jwt_secret_at_least_32_characters_long";
+
+    fn bearer_headers(token: &str) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            format!("Bearer {}", token)
+                .parse()
+                .expect("Bearer header must be valid"),
+        );
+        headers
+    }
+
+    #[test]
+    fn require_admin_accepts_admin_token() {
+        let (token, _, _) = generate_access_token("admin-1", "admin", SECRET, 3600).expect("token");
+        let headers = bearer_headers(&token);
+        let user_id = require_admin(&headers, SECRET, None).expect("admin should be accepted");
+        assert_eq!(user_id, "admin-1");
+    }
+
+    #[test]
+    fn require_admin_rejects_non_admin_token() {
+        let (token, _, _) = generate_access_token("user-1", "user", SECRET, 3600).expect("token");
+        let headers = bearer_headers(&token);
+        let err = require_admin(&headers, SECRET, None).expect_err("non-admin rejected");
+        assert!(matches!(err, ApiError::Forbidden));
+    }
+
+    #[test]
+    fn require_admin_rejects_missing_header() {
+        let headers = HeaderMap::new();
+        let err = require_admin(&headers, SECRET, None).expect_err("missing header rejected");
+        assert!(matches!(err, ApiError::Unauthorized));
+    }
+
+    #[test]
+    fn require_admin_accepts_old_secret_token() {
+        let old_secret = "old_test_jwt_secret_at_least_32_characters";
+        let (token, _, _) =
+            generate_access_token("admin-legacy", "admin", old_secret, 3600).expect("token");
+        let headers = bearer_headers(&token);
+        let user_id =
+            require_admin(&headers, SECRET, Some(old_secret)).expect("legacy admin accepted");
+        assert_eq!(user_id, "admin-legacy");
+    }
+}
