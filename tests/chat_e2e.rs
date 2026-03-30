@@ -9,9 +9,9 @@
 //! Tests are independent and clean up their data in the drop step.
 
 use axum::http::{HeaderMap, StatusCode};
+use good4ncu::test_infra::db_safety;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
-use sqlx::PgPool;
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -248,7 +248,7 @@ fn auth_headers(token: &str) -> HeaderMap {
 /// Test 1: Connection lifecycle - request, accept, reject
 #[tokio::test]
 async fn test_connection_lifecycle() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
@@ -384,7 +384,7 @@ async fn test_connection_lifecycle() -> anyhow::Result<()> {
 /// Test 2: Message sending and receiving
 #[tokio::test]
 async fn test_message_sending() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
@@ -505,7 +505,7 @@ async fn test_message_sending() -> anyhow::Result<()> {
 /// Test 3: Message editing within 15-minute window and 403 for editing other's messages
 #[tokio::test]
 async fn test_message_editing() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
@@ -663,7 +663,7 @@ async fn test_message_editing() -> anyhow::Result<()> {
 /// Test 4: Read receipts - marking messages as read
 #[tokio::test]
 async fn test_read_receipts() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
@@ -784,7 +784,7 @@ async fn test_read_receipts() -> anyhow::Result<()> {
 /// Test 5: Typing indicator - endpoint returns 200 OK when called
 #[tokio::test]
 async fn test_typing_indicator() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
@@ -862,7 +862,7 @@ async fn test_typing_indicator() -> anyhow::Result<()> {
 /// Test 6: Cannot send messages to non-connected users (connection must be "connected")
 #[tokio::test]
 async fn test_cannot_send_to_non_connected() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 
@@ -930,7 +930,7 @@ async fn test_cannot_send_to_non_connected() -> anyhow::Result<()> {
 /// Test 7: Cannot accept own connection request (must be receiver)
 #[tokio::test]
 async fn test_cannot_accept_own_request() -> anyhow::Result<()> {
-    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    let database_url = db_safety::resolve_test_database_url();
     let base_url =
         std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
 

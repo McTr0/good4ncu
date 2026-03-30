@@ -10,11 +10,12 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::future::Future;
 
+pub mod db_safety;
+
 /// Creates a new test pool connected to the test database.
 /// The pool is configured with a short timeout and minimal connections.
 async fn create_test_pool() -> PgPool {
-    let database_url = std::env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgres://mctr0@localhost/good4ncu".to_string());
+    let database_url = db_safety::resolve_test_database_url();
 
     PgPoolOptions::new()
         .max_connections(1)
@@ -64,6 +65,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_resolve_test_database_url_prefers_test_name() {
+        std::env::set_var("TEST_DATABASE_URL", "postgres://localhost/good4ncu_test");
+        let resolved = db_safety::resolve_test_database_url();
+        assert!(resolved.contains("good4ncu_test"));
+        std::env::remove_var("TEST_DATABASE_URL");
+    }
 
     #[tokio::test]
     async fn test_with_test_pool_smoke() {
