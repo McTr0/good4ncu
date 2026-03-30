@@ -38,8 +38,21 @@ jobs:
         with:
           components: clippy
 
-      - name: Run Clippy
-        run: cargo clippy -- -D warnings
+      - name: Run Clippy (all targets)
+        run: cargo clippy --all-targets -- -D warnings
+
+  check:
+    name: Cargo Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Run cargo check
+        run: cargo check --locked
 
   test:
     name: Unit Tests
@@ -60,6 +73,7 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgres://testuser:testpass@localhost:5432/good4ncu_test
+      TEST_DATABASE_URL: postgres://testuser:testpass@localhost:5432/good4ncu_test
       GEMINI_API_KEY: test_key_for_ci
       JWT_SECRET: test_jwt_secret_at_least_32_characters_long
       RUST_LOG: error
@@ -72,6 +86,42 @@ jobs:
 
       - name: Run tests
         run: cargo test -- --nocapture --test-threads=1
+
+  migration_check:
+    name: Migration Verification
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: testuser
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://testuser:testpass@localhost:5432/good4ncu_ci_migrate_test
+      TEST_DATABASE_URL: postgres://testuser:testpass@localhost:5432/good4ncu_ci_migrate_test
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install PostgreSQL client
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+
+      - name: Create migration test database
+        run: psql "postgres://testuser:testpass@localhost:5432/postgres" -c "CREATE DATABASE good4ncu_ci_migrate_test;"
+
+      - name: Apply all migrations
+        run: cargo test test_with_test_pool_smoke --lib -- --nocapture --test-threads=1
 
   build:
     name: Build Check
@@ -92,6 +142,19 @@ jobs:
           name: good4ncu-binary
           path: target/release/good4ncu
           retention-days: 1
+
+  docker_build:
+    name: Docker Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build backend image
+        run: docker build -t good4ncu:ci .
 
   flutter_analyze:
     name: Flutter Analyze
