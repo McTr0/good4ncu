@@ -30,6 +30,7 @@ pub mod stats;
 pub mod upload;
 pub mod user;
 pub mod user_chat;
+pub mod user_chat_models;
 pub mod watchlist;
 pub mod ws;
 use error::ApiError;
