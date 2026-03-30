@@ -99,7 +99,7 @@ Acceptance Criteria:
 
 ## Week 1 PR Queue (PR-Sized Batches)
 
-1. ci: add mobile analyze/test gates.
+1. [DONE] ci: add mobile analyze/test gates.
 2. refactor(chat): extract DTO/event types from user_chat module.
 3. refactor(chat): extract connection handlers.
 4. refactor(chat): extract message handlers.
@@ -126,9 +126,9 @@ Mitigation: startup-time schema/config dimension check, fail fast.
 
 ## Tomorrow Morning Start (First 3 Tasks)
 
-1. Merge CI gate expansion.
-2. Open PR for user_chat DTO/event extraction only (behavior-neutral).
-3. Add route contract assertions around extracted handlers before moving business logic.
+1. Open PR for user_chat DTO/event extraction only (behavior-neutral).
+2. Add route contract assertions around extracted handlers before moving business logic.
+3. Prepare transaction adapter spike for order/chat rollback tests.
 
 ## Definition of Done for This Cycle
 
