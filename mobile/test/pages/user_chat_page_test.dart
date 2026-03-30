@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:good4ncu_mobile/models/models.dart';
+import 'package:good4ncu_mobile/components/audio_message_player.dart';
 import 'package:good4ncu_mobile/pages/user_chat_page.dart';
 
 void main() {
@@ -325,7 +326,7 @@ void main() {
       expect(find.text('已发送'), findsNothing);
     });
 
-    testWidgets('displays voice message indicator', (tester) async {
+    testWidgets('displays voice message player', (tester) async {
       final message = ConversationMessage(
         id: '1',
         conversationId: 'conv-1',
@@ -346,7 +347,8 @@ void main() {
       ));
 
       expect(find.text('语音消息'), findsOneWidget);
-      expect(find.byIcon(Icons.mic), findsOneWidget);
+      expect(find.byType(AudioMessagePlayer), findsOneWidget);
+      expect(find.byIcon(Icons.play_circle), findsOneWidget);
     });
 
     testWidgets('triggers onEdit callback when edit is tapped', (tester) async {
