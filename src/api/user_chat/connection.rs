@@ -1,8 +1,4 @@
-use axum::{
-    extract::State,
-    http::HeaderMap,
-    Json,
-};
+use axum::{extract::State, http::HeaderMap, Json};
 use sqlx::Row;
 
 use crate::api::auth::extract_user_id_from_token_with_fallback;

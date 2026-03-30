@@ -20,8 +20,8 @@ pub use crate::api::user_chat_models::{
 };
 
 mod connection;
-mod message;
 mod events;
+mod message;
 
 pub use connection::{connect_accept, connect_reject, connect_request, list_connections};
 pub use message::{
