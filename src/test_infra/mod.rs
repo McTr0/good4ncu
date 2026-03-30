@@ -108,7 +108,10 @@ pub(crate) async fn ensure_test_schema_ready(database_url: &str) {
     }
 
     fn is_duplicate_schema_conflict(err: &sqlx::migrate::MigrateError) -> bool {
-        matches!(migration_error_code(err).as_deref(), Some("42701") | Some("42P07"))
+        matches!(
+            migration_error_code(err).as_deref(),
+            Some("42701") | Some("42P07")
+        )
     }
 
     async fn reset_public_schema(pool: &PgPool) {
