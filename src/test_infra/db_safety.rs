@@ -3,6 +3,30 @@ pub fn extract_db_name(database_url: &str) -> Option<String> {
     without_query.rsplit('/').next().map(|s| s.to_string())
 }
 
+pub fn with_database_name(database_url: &str, db_name: &str) -> Option<String> {
+    let (base, query) = match database_url.split_once('?') {
+        Some((b, q)) => (b, Some(q)),
+        None => (database_url, None),
+    };
+
+    let slash_pos = base.rfind('/')?;
+    let mut rebuilt = String::with_capacity(database_url.len() + db_name.len());
+    rebuilt.push_str(&base[..slash_pos + 1]);
+    rebuilt.push_str(db_name);
+    if let Some(q) = query {
+        rebuilt.push('?');
+        rebuilt.push_str(q);
+    }
+    Some(rebuilt)
+}
+
+pub fn is_safe_db_identifier(db_name: &str) -> bool {
+    !db_name.is_empty()
+        && db_name
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+}
+
 pub fn validate_test_database_url(database_url: &str) -> Result<(), String> {
     let db_name = extract_db_name(database_url).unwrap_or_default();
     let allow_non_test_wipe = std::env::var("ALLOW_NON_TEST_DB_WIPE")
@@ -44,6 +68,25 @@ mod tests {
             extract_db_name("postgres://localhost/good4ncu?sslmode=disable"),
             Some("good4ncu".to_string())
         );
+    }
+
+    #[test]
+    fn test_with_database_name_preserves_query() {
+        assert_eq!(
+            with_database_name(
+                "postgres://user:pass@localhost:5432/good4ncu_test?sslmode=disable",
+                "postgres"
+            ),
+            Some("postgres://user:pass@localhost:5432/postgres?sslmode=disable".to_string())
+        );
+    }
+
+    #[test]
+    fn test_safe_db_identifier() {
+        assert!(is_safe_db_identifier("good4ncu_test"));
+        assert!(!is_safe_db_identifier(""));
+        assert!(!is_safe_db_identifier("good4ncu-test"));
+        assert!(!is_safe_db_identifier("good4ncu test"));
     }
 
     #[test]

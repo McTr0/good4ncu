@@ -230,6 +230,8 @@ async fn process_auto_completions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_infra::db_safety;
+    use crate::test_infra::{ensure_test_database_exists, ensure_test_schema_ready};
     use sqlx::Row;
     use std::sync::LazyLock;
     use std::sync::{Arc, Mutex};
@@ -237,40 +239,15 @@ mod tests {
 
     static TEST_DB_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 
-    fn resolve_test_database_url() -> String {
-        let database_url = std::env::var("TEST_DATABASE_URL")
-            .or_else(|_| std::env::var("DATABASE_URL"))
-            .unwrap_or_else(|_| "postgres://mctr0@localhost/good4ncu_test".to_string());
-
-        let db_name = database_url
-            .split('?')
-            .next()
-            .unwrap_or(&database_url)
-            .rsplit('/')
-            .next()
-            .unwrap_or_default()
-            .to_lowercase();
-        let allow_non_test_wipe = std::env::var("ALLOW_NON_TEST_DB_WIPE")
-            .map(|v| v == "1")
-            .unwrap_or(false);
-
-        if !db_name.contains("test") && !allow_non_test_wipe {
-            panic!(
-                "Refusing to clean non-test database '{}'. Set TEST_DATABASE_URL to a *_test DB.",
-                db_name
-            );
-        }
-
-        database_url
-    }
-
     async fn with_local_test_pool<F, Fut>(test_body: F)
     where
         F: FnOnce(PgPool) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
         let _guard = TEST_DB_LOCK.lock().await;
-        let database_url = resolve_test_database_url();
+        let database_url = db_safety::resolve_test_database_url();
+        let _created = ensure_test_database_exists(&database_url).await;
+        ensure_test_schema_ready(&database_url).await;
         let pool = sqlx::postgres::PgPoolOptions::new()
             .max_connections(1)
             .min_connections(1)

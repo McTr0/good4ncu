@@ -19,7 +19,6 @@ use uuid::Uuid;
 struct TestUser {
     user_id: String,
     username: String,
-    password: String,
     token: String,
 }
 
@@ -93,7 +92,6 @@ async fn create_test_user(
     Ok(TestUser {
         user_id: login_response.user_id,
         username,
-        password,
         token: login_response.token,
     })
 }
@@ -131,6 +129,7 @@ struct ConnectAcceptBody {
 #[derive(Debug, Deserialize)]
 struct ConnectAcceptResponse {
     pub status: String,
+    #[allow(dead_code)]
     pub established_at: String,
 }
 
@@ -147,12 +146,18 @@ struct ConnectRejectResponse {
 #[derive(Debug, Deserialize)]
 struct ConnectionEntry {
     pub id: String,
+    #[allow(dead_code)]
     pub requester_id: String,
+    #[allow(dead_code)]
     pub other_user_id: String,
+    #[allow(dead_code)]
     pub other_username: Option<String>,
     pub status: String,
+    #[allow(dead_code)]
     pub established_at: Option<String>,
+    #[allow(dead_code)]
     pub created_at: String,
+    #[allow(dead_code)]
     pub unread_count: i32,
     pub is_receiver: bool,
 }
@@ -175,9 +180,13 @@ struct SendMessageResponse {
     pub sender: String,
     pub content: String,
     pub conversation_id: String,
+    #[allow(dead_code)]
     pub timestamp: String,
+    #[allow(dead_code)]
     pub read_at: Option<String>,
+    #[allow(dead_code)]
     pub image_data: Option<String>,
+    #[allow(dead_code)]
     pub audio_data: Option<String>,
     pub status: String,
 }
@@ -188,20 +197,26 @@ struct MessageEntry {
     pub sender: String,
     pub sender_username: Option<String>,
     pub content: String,
+    #[allow(dead_code)]
     pub is_agent: bool,
     pub timestamp: String,
     pub read_at: Option<String>,
     pub read_by: Option<String>,
+    #[allow(dead_code)]
     pub image_data: Option<String>,
+    #[allow(dead_code)]
     pub audio_data: Option<String>,
+    #[allow(dead_code)]
     pub status: String,
     pub edited_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct MessageListResponse {
+    #[allow(dead_code)]
     pub conversation_id: String,
     pub messages: Vec<MessageEntry>,
+    #[allow(dead_code)]
     pub total: i64,
 }
 
@@ -212,6 +227,7 @@ struct EditMessageBody {
 
 #[derive(Debug, Deserialize)]
 struct EditMessageResponse {
+    #[allow(dead_code)]
     pub message_id: i64,
     pub content: String,
     pub edited_at: String,
@@ -586,10 +602,7 @@ async fn test_message_editing() -> anyhow::Result<()> {
     );
     let edit_result = edit_response.json::<EditMessageResponse>().await?;
     assert_eq!(edit_result.content, edited_content);
-    assert!(
-        edit_result.edited_at.is_empty() == false,
-        "edited_at should be set"
-    );
+    assert!(!edit_result.edited_at.is_empty(), "edited_at should be set");
 
     // Verify edit is reflected in subsequent GET
     let get_response = client
@@ -743,10 +756,7 @@ async fn test_read_receipts() -> anyhow::Result<()> {
     );
     let read_result = read_response.json::<MarkReadResponse>().await?;
     assert_eq!(read_result.message_id, message_id);
-    assert!(
-        read_result.read_at.is_empty() == false,
-        "read_at should be set"
-    );
+    assert!(!read_result.read_at.is_empty(), "read_at should be set");
 
     // Verify the message now has a read_at timestamp
     let get_response = client
