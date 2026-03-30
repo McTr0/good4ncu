@@ -7,11 +7,7 @@ import 'package:good4ncu_mobile/pages/user_chat_page.dart';
 void main() {
   group('MessageBubble', () {
     Widget buildTestableWidget(Widget child) {
-      return MaterialApp(
-        home: Scaffold(
-          body: child,
-        ),
-      );
+      return MaterialApp(home: Scaffold(body: child));
     }
 
     testWidgets('aligns own messages to the right', (tester) async {
@@ -24,14 +20,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: () {},
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: () {},
+          ),
         ),
-      ));
+      );
 
       final align = tester.widget<Align>(find.byType(Align));
       expect(align.alignment, equals(Alignment.centerRight));
@@ -47,14 +45,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: false,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: false,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       final align = tester.widget<Align>(find.byType(Align));
       expect(align.alignment, equals(Alignment.centerLeft));
@@ -70,14 +70,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: false,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: false,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('Hello, World!'), findsOneWidget);
     });
@@ -92,19 +94,23 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: false,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: false,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('14:30'), findsOneWidget);
     });
 
-    testWidgets('shows edit link for own messages within edit window', (tester) async {
+    testWidgets('shows edit link for own messages within edit window', (
+      tester,
+    ) async {
       final message = ConversationMessage(
         id: '1',
         conversationId: 'conv-1',
@@ -114,19 +120,23 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: () {},
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: () {},
+          ),
         ),
-      ));
+      );
 
       expect(find.text('编辑'), findsOneWidget);
     });
 
-    testWidgets('does not show edit link for other users messages', (tester) async {
+    testWidgets('does not show edit link for other users messages', (
+      tester,
+    ) async {
       final message = ConversationMessage(
         id: '1',
         conversationId: 'conv-1',
@@ -136,14 +146,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: false,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: false,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('编辑'), findsNothing);
     });
@@ -158,19 +170,23 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('编辑'), findsNothing);
     });
 
-    testWidgets('displays edited indicator when message is edited', (tester) async {
+    testWidgets('displays edited indicator when message is edited', (
+      tester,
+    ) async {
       final message = ConversationMessage(
         id: '1',
         conversationId: 'conv-1',
@@ -181,14 +197,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null, // Should be null because editedAt is set
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null, // Should be null because editedAt is set
+          ),
         ),
-      ));
+      );
 
       expect(find.text('（已编辑）'), findsOneWidget);
     });
@@ -203,14 +221,16 @@ void main() {
         status: 'sending',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.byType(CircularProgressIndicator), findsOneWidget);
       expect(find.text('发送中'), findsOneWidget);
@@ -226,14 +246,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('已发送'), findsOneWidget);
     });
@@ -248,14 +270,16 @@ void main() {
         status: 'delivered',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('已送达'), findsOneWidget);
     });
@@ -270,14 +294,16 @@ void main() {
         status: 'read',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('已读'), findsOneWidget);
     });
@@ -292,14 +318,16 @@ void main() {
         status: 'failed',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('发送失败'), findsOneWidget);
     });
@@ -314,14 +342,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: false,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: false,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('已发送'), findsNothing);
     });
@@ -337,14 +367,16 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: false,
-          isConnected: true,
-          onEdit: null,
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: false,
+            isConnected: true,
+            onEdit: null,
+          ),
         ),
-      ));
+      );
 
       expect(find.text('语音消息'), findsOneWidget);
       expect(find.byType(AudioMessagePlayer), findsOneWidget);
@@ -362,16 +394,18 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: () {
-            editCalled = true;
-          },
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: () {
+              editCalled = true;
+            },
+          ),
         ),
-      ));
+      );
 
       await tester.tap(find.text('编辑'));
       await tester.pump();
@@ -379,7 +413,9 @@ void main() {
       expect(editCalled, isTrue);
     });
 
-    testWidgets('triggers onEdit callback when bubble is long pressed', (tester) async {
+    testWidgets('triggers onEdit callback when bubble is long pressed', (
+      tester,
+    ) async {
       bool editCalled = false;
       final message = ConversationMessage(
         id: '1',
@@ -390,16 +426,18 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        MessageBubble(
-          message: message,
-          isMe: true,
-          isConnected: true,
-          onEdit: () {
-            editCalled = true;
-          },
+      await tester.pumpWidget(
+        buildTestableWidget(
+          MessageBubble(
+            message: message,
+            isMe: true,
+            isConnected: true,
+            onEdit: () {
+              editCalled = true;
+            },
+          ),
         ),
-      ));
+      );
 
       await tester.longPress(find.text('Long press to edit'));
       await tester.pump();
@@ -407,7 +445,9 @@ void main() {
       expect(editCalled, isTrue);
     });
 
-    testWidgets('uses different colors for own vs other messages', (tester) async {
+    testWidgets('uses different colors for own vs other messages', (
+      tester,
+    ) async {
       final myMessage = ConversationMessage(
         id: '1',
         conversationId: 'conv-1',
@@ -426,24 +466,26 @@ void main() {
         status: 'sent',
       );
 
-      await tester.pumpWidget(buildTestableWidget(
-        Column(
-          children: [
-            MessageBubble(
-              message: myMessage,
-              isMe: true,
-              isConnected: true,
-              onEdit: null,
-            ),
-            MessageBubble(
-              message: otherMessage,
-              isMe: false,
-              isConnected: true,
-              onEdit: null,
-            ),
-          ],
+      await tester.pumpWidget(
+        buildTestableWidget(
+          Column(
+            children: [
+              MessageBubble(
+                message: myMessage,
+                isMe: true,
+                isConnected: true,
+                onEdit: null,
+              ),
+              MessageBubble(
+                message: otherMessage,
+                isMe: false,
+                isConnected: true,
+                onEdit: null,
+              ),
+            ],
+          ),
         ),
-      ));
+      );
 
       // Find the containers with decorations (message bubbles)
       final containers = tester.widgetList<Container>(find.byType(Container));
@@ -453,53 +495,55 @@ void main() {
 
   group('ConnectionIndicator', () {
     testWidgets('shows offline state when ws not connected', (tester) async {
-      await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(
-          body: ConnectionIndicator(
-            status: 'connected',
-            isWsConnected: false,
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ConnectionIndicator(
+              status: 'connected',
+              isWsConnected: false,
+            ),
           ),
         ),
-      ));
+      );
 
       expect(find.text('离线'), findsOneWidget);
     });
 
     testWidgets('shows connected status when ws connected', (tester) async {
-      await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(
-          body: ConnectionIndicator(
-            status: 'connected',
-            isWsConnected: true,
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ConnectionIndicator(status: 'connected', isWsConnected: true),
           ),
         ),
-      ));
+      );
 
       expect(find.text('在线'), findsOneWidget);
     });
 
     testWidgets('shows pending status', (tester) async {
-      await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(
-          body: ConnectionIndicator(
-            status: 'pending',
-            isWsConnected: true,
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ConnectionIndicator(status: 'pending', isWsConnected: true),
           ),
         ),
-      ));
+      );
 
       expect(find.text('待接受'), findsOneWidget);
     });
 
     testWidgets('shows connecting status with animation', (tester) async {
-      await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(
-          body: ConnectionIndicator(
-            status: 'connecting',
-            isWsConnected: true,
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ConnectionIndicator(
+              status: 'connecting',
+              isWsConnected: true,
+            ),
           ),
         ),
-      ));
+      );
 
       expect(find.text('连接中...'), findsOneWidget);
       // Verify the ConnectionIndicator has an AnimatedBuilder descendant
@@ -513,14 +557,16 @@ void main() {
     });
 
     testWidgets('shows default offline for unknown status', (tester) async {
-      await tester.pumpWidget(const MaterialApp(
-        home: Scaffold(
-          body: ConnectionIndicator(
-            status: 'unknown_status',
-            isWsConnected: true,
+      await tester.pumpWidget(
+        const MaterialApp(
+          home: Scaffold(
+            body: ConnectionIndicator(
+              status: 'unknown_status',
+              isWsConnected: true,
+            ),
           ),
         ),
-      ));
+      );
 
       expect(find.text('离线'), findsOneWidget);
     });

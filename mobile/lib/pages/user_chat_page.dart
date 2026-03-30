@@ -4,6 +4,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:record/record.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:uuid/uuid.dart';
 import 'dart:io';
 import '../models/models.dart';
 import '../services/api_service.dart';
@@ -290,7 +291,7 @@ class _UserChatPageState extends State<UserChatPage> {
 
     final text = _textController.text.trim();
     final tempMsg = ConversationMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: 'temp_${const Uuid().v4()}',
       conversationId: widget.conversationId,
       senderId: _currentUserId ?? '',
       content: text,
@@ -347,7 +348,7 @@ class _UserChatPageState extends State<UserChatPage> {
     final bytes = await picked.readAsBytes();
     final imageBase64 = base64Encode(bytes);
     final tempMsg = ConversationMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: 'temp_${const Uuid().v4()}',
       conversationId: widget.conversationId,
       senderId: _currentUserId ?? '',
       content: '[图片消息]',
@@ -468,7 +469,7 @@ class _UserChatPageState extends State<UserChatPage> {
     }
 
     final tempMsg = ConversationMessage(
-      id: DateTime.now().millisecondsSinceEpoch.toString(),
+      id: 'temp_${const Uuid().v4()}',
       conversationId: widget.conversationId,
       senderId: _currentUserId ?? '',
       content: '[语音消息]',
