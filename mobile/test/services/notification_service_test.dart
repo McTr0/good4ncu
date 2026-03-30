@@ -33,8 +33,7 @@ class _FakeNotificationService extends NotificationService {
     Map<String, String> headers,
     String body, {
     bool allowAuthRetry = true,
-  }
-  ) async {
+  }) async {
     postUris.add(url);
     if (url.path.endsWith('/read-all')) {
       return markAllResponse;

@@ -33,8 +33,7 @@ class _FakeWatchlistService extends WatchlistService {
     Map<String, String> headers,
     String body, {
     bool allowAuthRetry = true,
-  }
-  ) async {
+  }) async {
     lastPostUri = url;
     return postResponse;
   }
