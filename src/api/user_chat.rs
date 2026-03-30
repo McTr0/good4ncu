@@ -12,7 +12,6 @@
 //! - `new_message` — new direct message
 //! - `message_read` — a message was marked as read
 
-use serde::Serialize;
 pub use crate::api::user_chat_models::{
     ConnectAcceptBody, ConnectAcceptResponse, ConnectRejectBody, ConnectRejectResponse,
     ConnectRequestBody, ConnectRequestResponse, ConnectionEntry, ConnectionListResponse,
@@ -22,6 +21,7 @@ pub use crate::api::user_chat_models::{
 
 mod connection;
 mod message;
+mod events;
 
 pub use connection::{connect_accept, connect_reject, connect_request, list_connections};
 pub use message::{
@@ -29,67 +29,10 @@ pub use message::{
     send_connection_message, typing_indicator,
 };
 
-// ---------------------------------------------------------------------------
-// Schema initialization
-// ---------------------------------------------------------------------------
-#[derive(Serialize)]
-struct WsTypingEvent {
-    event: String,
-    conversation_id: String,
-    user_id: String,
-    username: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// WebSocket event helpers
-// ---------------------------------------------------------------------------
-
-/// WS event payloads sent to clients.
-#[derive(Serialize)]
-struct WsConnectionRequestEvent {
-    event: String,
-    connection_id: String,
-    requester_id: String,
-    requester_username: Option<String>,
-    listing_id: Option<String>,
-}
-
-#[derive(Serialize)]
-struct WsConnectionEstablishedEvent {
-    event: String,
-    connection_id: String,
-    established_at: String,
-}
-
-#[derive(Serialize)]
-struct WsConnectionRejectedEvent {
-    event: String,
-    connection_id: String,
-}
-
-#[derive(Serialize)]
-struct WsNewMessageEvent {
-    event: String,
-    message_id: i64,
-    conversation_id: String,
-    sender: String,
-    sender_username: Option<String>,
-    content: String,
-    timestamp: String,
-    read_at: Option<String>,
-    image_data: Option<String>,
-    audio_data: Option<String>,
-    image_url: Option<String>,
-    audio_url: Option<String>,
-}
-
-#[derive(Serialize)]
-struct WsMessageReadEvent {
-    event: String,
-    message_id: i64,
-    read_at: String,
-    read_by: String,
-}
+pub(crate) use events::{
+    WsConnectionEstablishedEvent, WsConnectionRejectedEvent, WsConnectionRequestEvent,
+    WsMessageReadEvent, WsNewMessageEvent, WsTypingEvent,
+};
 
 // ---------------------------------------------------------------------------
 // Tests
