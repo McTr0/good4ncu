@@ -21,7 +21,7 @@ This document catalogs all DISABLED, placeholder, and stub functionality in the 
 | 2 | 图片审核 Worker（异步轮询 + FOR UPDATE SKIP LOCKED） | ✅ | `src/services/moderation_worker.rs` |
 | 3 | ModerationService 集成到所有 Handler | ✅ | `src/api/listings.rs`, `user_chat.rs`, `user.rs` |
 | 4 | `moderation_jobs` 表 + 各表 `moderation_status` 列 | ✅ | `migrations/0011_moderation_jobs.sql` |
-| 5 | 接入真实阿里云 IMAN API | ⬜ 待实现 | `src/services/moderation_worker.rs` |
+| 5 | 接入真实图片审核 API（HTTP + 判定解析 + 重试） | ✅ | `src/services/moderation_worker.rs` |
 | 6 | 头像待审核占位符 UX（审核通过前显示默认头像） | ⬜ 待实现 | `mobile/` |
 
 **依赖关系：** Item 5 依赖 Item 1-4；Item 6 依赖 Item 5。

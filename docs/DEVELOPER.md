@@ -380,6 +380,11 @@ image_enabled = true
 image_api_url = "https://api.imantect.example.com/v1/moderation"
 image_api_key = "your-image-moderation-api-key"
 image_max_retries = 3
+
+# 生产建议：优先使用环境变量覆盖审核配置
+# MODERATION_IMAGE_ENABLED=true
+# MODERATION_IMAGE_API_URL=https://your-provider.example.com/moderation
+# MODERATION_IMAGE_API_KEY=your-secret-key
 ```
 
 **TOML配置文件搜索路径：**

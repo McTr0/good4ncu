@@ -442,6 +442,7 @@ Header: Authorization: Bearer <token>（需 admin）
 | `VECTOR_DIM` | No | `768` | 向量维度（pgvector embedding） |
 | `CORS_ORIGINS` | No | `*` | 允许的跨域源，多个用逗号分隔 |
 | `BLOCKED_KEYWORDS` | No | — | 逗号分隔的敏感词列表 |
+| `MODERATION_IMAGE_ENABLED` | No | `true` | 是否启用图片审核 Worker |
 | `MODERATION_IMAGE_API_KEY` | No | — | 阿里云 IMAN 图片审核 API Key |
 | `MODERATION_IMAGE_API_URL` | No | — | 阿里云 IMAN API 端点 |
 

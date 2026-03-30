@@ -3,6 +3,7 @@
 //! Polls the `moderation_jobs` table for pending jobs and calls the external
 //! image moderation API (Alibaba IMAN). Updates job status to approved/rejected/failed.
 
+use serde_json::Value;
 use sqlx::PgPool;
 use std::time::Duration;
 
@@ -15,14 +16,34 @@ const MAX_JOBS_PER_CYCLE: i64 = 20;
 /// Maximum retry attempts before marking a job as failed.
 const MAX_RETRIES: i32 = 3;
 
+#[derive(Clone)]
+pub struct ModerationApiConfig {
+    pub enabled: bool,
+    pub api_url: Option<String>,
+    pub api_key: Option<String>,
+}
+
+impl ModerationApiConfig {
+    pub fn from_parts(enabled: bool, api_url: Option<String>, api_key: Option<String>) -> Self {
+        Self {
+            enabled,
+            api_url,
+            api_key,
+        }
+    }
+}
+
 /// Run the moderation worker loop.
 /// Spawn this as a background `tokio::spawn` task in `main.rs`.
-pub async fn run_moderation_worker(db: PgPool) {
+pub async fn run_moderation_worker(db: PgPool, cfg: ModerationApiConfig) {
     tracing::info!("Moderation worker started");
+    if !cfg.enabled {
+        tracing::info!("Image moderation is disabled by configuration");
+    }
     let mut backoff_secs = POLL_INTERVAL_SECS;
     let max_backoff_secs = 60;
     loop {
-        match process_pending_jobs(&db).await {
+        match process_pending_jobs(&db, &cfg).await {
             Ok(count) => {
                 if count > 0 {
                     tracing::debug!(count, "moderation jobs processed");
@@ -41,7 +62,7 @@ pub async fn run_moderation_worker(db: PgPool) {
 }
 
 /// Fetch and process up to MAX_JOBS_PER_CYCLE pending jobs.
-async fn process_pending_jobs(db: &PgPool) -> anyhow::Result<i64> {
+async fn process_pending_jobs(db: &PgPool, cfg: &ModerationApiConfig) -> anyhow::Result<i64> {
     // Claim jobs by updating status from 'pending' → 'processing' atomically.
     // This prevents multiple workers from claiming the same job.
     let rows = sqlx::query_as::<_, (String, String, String, String, i32)>(
@@ -71,7 +92,7 @@ async fn process_pending_jobs(db: &PgPool) -> anyhow::Result<i64> {
 
     let count = rows.len() as i64;
     for (id, resource_type, resource_id, image_url, retry_count) in rows {
-        let result = moderate_image(&image_url).await;
+        let result = moderate_image(&image_url, cfg).await;
         let (new_status, reject_reason) = match result {
             Ok(true) => ("approved", None),
             Ok(false) => ("rejected", Some("图片内容不合规".to_string())),
@@ -122,17 +143,95 @@ async fn process_pending_jobs(db: &PgPool) -> anyhow::Result<i64> {
 
 /// Call the external image moderation API for the given URL.
 /// Returns `Ok(true)` = approved, `Ok(false)` = rejected, `Err` = API error.
-async fn moderate_image(image_url: &str) -> anyhow::Result<bool> {
-    // TODO: Integrate with Alibaba Cloud IMAN when OSS credentials are available.
-    // For now, simulate approval for all images to unblock development.
-    // Real implementation:
-    //   POST https://imagerecog.cn-shanghai.aliyuncs.com/v2/openapi/moderation/async
-    //   Headers: Authorization: ACOS-V2AccessKeyId:..., X-ACS-Signature:...
-    //   Body: { "tasks": [{ "image_url": image_url }], "async": true }
-    //
-    // For production, replace this stub with actual IMAN API call.
-    tracing::debug!(url = %image_url, "image moderation (stub — always approved)");
-    Ok(true)
+async fn moderate_image(image_url: &str, cfg: &ModerationApiConfig) -> anyhow::Result<bool> {
+    if !cfg.enabled {
+        return Ok(true);
+    }
+
+    let api_url = cfg
+        .api_url
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("MODERATION_IMAGE_API_URL is not configured"))?;
+    let api_key = cfg
+        .api_key
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("MODERATION_IMAGE_API_KEY is not configured"))?;
+
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()?;
+
+    let body = serde_json::json!({
+        "image_url": image_url,
+        "source": "good4ncu"
+    });
+
+    let resp = client
+        .post(api_url)
+        .header(reqwest::header::AUTHORIZATION, format!("Bearer {api_key}"))
+        .json(&body)
+        .send()
+        .await?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(anyhow::anyhow!(
+            "moderation api non-success status={} body={}",
+            status,
+            text
+        ));
+    }
+
+    let payload: Value = resp.json().await?;
+    parse_moderation_verdict(&payload)
+        .ok_or_else(|| anyhow::anyhow!("unable to parse moderation verdict from response"))
+}
+
+fn parse_moderation_verdict(payload: &Value) -> Option<bool> {
+    if let Some(v) = payload.get("approved").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+    if let Some(v) = payload.get("pass").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+    if let Some(v) = payload.get("ok").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+
+    for key in ["status", "result", "verdict"] {
+        if let Some(s) = payload
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_ascii_lowercase())
+        {
+            if ["approved", "pass", "passed", "ok", "clean", "safe"].contains(&s.as_str()) {
+                return Some(true);
+            }
+            if ["rejected", "reject", "blocked", "unsafe", "deny", "denied"].contains(&s.as_str()) {
+                return Some(false);
+            }
+        }
+    }
+
+    if let Some(s) = payload
+        .pointer("/data/status")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_ascii_lowercase())
+    {
+        if ["approved", "pass", "passed", "ok", "clean", "safe"].contains(&s.as_str()) {
+            return Some(true);
+        }
+        if ["rejected", "reject", "blocked", "unsafe", "deny", "denied"].contains(&s.as_str()) {
+            return Some(false);
+        }
+    }
+
+    if let Some(v) = payload.pointer("/data/approved").and_then(|v| v.as_bool()) {
+        return Some(v);
+    }
+
+    None
 }
 
 /// Update the per-resource moderation status column.
@@ -151,9 +250,16 @@ async fn update_resource_status(
                 .await?;
         }
         "chat_image" => {
+            let message_id: i64 = resource_id.parse().map_err(|e| {
+                anyhow::anyhow!(
+                    "invalid chat_image resource_id '{}': {}",
+                    resource_id,
+                    e
+                )
+            })?;
             sqlx::query("UPDATE chat_messages SET moderation_status = $1 WHERE id = $2")
                 .bind(status)
-                .bind(resource_id)
+                .bind(message_id)
                 .execute(db)
                 .await?;
         }
@@ -169,4 +275,42 @@ async fn update_resource_status(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_verdict_from_boolean_keys() {
+        let p = serde_json::json!({"approved": true});
+        assert_eq!(parse_moderation_verdict(&p), Some(true));
+
+        let p = serde_json::json!({"pass": false});
+        assert_eq!(parse_moderation_verdict(&p), Some(false));
+    }
+
+    #[test]
+    fn parse_verdict_from_status_words() {
+        let p = serde_json::json!({"status": "approved"});
+        assert_eq!(parse_moderation_verdict(&p), Some(true));
+
+        let p = serde_json::json!({"result": "blocked"});
+        assert_eq!(parse_moderation_verdict(&p), Some(false));
+    }
+
+    #[test]
+    fn parse_verdict_from_nested_data() {
+        let p = serde_json::json!({"data": {"status": "safe"}});
+        assert_eq!(parse_moderation_verdict(&p), Some(true));
+
+        let p = serde_json::json!({"data": {"approved": false}});
+        assert_eq!(parse_moderation_verdict(&p), Some(false));
+    }
+
+    #[test]
+    fn parse_verdict_unknown_shape_returns_none() {
+        let p = serde_json::json!({"foo": "bar"});
+        assert_eq!(parse_moderation_verdict(&p), None);
+    }
 }

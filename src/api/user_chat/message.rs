@@ -177,6 +177,18 @@ pub async fn send_connection_message(
         return Err(ApiError::BadRequest("消息内容不能超过2000字符".to_string()));
     }
 
+    let normalized_image_url = body
+        .image_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(|v| v.to_string());
+    if let Some(image_url) = normalized_image_url.as_deref() {
+        if !image_url.starts_with("http://") && !image_url.starts_with("https://") {
+            return Err(ApiError::BadRequest("image_url格式无效".to_string()));
+        }
+    }
+
     // Text content moderation — block prohibited content before persisting.
     let mod_result = state.infra.moderation.check_text(&body.content);
     if !mod_result.passed {
@@ -242,7 +254,7 @@ pub async fn send_connection_message(
     .bind(&body.content)
     .bind(&body.image_base64)
     .bind(&body.audio_base64)
-    .bind(&body.image_url)
+    .bind(&normalized_image_url)
     .bind(&body.audio_url)
     .bind(read_at)
     .fetch_one(&state.infra.db)
@@ -253,11 +265,31 @@ pub async fn send_connection_message(
     let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
 
     state.infra.metrics.record_chat_message();
-    if body.image_url.is_some() || body.audio_url.is_some() {
+    if normalized_image_url.is_some() || body.audio_url.is_some() {
         state.infra.metrics.record_chat_media_url_message();
     }
     if body.image_base64.is_some() || body.audio_base64.is_some() {
         state.infra.metrics.record_chat_media_base64_message();
+    }
+
+    if let Some(image_url) = normalized_image_url.as_deref() {
+        if let Err(e) = state
+            .infra
+            .moderation
+            .submit_image_job(
+                &state.infra.db,
+                &message_id.to_string(),
+                image_url,
+                "chat_image",
+            )
+            .await
+        {
+            tracing::warn!(
+                %e,
+                message_id,
+                "Failed to enqueue chat image moderation job"
+            );
+        }
     }
 
     // Update unread_count for the receiver (if human connection exists)
@@ -288,7 +320,7 @@ pub async fn send_connection_message(
         read_at: read_at_str.clone(),
         image_data: body.image_base64.clone(),
         audio_data: body.audio_base64.clone(),
-        image_url: body.image_url.clone(),
+        image_url: normalized_image_url.clone(),
         audio_url: body.audio_url.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
@@ -305,7 +337,7 @@ pub async fn send_connection_message(
         read_at: read_at_str,
         image_data: body.image_base64,
         audio_data: body.audio_base64,
-        image_url: body.image_url,
+        image_url: normalized_image_url,
         audio_url: body.audio_url,
         status: "sent".to_string(),
     }))

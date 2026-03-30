@@ -310,17 +310,21 @@ impl AppConfig {
                     .collect()
             });
 
-        // Image moderation: file > default (true)
-        let moderation_image_enabled = file
-            .as_ref()
-            .and_then(|f| f.moderation.image_enabled)
+        let read_non_empty_env = |key: &str| {
+            std::env::var(key)
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+
+        let moderation_image_enabled = read_non_empty_env("MODERATION_IMAGE_ENABLED")
+            .and_then(|v| v.parse::<bool>().ok())
+            .or_else(|| file.as_ref()?.moderation.image_enabled)
             .unwrap_or(true);
-        let moderation_image_api_url = file
-            .as_ref()
-            .and_then(|f| f.moderation.image_api_url.clone());
-        let moderation_image_api_key = file
-            .as_ref()
-            .and_then(|f| f.moderation.image_api_key.clone());
+        let moderation_image_api_url = read_non_empty_env("MODERATION_IMAGE_API_URL")
+            .or_else(|| file.as_ref()?.moderation.image_api_url.clone());
+        let moderation_image_api_key = read_non_empty_env("MODERATION_IMAGE_API_KEY")
+            .or_else(|| file.as_ref()?.moderation.image_api_key.clone());
 
         Arc::new(Self {
             gemini_api_key: gemini_api_key.unwrap_or_default(),

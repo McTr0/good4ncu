@@ -123,8 +123,13 @@ async fn main() -> Result<(), anyhow::Error> {
     ));
 
     // Content moderation worker: polls pending image moderation jobs.
+    let moderation_worker_cfg = services::moderation_worker::ModerationApiConfig::from_parts(
+        config.moderation_image_enabled,
+        config.moderation_image_api_url.clone(),
+        config.moderation_image_api_key.clone(),
+    );
     let moderation_worker_handle = tokio::spawn(
-        services::moderation_worker::run_moderation_worker(db_pool.clone()),
+        services::moderation_worker::run_moderation_worker(db_pool.clone(), moderation_worker_cfg),
     );
 
     // Revoked token cleanup worker: prunes expired DB denylist rows hourly.

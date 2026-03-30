@@ -95,6 +95,7 @@ pub struct CreateListingRequest {
     pub suggested_price_cny: f64,
     pub defects: Vec<String>,
     pub description: Option<String>,
+    pub image_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -280,6 +281,11 @@ pub async fn create_listing(
             "suggested_price_cny cannot exceed 10,000,000 CNY".to_string(),
         ));
     }
+    if let Some(image_url) = payload.image_url.as_deref() {
+        if !image_url.starts_with("http://") && !image_url.starts_with("https://") {
+            return Err(ApiError::BadRequest("image_url格式无效".to_string()));
+        }
+    }
 
     // Text content moderation — block prohibited content before persisting.
     let text_to_check = format!(
@@ -315,6 +321,17 @@ pub async fn create_listing(
         })
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    if let Some(image_url) = payload.image_url.as_deref() {
+        if let Err(e) = state
+            .infra
+            .moderation
+            .submit_image_job(&state.infra.db, &listing_id, image_url, "listing_image")
+            .await
+        {
+            tracing::warn!(%e, listing_id = %listing_id, "Failed to enqueue listing image moderation job");
+        }
+    }
 
     Ok(Json(CreateListingResponse {
         id: listing_id,
