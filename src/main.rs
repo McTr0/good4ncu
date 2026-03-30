@@ -8,11 +8,24 @@ mod config;
 mod db;
 mod llm;
 mod middleware;
+#[cfg(test)]
+mod test_infra;
 mod utils;
 
 use std::sync::Arc;
 
 use crate::llm::LlmProvider;
+
+fn default_env_filter() -> anyhow::Result<tracing_subscriber::EnvFilter> {
+    let mut filter = tracing_subscriber::EnvFilter::from_default_env();
+    for directive in ["good4ncu=info", "hyper=warn", "tower=warn"] {
+        let parsed = directive
+            .parse()
+            .map_err(|e| anyhow::anyhow!("invalid tracing directive '{directive}': {e}"))?;
+        filter = filter.add_directive(parsed);
+    }
+    Ok(filter)
+}
 
 #[tokio::main]
 async fn main() -> Result<(), anyhow::Error> {
@@ -26,12 +39,7 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Initialize structured JSON logging for production observability
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("good4ncu=info".parse().unwrap())
-                .add_directive("hyper=warn".parse().unwrap())
-                .add_directive("tower=warn".parse().unwrap()),
-        )
+        .with_env_filter(default_env_filter()?)
         .with_target(true)
         .with_thread_ids(true)
         .json()
@@ -53,10 +61,9 @@ async fn main() -> Result<(), anyhow::Error> {
     // Build the LLM provider based on configuration
     let llm_provider: Arc<dyn LlmProvider> = match config.llm_provider.as_str() {
         "minimax" => {
-            let api_key = config
-                .minimax_api_key
-                .as_ref()
-                .expect("MINIMAX_API_KEY must be set when LLM_PROVIDER=minimax");
+            let api_key = config.minimax_api_key.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("MINIMAX_API_KEY must be set when LLM_PROVIDER=minimax")
+            })?;
             let base_url = config.minimax_api_base_url.as_deref();
             Arc::new(crate::llm::minimax::MiniMaxProvider::new(
                 api_key,
@@ -69,7 +76,9 @@ async fn main() -> Result<(), anyhow::Error> {
             // Default to Gemini
             let api_key = &config.gemini_api_key;
             if api_key.is_empty() {
-                panic!("GEMINI_API_KEY must be set when LLM_PROVIDER=gemini");
+                return Err(anyhow::anyhow!(
+                    "GEMINI_API_KEY must be set when LLM_PROVIDER=gemini"
+                ));
             }
             Arc::new(crate::llm::gemini::GeminiProvider::new(
                 api_key,
@@ -118,12 +127,19 @@ async fn main() -> Result<(), anyhow::Error> {
         services::moderation_worker::run_moderation_worker(db_pool.clone()),
     );
 
+    // Revoked token cleanup worker: prunes expired DB denylist rows hourly.
+    let token_cleanup_handle = tokio::spawn(services::token_denylist::run_cleanup_worker(
+        db_pool.clone(),
+    ));
+
     // Build repository layer (concrete types - simpler than dyn traits for now)
     let listing_repo = repositories::PostgresListingRepository::new(db_pool.clone());
     let user_repo = repositories::PostgresUserRepository::new(db_pool.clone());
     let chat_repo = repositories::PostgresChatRepository::new(db_pool.clone());
     let auth_repo = repositories::PostgresAuthRepository::new(db_pool.clone());
     let order_repo = repositories::PostgresOrderRepository::new(db_pool.clone());
+
+    let token_denylist = services::token_denylist::TokenDenylist::new();
 
     let app_state = api::AppState {
         secrets: api::ApiSecrets {
@@ -152,6 +168,7 @@ async fn main() -> Result<(), anyhow::Error> {
             order_service: services::order::OrderService::new(db_pool.clone()),
             admin_service,
             moderation: services::moderation::ModerationService::new(&config),
+            token_denylist: token_denylist.clone(),
         },
         agents: api::ApiAgents {
             llm_provider: Arc::clone(&llm_provider),
@@ -165,6 +182,16 @@ async fn main() -> Result<(), anyhow::Error> {
     };
 
     let app = api::create_router(app_state, &config.cors_origins);
+
+    // Periodic cleanup of expired denylist entries (every 5 minutes)
+    let denylist_cleanup = token_denylist.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(300)).await;
+            denylist_cleanup.cleanup_expired();
+        }
+    });
+
     let bind_addr = format!("{}:{}", config.server_host, config.server_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
     tracing::info!(addr = %bind_addr, "Web Server started");
@@ -184,6 +211,7 @@ async fn main() -> Result<(), anyhow::Error> {
     hitl_expire_handle.abort();
     order_worker_handle.abort();
     moderation_worker_handle.abort();
+    token_cleanup_handle.abort();
 
     // Gracefully close the DB pool so Postgres can cleanly收回所有连接
     // and flush any pending transaction results in the buffer.

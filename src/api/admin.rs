@@ -415,7 +415,7 @@ pub async fn impersonate_user(
     }
 
     // Generate JWT for target user (shorter TTL: 30 minutes for impersonation)
-    let token = generate_access_token(
+    let (token, jti, exp) = generate_access_token(
         &user.id,
         &user.role,
         &state.secrets.jwt_secret,
@@ -441,16 +441,72 @@ pub async fn impersonate_user(
         admin_id = %admin_id,
         target_user_id = %user.id,
         target_username = %user.username,
+        jti = %jti,
         "Admin impersonated user"
     );
 
     Ok(Json(serde_json::json!({
         "token": token,
+        "jti": jti,
+        "exp": exp,
         "user_id": user.id,
         "username": user.username,
         "role": user.role,
-        "status": "active", // We have User struct instead of row now
+        "status": "active",
         "message": "已以该用户身份登录"
+    })))
+}
+
+/// POST /api/admin/tokens/:jti/revoke - revoke an access token by its JTI (admin only)
+pub async fn revoke_token(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(jti): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let admin_id = require_admin(
+        &headers,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )?;
+
+    // Add to denylist with a generous TTL (24h — covers max token lifetime).
+    let expires_at = chrono::Utc::now() + chrono::Duration::hours(24);
+    sqlx::query(
+        r#"INSERT INTO revoked_access_tokens (jti, expires_at)
+           VALUES ($1, $2)
+           ON CONFLICT (jti)
+           DO UPDATE SET expires_at = GREATEST(revoked_access_tokens.expires_at, EXCLUDED.expires_at)"#,
+    )
+    .bind(&jti)
+    .bind(expires_at)
+    .execute(&state.infra.db)
+    .await
+    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+    state
+        .infra
+        .token_denylist
+        .deny(&jti, expires_at.timestamp().max(0) as u64);
+
+    let _ = state
+        .infra
+        .admin_service
+        .log_action(
+            &admin_id,
+            "revoke_token",
+            None,
+            None,
+            None,
+            Some(&format!("Revoked token jti={}", jti)),
+        )
+        .await;
+
+    tracing::info!(admin_id = %admin_id, jti = %jti, "Admin revoked access token");
+
+    Ok(Json(serde_json::json!({
+        "jti": jti,
+        "revoked": true,
+        "message": "Token已吊销"
     })))
 }
 

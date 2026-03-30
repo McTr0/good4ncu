@@ -59,6 +59,10 @@ static MONGO_ID_PATH_RE: LazyLock<Regex> =
 static NUMERIC_PATH_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"\d+").expect("valid numeric regex"));
 
+fn fallback_peer_addr() -> SocketAddr {
+    SocketAddr::from(([0, 0, 0, 0], 0))
+}
+
 /// Security headers applied to all responses.
 async fn security_headers_middleware(
     request: axum::extract::Request,
@@ -66,12 +70,21 @@ async fn security_headers_middleware(
 ) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
-    headers.insert("X-XSS-Protection", "1; mode=block".parse().unwrap());
+    headers.insert(
+        "X-Content-Type-Options",
+        axum::http::HeaderValue::from_static("nosniff"),
+    );
+    headers.insert(
+        "X-Frame-Options",
+        axum::http::HeaderValue::from_static("DENY"),
+    );
+    headers.insert(
+        "X-XSS-Protection",
+        axum::http::HeaderValue::from_static("1; mode=block"),
+    );
     headers.insert(
         "Strict-Transport-Security",
-        "max-age=31536000; includeSubDomains".parse().unwrap(),
+        axum::http::HeaderValue::from_static("max-age=31536000; includeSubDomains"),
     );
     response
 }
@@ -94,7 +107,7 @@ pub async fn rate_limit_middleware(
         .extensions()
         .get::<SocketAddr>()
         .copied()
-        .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+        .unwrap_or_else(fallback_peer_addr);
 
     let rate_limit_key = if path == "/api/chat" || path == "/api/chat/stream" {
         match auth::extract_user_id_from_token(request.headers(), &state.secrets.jwt_secret) {
@@ -113,6 +126,34 @@ pub async fn rate_limit_middleware(
     {
         state.infra.metrics.record_rate_limit_rejected();
         return ApiError::RateLimitExceeded.into_response();
+    }
+
+    next.run(request).await
+}
+
+/// Denylist middleware that rejects revoked JWT access tokens by JTI.
+pub async fn token_denylist_middleware(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+    next: middleware::Next,
+) -> Response {
+    use axum::response::IntoResponse;
+
+    let path = request.uri().path();
+    if path == "/api/auth/login" || path == "/api/auth/register" || path == "/api/auth/refresh" {
+        return next.run(request).await;
+    }
+
+    if let Some(auth_header) = request
+        .headers()
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+    {
+        if let Some(token) = auth_header.strip_prefix("Bearer ") {
+            if auth::ensure_token_not_revoked(&state, token).await.is_err() {
+                return ApiError::Unauthorized.into_response();
+            }
+        }
     }
 
     next.run(request).await
@@ -171,7 +212,7 @@ where
             .get::<axum::extract::connect_info::ConnectInfo<SocketAddr>>()
             .map(|ci| ci.0)
             .or_else(|| parts.extensions.get::<std::net::SocketAddr>().copied())
-            .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+            .unwrap_or_else(fallback_peer_addr);
         Ok(PeerAddr(addr))
     }
 }
@@ -208,6 +249,7 @@ pub struct ApiInfrastructure {
     pub order_service: order::OrderService,
     pub admin_service: crate::services::admin::AdminService,
     pub moderation: ModerationService,
+    pub token_denylist: crate::services::token_denylist::TokenDenylist,
 }
 
 /// LLM provider + intent routing.
@@ -276,6 +318,7 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             "/api/admin/users/{id}/impersonate",
             post(admin::impersonate_user),
         )
+        .route("/api/admin/tokens/{jti}/revoke", post(admin::revoke_token))
         .route("/api/admin/users/{id}/role", post(admin::update_user_role))
         .route(
             "/api/admin/orders/{id}/status",
@@ -389,6 +432,10 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
         .layer(cors)
         .layer(RequestBodyLimitLayer::new(10 * 1024 * 1024))
         .layer(middleware::from_fn(security_headers_middleware))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            token_denylist_middleware,
+        ))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             rate_limit_middleware,
@@ -687,26 +734,31 @@ async fn handle_chat_stream(
     }
 
     let has_auth_header = headers.get("Authorization").is_some();
-    let current_user_id = if has_auth_header {
-        auth::extract_user_id_from_token_with_fallback(
-            &headers,
-            &state.secrets.jwt_secret,
-            state.secrets.jwt_secret_old.as_deref(),
-        )
-        .map_err(|_| ApiError::Unauthorized)?
+    let token = if has_auth_header {
+        headers
+            .get("Authorization")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.strip_prefix("Bearer "))
+            .filter(|v| !v.is_empty())
+            .ok_or(ApiError::Unauthorized)?
     } else {
-        let token = params
+        params
             .token
             .as_deref()
             .filter(|v| !v.is_empty())
-            .ok_or(ApiError::Unauthorized)?;
-        auth::extract_user_id_from_token_str_with_fallback(
-            token,
-            &state.secrets.jwt_secret,
-            state.secrets.jwt_secret_old.as_deref(),
-        )
-        .map_err(|_| ApiError::Unauthorized)?
+            .ok_or(ApiError::Unauthorized)?
     };
+
+    auth::ensure_token_not_revoked(&state, token)
+        .await
+        .map_err(|_| ApiError::Unauthorized)?;
+
+    let current_user_id = auth::extract_user_id_from_token_str_with_fallback(
+        token,
+        &state.secrets.jwt_secret,
+        state.secrets.jwt_secret_old.as_deref(),
+    )
+    .map_err(|_| ApiError::Unauthorized)?;
 
     // Route: lightweight intent classification before doing any LLM work.
     let intent_result = state.agents.router.classify(&params.message);

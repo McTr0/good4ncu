@@ -26,7 +26,7 @@ use std::time::Duration;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::interval;
 
-use crate::api::auth::extract_user_id_from_token_str_with_fallback;
+use crate::api::auth::{ensure_token_not_revoked, extract_user_id_from_token_str_with_fallback};
 use crate::api::AppState;
 
 /// Connection table: user_id → list of tx channels (one per connected device).
@@ -128,6 +128,17 @@ pub async fn ws_handler(
     } else {
         query_token.unwrap_or("")
     };
+
+    if ensure_token_not_revoked(&state, token).await.is_err() {
+        tracing::warn!("WS auth failed: revoked token");
+        return (
+            StatusCode::UNAUTHORIZED,
+            axum::response::Json(serde_json::json!({
+                "error": "Unauthorized"
+            })),
+        )
+            .into_response();
+    }
 
     let user_id = match extract_user_id_from_token_str_with_fallback(
         token,

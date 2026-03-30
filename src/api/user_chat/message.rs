@@ -327,7 +327,12 @@ pub async fn mark_message_read(
     let row = sqlx::query(
         r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cm.conversation_id, cc.status as conn_status
            FROM chat_messages cm
-           JOIN chat_connections cc ON cc.id::text = cm.conversation_id
+                     JOIN chat_connections cc
+                         ON cc.id = CASE
+                                                        WHEN cm.conversation_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                                                        THEN cm.conversation_id::uuid
+                                                        ELSE NULL
+                                                END
            WHERE cm.id = $1"#,
     )
     .bind(message_id)
@@ -433,7 +438,12 @@ pub async fn edit_message(
     let row = sqlx::query(
         r#"SELECT cm.id, cm.sender, cm.timestamp, cc.status as conn_status
            FROM chat_messages cm
-           JOIN chat_connections cc ON cc.id::text = cm.conversation_id
+                     JOIN chat_connections cc
+                         ON cc.id = CASE
+                                                        WHEN cm.conversation_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+                                                        THEN cm.conversation_id::uuid
+                                                        ELSE NULL
+                                                END
            WHERE cm.id = $1"#,
     )
     .bind(message_id)

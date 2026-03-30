@@ -12,6 +12,7 @@ pub mod order;
 pub mod order_worker;
 pub mod product;
 pub mod settlement;
+pub mod token_denylist;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum BusinessEvent {
@@ -228,8 +229,7 @@ mod tests {
 
     #[test]
     fn test_event_bus_capacity_constant() {
-        // Verify the constant is a reasonable size for backpressure
-        assert!(EVENT_BUS_CAPACITY >= 100);
-        assert!(EVENT_BUS_CAPACITY <= 100_000);
+        let capacity = EVENT_BUS_CAPACITY;
+        assert!((100..=100_000).contains(&capacity));
     }
 }

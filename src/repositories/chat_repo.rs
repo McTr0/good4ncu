@@ -229,7 +229,12 @@ impl ChatRepository for PostgresChatRepository {
     ) -> Result<(), ApiError> {
         let _row = sqlx::query(
             "SELECT cm.id FROM chat_messages cm \
-             JOIN chat_connections cc ON cc.id::text = cm.conversation_id \
+                         JOIN chat_connections cc \
+                             ON cc.id = CASE \
+                                                         WHEN cm.conversation_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' \
+                                                         THEN cm.conversation_id::uuid \
+                                                         ELSE NULL \
+                                                    END \
              WHERE cm.id = $1 AND cm.sender = $2 AND cc.status = 'connected'",
         )
         .bind(message_id)
