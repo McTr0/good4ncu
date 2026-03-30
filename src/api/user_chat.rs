@@ -22,7 +22,12 @@ use sqlx::Row;
 
 use crate::api::auth::extract_user_id_from_token_with_fallback;
 use crate::api::error::ApiError;
-use crate::api::user_chat_models::*;
+pub use crate::api::user_chat_models::{
+    ConnectAcceptBody, ConnectAcceptResponse, ConnectRejectBody, ConnectRejectResponse,
+    ConnectRequestBody, ConnectRequestResponse, ConnectionEntry, ConnectionListResponse,
+    EditMessageBody, EditMessageResponse, MarkReadResponse, MessageEntry, MessageListQuery,
+    MessageListResponse, SendMessageBody, SendMessageResponse, TypingBody,
+};
 use crate::api::ws;
 use crate::api::AppState;
 
