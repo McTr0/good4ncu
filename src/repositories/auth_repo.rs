@@ -121,11 +121,18 @@ impl AuthRepository for PostgresAuthRepository {
     }
 
     async fn revoke_refresh_token(&self, token_hash: &str) -> Result<(), ApiError> {
-        sqlx::query("UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL")
+        let result = sqlx::query(
+            "UPDATE refresh_tokens SET revoked_at = NOW() WHERE token_hash = $1 AND revoked_at IS NULL",
+        )
             .bind(token_hash)
             .execute(&self.pool)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        if result.rows_affected() == 0 {
+            return Err(ApiError::Unauthorized);
+        }
+
         Ok(())
     }
 

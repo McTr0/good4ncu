@@ -126,6 +126,10 @@ async fn rotate_refresh_token(
 
     // Check revoked
     if revoked_at.is_some() {
+        auth_repo
+            .revoke_all_user_tokens(&user_id)
+            .await
+            .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
         return Err(anyhow::anyhow!("Refresh token has been revoked"));
     }
 
@@ -135,10 +139,17 @@ async fn rotate_refresh_token(
     }
 
     // Revoke old token
-    auth_repo
-        .revoke_refresh_token(&token_hash)
-        .await
-        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
+    match auth_repo.revoke_refresh_token(&token_hash).await {
+        Ok(()) => {}
+        Err(ApiError::Unauthorized) => {
+            auth_repo
+                .revoke_all_user_tokens(&user_id)
+                .await
+                .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
+            return Err(anyhow::anyhow!("Refresh token replay detected"));
+        }
+        Err(e) => return Err(anyhow::anyhow!("DB error: {}", e)),
+    }
 
     // Fetch user role
     let user = user_repo
@@ -175,10 +186,10 @@ async fn revoke_refresh_token(
     token: &str,
 ) -> anyhow::Result<()> {
     let token_hash = hash_token(token);
-    auth_repo
-        .revoke_refresh_token(&token_hash)
-        .await
-        .map_err(|e| anyhow::anyhow!("DB error: {}", e))?;
+    match auth_repo.revoke_refresh_token(&token_hash).await {
+        Ok(()) | Err(ApiError::Unauthorized) => Ok(()),
+        Err(e) => Err(anyhow::anyhow!("DB error: {}", e)),
+    }?;
     Ok(())
 }
 
@@ -717,6 +728,8 @@ pub fn extract_user_id_and_role_from_token_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::repositories::{AuthRepository, PostgresAuthRepository, PostgresUserRepository};
+    use crate::test_infra::with_test_pool;
 
     #[derive(Serialize)]
     struct LegacyClaims {
@@ -973,5 +986,104 @@ mod tests {
         );
         assert!(jti.is_err());
         assert_eq!(jti.unwrap_err(), "Token missing jti");
+    }
+
+    #[tokio::test]
+    async fn test_revoke_refresh_token_is_single_use() {
+        with_test_pool(|pool| async move {
+            sqlx::query(
+                "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, 'hash', 'user')",
+            )
+            .bind("auth-user-single-use")
+            .bind("auth_single_use")
+            .execute(&pool)
+            .await
+            .expect("insert user");
+
+            let auth_repo = PostgresAuthRepository::new(pool.clone());
+            let token_hash = hash_token("single-use-refresh-token");
+            let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+
+            sqlx::query(
+                "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+            )
+            .bind("auth-user-single-use")
+            .bind(&token_hash)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+            .expect("insert refresh token");
+
+            auth_repo
+                .revoke_refresh_token(&token_hash)
+                .await
+                .expect("first revoke should succeed");
+
+            let second = auth_repo.revoke_refresh_token(&token_hash).await;
+            assert!(matches!(second, Err(ApiError::Unauthorized)));
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_rotate_refresh_replay_revokes_all_user_sessions() {
+        with_test_pool(|pool| async move {
+            let user_id = "auth-user-replay";
+            sqlx::query(
+                "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, 'hash', 'user')",
+            )
+            .bind(user_id)
+            .bind("auth_replay")
+            .execute(&pool)
+            .await
+            .expect("insert user");
+
+            let revoked_hash = hash_token("revoked-refresh-token");
+            let active_hash = hash_token("active-refresh-token");
+            let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+
+            sqlx::query(
+                "INSERT INTO refresh_tokens (user_id, token_hash, expires_at, revoked_at) VALUES ($1, $2, $3, NOW())",
+            )
+            .bind(user_id)
+            .bind(&revoked_hash)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+            .expect("insert revoked token");
+
+            sqlx::query(
+                "INSERT INTO refresh_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)",
+            )
+            .bind(user_id)
+            .bind(&active_hash)
+            .bind(expires_at)
+            .execute(&pool)
+            .await
+            .expect("insert active token");
+
+            let auth_repo = PostgresAuthRepository::new(pool.clone());
+            let user_repo = PostgresUserRepository::new(pool.clone());
+
+            let result = rotate_refresh_token(
+                &auth_repo,
+                &user_repo,
+                "revoked-refresh-token",
+                "test_jwt_secret_at_least_32_characters_long",
+            )
+            .await;
+            assert!(result.is_err());
+
+            let active_count: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM refresh_tokens WHERE user_id = $1 AND revoked_at IS NULL",
+            )
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .expect("count active tokens");
+
+            assert_eq!(active_count, 0);
+        })
+        .await;
     }
 }
