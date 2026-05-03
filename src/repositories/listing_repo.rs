@@ -2,7 +2,8 @@
 
 use crate::api::error::ApiError;
 use crate::repositories::{CreateListingInput, Listing, ListingRepository, UpdateListingInput};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
+use uuid::Uuid;
 
 /// Escape special characters for PostgreSQL LIKE patterns.
 ///
@@ -30,6 +31,205 @@ pub struct PostgresListingRepository {
 impl PostgresListingRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    fn update_query_for_owner(
+        input: &UpdateListingInput,
+        require_active: bool,
+    ) -> Result<String, ApiError> {
+        if input.title.is_none()
+            && input.category.is_none()
+            && input.brand.is_none()
+            && input.condition_score.is_none()
+            && input.suggested_price_cny.is_none()
+            && input.defects.is_none()
+            && input.description.is_none()
+            && input.status.is_none()
+        {
+            return Err(ApiError::BadRequest("没有要更新的字段".to_string()));
+        }
+
+        let mut set_clauses = Vec::new();
+        let mut param_idx = 1;
+
+        if input.title.is_some() {
+            set_clauses.push(format!("title = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.category.is_some() {
+            set_clauses.push(format!("category = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.brand.is_some() {
+            set_clauses.push(format!("brand = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.condition_score.is_some() {
+            set_clauses.push(format!("condition_score = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.suggested_price_cny.is_some() {
+            set_clauses.push(format!("suggested_price_cny = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.defects.is_some() {
+            set_clauses.push(format!("defects = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.description.is_some() {
+            set_clauses.push(format!("description = ${}", param_idx));
+            param_idx += 1;
+        }
+        if input.status.is_some() {
+            set_clauses.push(format!("status = ${}", param_idx));
+            param_idx += 1;
+        }
+
+        let mut query = format!(
+            "UPDATE inventory SET {} WHERE id = ${} AND owner_id = ${}",
+            set_clauses.join(", "),
+            param_idx,
+            param_idx + 1
+        );
+        if require_active {
+            query.push_str(" AND status = 'active'");
+        }
+
+        Ok(query)
+    }
+
+    fn bind_update_query<'q>(
+        mut query: sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments>,
+        input: &'q UpdateListingInput,
+    ) -> Result<sqlx::query::Query<'q, Postgres, sqlx::postgres::PgArguments>, ApiError> {
+        if let Some(ref v) = input.title {
+            query = query.bind(v);
+        }
+        if let Some(ref v) = input.category {
+            query = query.bind(v);
+        }
+        if let Some(ref v) = input.brand {
+            query = query.bind(v);
+        }
+        if let Some(v) = input.condition_score {
+            query = query.bind(v);
+        }
+        if let Some(v) = input.suggested_price_cny {
+            query = query.bind((v * 100.0).round() as i32);
+        }
+        if let Some(ref v) = input.defects {
+            let defects_json = serde_json::to_string(v)
+                .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
+            query = query.bind(defects_json);
+        }
+        if let Some(ref v) = input.description {
+            query = query.bind(v);
+        }
+        if let Some(ref v) = input.status {
+            query = query.bind(v);
+        }
+
+        Ok(query)
+    }
+
+    pub async fn mark_sold_if_active_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: &str,
+    ) -> Result<bool, ApiError> {
+        let updated =
+            sqlx::query("UPDATE inventory SET status = 'sold' WHERE id = $1 AND status = 'active'")
+                .bind(id)
+                .execute(&mut **tx)
+                .await
+                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(updated.rows_affected() > 0)
+    }
+
+    pub async fn relist_if_no_open_orders_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        listing_id: &str,
+    ) -> Result<bool, ApiError> {
+        let _ = sqlx::query("SELECT 1 FROM inventory WHERE id = $1 FOR UPDATE")
+            .bind(listing_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        let updated = sqlx::query(
+            r#"
+            UPDATE inventory
+            SET status = 'active'
+            WHERE id = $1
+              AND status = 'sold'
+              AND NOT EXISTS (
+                SELECT 1
+                FROM orders o
+                WHERE o.listing_id = $1
+                  AND o.status IN ('pending', 'paid', 'shipped')
+              )
+            "#,
+        )
+        .bind(listing_id)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(updated.rows_affected() > 0)
+    }
+
+    pub async fn update_owned_active_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: &str,
+        owner_id: &str,
+        input: &UpdateListingInput,
+    ) -> Result<bool, ApiError> {
+        let query = Self::update_query_for_owner(input, true)?;
+        let result = Self::bind_update_query(sqlx::query(&query), input)?
+            .bind(id)
+            .bind(owner_id)
+            .execute(&mut **tx)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn update_owned_active(
+        &self,
+        id: &str,
+        owner_id: &str,
+        input: &UpdateListingInput,
+    ) -> Result<bool, ApiError> {
+        let query = Self::update_query_for_owner(input, true)?;
+        let result = Self::bind_update_query(sqlx::query(&query), input)?
+            .bind(id)
+            .bind(owner_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(result.rows_affected() > 0)
+    }
+
+    pub async fn soft_delete_active_owned(
+        &self,
+        id: &str,
+        owner_id: &str,
+    ) -> Result<bool, ApiError> {
+        let result = sqlx::query(
+            "UPDATE inventory SET status = 'deleted' WHERE id = $1 AND owner_id = $2 AND status = 'active'",
+        )
+        .bind(id)
+        .bind(owner_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(result.rows_affected() > 0)
     }
 }
 
@@ -188,18 +388,30 @@ impl ListingRepository for PostgresListingRepository {
 
     async fn create(&self, input: CreateListingInput) -> Result<String, ApiError> {
         let listing_id = uuid::Uuid::new_v4().to_string();
+        let listing_uuid = Uuid::parse_str(&listing_id).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!(
+                "Generated listing id is not UUID-compatible: {}",
+                e
+            ))
+        })?;
         let price_cents = (input.suggested_price_cny * 100.0).round() as i32;
         let defects_json = serde_json::to_string(&input.defects)
             .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
 
         sqlx::query(
             r#"
-            INSERT INTO inventory (id, title, category, brand, condition_score,
-                                   suggested_price_cny, defects, description, owner_id, status)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+            INSERT INTO inventory (
+                id, new_id,
+                title, category, brand, condition_score,
+                suggested_price_cny, defects, description,
+                owner_id, new_owner_id, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+                    (SELECT new_id FROM users WHERE id = $10), 'active')
             "#,
         )
         .bind(&listing_id)
+        .bind(listing_uuid)
         .bind(&input.title)
         .bind(&input.category)
         .bind(&input.brand)
@@ -238,103 +450,10 @@ impl ListingRepository for PostgresListingRepository {
             return Err(ApiError::BadRequest("无法修改已售出的商品".to_string()));
         }
 
-        if input.title.is_none()
-            && input.category.is_none()
-            && input.brand.is_none()
-            && input.condition_score.is_none()
-            && input.suggested_price_cny.is_none()
-            && input.defects.is_none()
-            && input.description.is_none()
-            && input.status.is_none()
-        {
-            return Err(ApiError::BadRequest("没有要更新的字段".to_string()));
-        }
-
-        // Build query dynamically based on provided fields
-        let mut set_clauses = Vec::new();
-        let mut param_idx = 1;
-        let mut params: Vec<Box<dyn sqlx::Encode<'_, sqlx::Postgres> + Send + Sync>> = Vec::new();
-
-        if let Some(ref v) = input.title {
-            set_clauses.push(format!("title = ${}", param_idx));
-            params.push(Box::new(v.clone()));
-            param_idx += 1;
-        }
-        if let Some(ref v) = input.category {
-            set_clauses.push(format!("category = ${}", param_idx));
-            params.push(Box::new(v.clone()));
-            param_idx += 1;
-        }
-        if let Some(ref v) = input.brand {
-            set_clauses.push(format!("brand = ${}", param_idx));
-            params.push(Box::new(v.clone()));
-            param_idx += 1;
-        }
-        if let Some(v) = input.condition_score {
-            set_clauses.push(format!("condition_score = ${}", param_idx));
-            params.push(Box::new(v));
-            param_idx += 1;
-        }
-        if let Some(v) = input.suggested_price_cny {
-            let cents = (v * 100.0).round() as i32;
-            set_clauses.push(format!("suggested_price_cny = ${}", param_idx));
-            params.push(Box::new(cents));
-            param_idx += 1;
-        }
-        if let Some(ref v) = input.defects {
-            let json = serde_json::to_string(v)
-                .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
-            set_clauses.push(format!("defects = ${}", param_idx));
-            params.push(Box::new(json));
-            param_idx += 1;
-        }
-        if let Some(ref v) = input.description {
-            set_clauses.push(format!("description = ${}", param_idx));
-            params.push(Box::new(v.clone()));
-            param_idx += 1;
-        }
-        if let Some(ref v) = input.status {
-            set_clauses.push(format!("status = ${}", param_idx));
-            params.push(Box::new(v.clone()));
-            param_idx += 1;
-        }
-
-        let query = format!(
-            "UPDATE inventory SET {} WHERE id = ${} AND owner_id = ${}",
-            set_clauses.join(", "),
-            param_idx,
-            param_idx + 1
-        );
-
-        // Build and execute query with bindings
-        let mut q = sqlx::query(&query);
-        if let Some(ref v) = input.title {
-            q = q.bind(v);
-        }
-        if let Some(ref v) = input.category {
-            q = q.bind(v);
-        }
-        if let Some(ref v) = input.brand {
-            q = q.bind(v);
-        }
-        if let Some(v) = input.condition_score {
-            q = q.bind(v);
-        }
-        if let Some(v) = input.suggested_price_cny {
-            q = q.bind((v * 100.0).round() as i32);
-        }
-        if let Some(ref v) = input.defects {
-            let defects_json = serde_json::to_string(v)
-                .map_err(|e| ApiError::BadRequest(format!("invalid defects: {}", e)))?;
-            q = q.bind(defects_json);
-        }
-        if let Some(ref v) = input.description {
-            q = q.bind(v);
-        }
-        if let Some(ref v) = input.status {
-            q = q.bind(v);
-        }
-        q = q.bind(id).bind(owner_id);
+        let query = Self::update_query_for_owner(&input, false)?;
+        let q = Self::bind_update_query(sqlx::query(&query), &input)?
+            .bind(id)
+            .bind(owner_id);
 
         q.execute(&self.pool)
             .await
@@ -443,6 +562,7 @@ impl ListingRepository for PostgresListingRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_infra::with_test_pool;
 
     #[test]
     fn test_escape_like_pattern_escapes_backslash() {
@@ -537,5 +657,53 @@ mod tests {
     #[test]
     fn test_escape_like_pattern_multiple_underscores() {
         assert_eq!(escape_like_pattern("a_b_c_d"), r"a\_b\_c\_d");
+    }
+
+    #[tokio::test]
+    async fn create_dual_writes_shadow_uuid_columns() {
+        with_test_pool(|pool| async move {
+            sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
+                .bind("listing-owner")
+                .bind("owner")
+                .execute(&pool)
+                .await
+                .expect("insert owner");
+
+            let owner_uuid: Uuid =
+                sqlx::query_scalar("SELECT new_id FROM users WHERE id = 'listing-owner'")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("owner uuid");
+
+            let repo = PostgresListingRepository::new(pool.clone());
+            let listing_id = repo
+                .create(CreateListingInput {
+                    title: "Desk".to_string(),
+                    category: "other".to_string(),
+                    brand: Some("Brand".to_string()),
+                    condition_score: 8,
+                    suggested_price_cny: 123.45,
+                    defects: vec!["scratch".to_string()],
+                    description: "usable".to_string(),
+                    owner_id: "listing-owner".to_string(),
+                })
+                .await
+                .expect("create listing");
+            let listing_uuid = Uuid::parse_str(&listing_id).expect("uuid id");
+
+            let row = sqlx::query(
+                "SELECT new_id, new_owner_id, suggested_price_cny, status FROM inventory WHERE id = $1",
+            )
+            .bind(&listing_id)
+            .fetch_one(&pool)
+            .await
+            .expect("select listing");
+
+            assert_eq!(row.get::<Uuid, _>("new_id"), listing_uuid);
+            assert_eq!(row.get::<Uuid, _>("new_owner_id"), owner_uuid);
+            assert_eq!(row.get::<i64, _>("suggested_price_cny"), 12345);
+            assert_eq!(row.get::<String, _>("status"), "active");
+        })
+        .await;
     }
 }

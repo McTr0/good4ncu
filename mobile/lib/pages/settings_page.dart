@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 import '../l10n/app_localizations.dart';
 import '../services/locale_service.dart';
@@ -11,14 +12,16 @@ import '../services/base_service.dart';
 import '../theme/app_theme.dart';
 
 class SettingsPage extends StatefulWidget {
-  const SettingsPage({super.key});
+  final UserService? userService;
+
+  const SettingsPage({super.key, this.userService});
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
-  final _userService = UserService();
+  late final UserService _userService;
 
   Map<String, dynamic>? _profile;
   bool _loading = true;
@@ -27,6 +30,7 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
+    _userService = widget.userService ?? context.read<UserService>();
     _loadProfile();
   }
 

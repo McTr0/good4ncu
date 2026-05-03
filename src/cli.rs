@@ -1,3 +1,4 @@
+use crate::repositories::{PostgresUserRepository, UserRepository};
 use anyhow::Result;
 use sqlx::PgPool;
 use std::env;
@@ -64,15 +65,20 @@ async fn run_admin_promote(username: &str) -> Result<()> {
         env::var("DATABASE_URL").map_err(|_| anyhow::anyhow!("DATABASE_URL must be set"))?;
 
     let pool = PgPool::connect(&database_url).await?;
+    let user_repo = PostgresUserRepository::new(pool.clone());
+    let user = user_repo
+        .find_by_username(username)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to load user: {}", e))?;
 
-    let result = sqlx::query("UPDATE users SET role = 'admin' WHERE username = $1")
-        .bind(username)
-        .execute(&pool)
-        .await?;
-
-    if result.rows_affected() == 0 {
+    let Some(user) = user else {
         anyhow::bail!("用户 '{}' 不存在", username);
-    }
+    };
+
+    user_repo
+        .update_role(&user.id, "admin")
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to promote user: {}", e))?;
 
     println!("用户 '{}' 已提升为管理员", username);
     Ok(())

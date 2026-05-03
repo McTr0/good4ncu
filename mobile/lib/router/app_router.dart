@@ -17,9 +17,11 @@ import '../pages/settings_page.dart';
 import '../pages/watchlist_page.dart';
 import '../pages/notifications_page.dart';
 import '../services/base_service.dart';
+import '../services/chat_service.dart';
 import '../services/user_service.dart';
 import '../services/admin_role_cache.dart';
 import '../pages/trust_page.dart';
+import '../services/sse_service.dart';
 import '../services/token_storage.dart';
 import '../services/ws_service.dart';
 import '../components/floating_agent_bubble.dart';
@@ -33,14 +35,14 @@ Future<bool> getLoginStatus() async {
   return token != null && token.isNotEmpty;
 }
 
-Future<bool> _isAdmin() async {
+Future<bool> _isAdmin(UserService userService) async {
   try {
     final cached = await AdminRoleCache.instance.getCachedForCurrentToken();
     if (cached != null) {
       return cached;
     }
 
-    final profile = await UserService().getUserProfile();
+    final profile = await userService.getUserProfile();
     final isAdmin = profile['role'] == 'admin';
     await AdminRoleCache.instance.saveForCurrentToken(isAdmin);
     return isAdmin;
@@ -55,6 +57,7 @@ final GoRouter appRouter = GoRouter(
   initialLocation: '/',
   redirect: (context, state) async {
     try {
+      final userService = context.read<UserService>();
       final loggedIn = await getLoginStatus();
       final onAuthRoute = state.matchedLocation == '/login';
       if (!loggedIn && !onAuthRoute) {
@@ -68,7 +71,7 @@ final GoRouter appRouter = GoRouter(
         WsService.instance.connect();
       }
       if (state.matchedLocation == '/admin') {
-        final admin = await _isAdmin();
+        final admin = await _isAdmin(userService);
         if (!admin) return '/';
       }
     } catch (e) {
@@ -188,7 +191,11 @@ class _ShellScaffoldState extends State<_ShellScaffold> {
   @override
   void initState() {
     super.initState();
-    _agentChatNotifier = AgentChatNotifier();
+    _agentChatNotifier = AgentChatNotifier(
+      sseService: context.read<SseService>(),
+      chatService: context.read<ChatService>(),
+      userService: context.read<UserService>(),
+    );
     _checkLoginStatus();
   }
 

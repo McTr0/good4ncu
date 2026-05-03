@@ -1,13 +1,16 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../services/api_service.dart';
 import '../theme/app_theme.dart';
 
 class CreateListingPage extends StatefulWidget {
-  const CreateListingPage({super.key});
+  final ApiService? apiService;
+
+  const CreateListingPage({super.key, this.apiService});
 
   @override
   State<CreateListingPage> createState() => _CreateListingPageState();
@@ -15,7 +18,7 @@ class CreateListingPage extends StatefulWidget {
 
 class _CreateListingPageState extends State<CreateListingPage> {
   final _formKey = GlobalKey<FormState>();
-  final _apiService = ApiService();
+  late final ApiService _apiService;
   final _imagePicker = ImagePicker();
 
   final _titleController = TextEditingController();
@@ -58,6 +61,12 @@ class _CreateListingPageState extends State<CreateListingPage> {
       default:
         return key;
     }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
   }
 
   @override

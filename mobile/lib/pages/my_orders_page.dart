@@ -1,20 +1,24 @@
 import 'package:flutter/material.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/order_service.dart';
 import '../theme/app_theme.dart';
 
 /// Order list page with tabs: All / As Buyer / As Seller.
 class MyOrdersPage extends StatefulWidget {
-  const MyOrdersPage({super.key});
+  final OrderService? orderService;
+
+  const MyOrdersPage({super.key, this.orderService});
 
   @override
   State<MyOrdersPage> createState() => _MyOrdersPageState();
 }
 
-class _MyOrdersPageState extends State<MyOrdersPage> with SingleTickerProviderStateMixin {
-  final OrderService _orderService = OrderService();
+class _MyOrdersPageState extends State<MyOrdersPage>
+    with SingleTickerProviderStateMixin {
+  late final OrderService _orderService;
   late TabController _tabController;
 
   List<Order> _orders = [];
@@ -30,6 +34,7 @@ class _MyOrdersPageState extends State<MyOrdersPage> with SingleTickerProviderSt
   @override
   void initState() {
     super.initState();
+    _orderService = widget.orderService ?? context.read<OrderService>();
     _tabController = TabController(length: 3, vsync: this);
     _tabController.addListener(_onTabChanged);
     _load();
@@ -57,7 +62,10 @@ class _MyOrdersPageState extends State<MyOrdersPage> with SingleTickerProviderSt
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final data = await _orderService.getOrders(
         role: _currentRole,
@@ -83,13 +91,17 @@ class _MyOrdersPageState extends State<MyOrdersPage> with SingleTickerProviderSt
   }
 
   Future<void> _onRefresh() async {
-    setState(() { _offset = 0; });
+    setState(() {
+      _offset = 0;
+    });
     await _load();
   }
 
   void _loadMore() {
     if (_orders.length >= _total) return;
-    setState(() { _offset += _limit; });
+    setState(() {
+      _offset += _limit;
+    });
     _loadMoreInternal();
   }
 
@@ -128,11 +140,7 @@ class _MyOrdersPageState extends State<MyOrdersPage> with SingleTickerProviderSt
       ),
       body: TabBarView(
         controller: _tabController,
-        children: [
-          _buildList(),
-          _buildList(),
-          _buildList(),
-        ],
+        children: [_buildList(), _buildList(), _buildList()],
       ),
     );
   }
@@ -171,7 +179,10 @@ class _MyOrdersPageState extends State<MyOrdersPage> with SingleTickerProviderSt
             const SizedBox(height: 16),
             Text(
               l.noOrders,
-              style: const TextStyle(fontSize: 16, color: AppTheme.textSecondary),
+              style: const TextStyle(
+                fontSize: 16,
+                color: AppTheme.textSecondary,
+              ),
             ),
           ],
         ),
@@ -241,7 +252,10 @@ class _OrderCard extends StatelessWidget {
                     ),
                   ),
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 8,
+                      vertical: 4,
+                    ),
                     decoration: BoxDecoration(
                       color: order.statusColor.withValues(alpha: 0.15),
                       borderRadius: BorderRadius.circular(6),
@@ -261,7 +275,10 @@ class _OrderCard extends StatelessWidget {
               Row(
                 children: [
                   Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 6,
+                      vertical: 2,
+                    ),
                     decoration: BoxDecoration(
                       color: AppTheme.primary.withValues(alpha: 0.1),
                       borderRadius: BorderRadius.circular(4),

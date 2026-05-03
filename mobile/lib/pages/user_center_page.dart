@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../services/api_service.dart';
 import '../services/admin_role_cache.dart';
 import '../services/token_storage.dart';
@@ -6,14 +7,16 @@ import '../theme/app_theme.dart';
 import 'login_page.dart';
 
 class UserCenterPage extends StatefulWidget {
-  const UserCenterPage({super.key});
+  final ApiService? apiService;
+
+  const UserCenterPage({super.key, this.apiService});
 
   @override
   State<UserCenterPage> createState() => _UserCenterPageState();
 }
 
 class _UserCenterPageState extends State<UserCenterPage> {
-  final ApiService _apiService = ApiService();
+  late final ApiService _apiService;
   String _username = '';
   String _createdAt = '';
   List<dynamic> _listings = [];
@@ -22,6 +25,7 @@ class _UserCenterPageState extends State<UserCenterPage> {
   @override
   void initState() {
     super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
     _loadData();
   }
 

@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:good4ncu_mobile/services/api_service.dart';
 import 'package:good4ncu_mobile/services/admin_impersonation_service.dart';
 
 class _FakeGateway implements AdminImpersonationGateway {
@@ -123,6 +124,20 @@ class _FakeTokenStore implements AuthTokenStore {
 
 void main() {
   group('AdminImpersonationService', () {
+    test('rejects mixed apiService and gateway injection', () {
+      expect(
+        () => AdminImpersonationService(
+          apiService: ApiService(),
+          gateway: _FakeGateway(calls: <String>[]),
+        ),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+
+    test('rejects missing apiService and gateway injection', () {
+      expect(() => AdminImpersonationService(), throwsA(isA<AssertionError>()));
+    });
+
     test('runs impersonation steps in strict order', () async {
       final calls = <String>[];
       final service = AdminImpersonationService(

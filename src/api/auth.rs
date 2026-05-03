@@ -511,10 +511,9 @@ pub async fn change_password(
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("Hashing error: {}", e)))?
     .map_err(|e| ApiError::Internal(anyhow::anyhow!("Hashing error: {}", e)))?;
 
-    sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
-        .bind(&new_hash)
-        .bind(&user_id)
-        .execute(&state.infra.db)
+    state
+        .user_repo
+        .update_password_hash(&user_id, &new_hash)
         .await
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
@@ -658,6 +657,7 @@ pub fn extract_user_id_and_role_from_token_str_with_fallback(
 
 /// Extract and validate the user_id from the Authorization header using the provided secret.
 /// Returns `Ok(user_id)` if the token is valid, or `Err(message)` if invalid/missing.
+#[allow(dead_code)]
 pub fn extract_user_id_from_token(headers: &HeaderMap, jwt_secret: &str) -> Result<String, String> {
     let auth_header = headers
         .get("Authorization")
@@ -728,8 +728,96 @@ pub fn extract_user_id_and_role_from_token_with_fallback(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::agents::router::IntentRouter;
+    use crate::api::{ApiAgents, ApiInfrastructure, ApiSecrets, AppState};
     use crate::repositories::{AuthRepository, PostgresAuthRepository, PostgresUserRepository};
+    use crate::services::{self, notification::NotificationService};
     use crate::test_infra::with_test_pool;
+    use axum::{extract::State, Json};
+    use sqlx::Row;
+    use std::sync::Arc;
+
+    fn build_test_state(pool: sqlx::PgPool) -> AppState {
+        let (service_manager, _rx) = services::ServiceManager::new(pool.clone());
+        let admin_service = service_manager.admin.clone();
+        let event_tx = service_manager.event_tx.clone();
+
+        AppState {
+            secrets: ApiSecrets {
+                jwt_secret: "test_jwt_secret_at_least_32_characters_long".to_string(),
+                jwt_secret_old: None,
+                gemini_api_key: "test-gemini-key".to_string(),
+                oss_endpoint: "https://oss-cn-beijing.aliyuncs.com".to_string(),
+                oss_bucket: "test-bucket".to_string(),
+                oss_role_arn: None,
+                oss_access_key_id: None,
+                oss_access_key_secret: None,
+            },
+            infra: ApiInfrastructure {
+                db: pool.clone(),
+                event_tx,
+                rate_limit: {
+                    let factory = crate::middleware::rate_limit::RateLimiterFactory::new(100, 60);
+                    crate::middleware::rate_limit::RateLimitStateHandle::new(factory.build_local())
+                },
+                notification: NotificationService::new(pool.clone()),
+                ws_connections: crate::api::ws::new_ws_state(),
+                metrics: Arc::new(crate::api::metrics::MetricsService::new()),
+                order_service: services::order::OrderService::new(pool.clone()),
+                admin_service,
+                moderation: services::moderation::ModerationService::new(
+                    &crate::config::AppConfig {
+                        gemini_api_key: "test-gemini-key".to_string(),
+                        minimax_api_key: None,
+                        minimax_api_base_url: None,
+                        jwt_secret: "test_jwt_secret_at_least_32_characters_long".to_string(),
+                        jwt_secret_old: None,
+                        database_url: "postgres://test/test".to_string(),
+                        oss_access_key_id: None,
+                        oss_access_key_secret: None,
+                        llm_provider: "gemini".to_string(),
+                        vector_dim: 768,
+                        cors_origins: vec![],
+                        oss_endpoint: "https://oss-cn-beijing.aliyuncs.com".to_string(),
+                        oss_bucket: "test-bucket".to_string(),
+                        oss_role_arn: None,
+                        redis_url: None,
+                        rate_limit_max_requests: 100,
+                        rate_limit_window_secs: 60,
+                        server_host: "127.0.0.1".to_string(),
+                        server_port: 3000,
+                        event_bus_capacity: 2048,
+                        hitl_expire_scan_interval_secs: 600,
+                        hitl_expire_timeout_hours: 48,
+                        moka_cache_max_capacity: 100_000,
+                        access_token_ttl_secs: 86_400,
+                        refresh_token_ttl_secs: 604_800,
+                        conversation_history_limit: 10,
+                        max_keyword_len: 200,
+                        price_tolerance: 0.5,
+                        categories: vec!["other".to_string()],
+                        blocked_keywords: vec![],
+                        moderation_image_enabled: false,
+                        moderation_image_api_url: None,
+                        moderation_image_api_key: None,
+                    },
+                ),
+                token_denylist: services::token_denylist::TokenDenylist::new(),
+            },
+            agents: ApiAgents {
+                llm_provider: Arc::new(
+                    crate::llm::gemini::GeminiProvider::new("test-key", 768)
+                        .expect("gemini provider init"),
+                ),
+                router: IntentRouter::new(vec![]),
+            },
+            listing_repo: crate::repositories::PostgresListingRepository::new(pool.clone()),
+            user_repo: PostgresUserRepository::new(pool.clone()),
+            chat_repo: crate::repositories::PostgresChatRepository::new(pool.clone()),
+            auth_repo: PostgresAuthRepository::new(pool.clone()),
+            order_repo: crate::repositories::PostgresOrderRepository::new(pool),
+        }
+    }
 
     #[derive(Serialize)]
     struct LegacyClaims {
@@ -1083,6 +1171,89 @@ mod tests {
             .expect("count active tokens");
 
             assert_eq!(active_count, 0);
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_create_user_dual_writes_shadow_uuid_column() {
+        with_test_pool(|pool| async move {
+            let auth_repo = PostgresAuthRepository::new(pool.clone());
+
+            let user_id = auth_repo
+                .create_user("shadow_user", Some("shadow@example.com"), "hash")
+                .await
+                .expect("create user");
+            let user_uuid = Uuid::parse_str(&user_id).expect("uuid id");
+
+            let row = sqlx::query("SELECT new_id, username, email FROM users WHERE id = $1")
+                .bind(&user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("select user");
+
+            assert_eq!(row.get::<Uuid, _>("new_id"), user_uuid);
+            assert_eq!(row.get::<String, _>("username"), "shadow_user");
+            assert_eq!(
+                row.get::<Option<String>, _>("email").as_deref(),
+                Some("shadow@example.com")
+            );
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn test_change_password_updates_hash_via_repository_path() {
+        with_test_pool(|pool| async move {
+            let old_hash = tokio::task::spawn_blocking(|| {
+                let salt = SaltString::generate(&mut OsRng);
+                Argon2::default()
+                    .hash_password("current-pass-123".as_bytes(), &salt)
+                    .map(|h| h.to_string())
+            })
+            .await
+            .expect("hash task")
+            .expect("hash password");
+
+            let user_repo = PostgresUserRepository::new(pool.clone());
+            let user_id = user_repo
+                .create("change_password_user", None, &old_hash, "user")
+                .await
+                .expect("create user");
+
+            let state = build_test_state(pool.clone());
+            let (token, _jti, _exp) =
+                generate_access_token(&user_id, "user", &state.secrets.jwt_secret, 3600)
+                    .expect("generate token");
+
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "Authorization",
+                format!("Bearer {}", token).parse().unwrap(),
+            );
+
+            let _ = change_password(
+                State(state),
+                headers,
+                Json(ChangePasswordRequest {
+                    current_password: "current-pass-123".to_string(),
+                    new_password: "brand-new-pass-456".to_string(),
+                }),
+            )
+            .await
+            .expect("change password");
+
+            let updated_hash: String =
+                sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+                    .bind(&user_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("select updated hash");
+
+            let parsed_hash = PasswordHash::new(&updated_hash).expect("parse updated hash");
+            Argon2::default()
+                .verify_password("brand-new-pass-456".as_bytes(), &parsed_hash)
+                .expect("new password verifies");
         })
         .await;
     }

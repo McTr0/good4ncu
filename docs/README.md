@@ -4,6 +4,15 @@
 
 **免责声明：** 本产品仅做信息发布，无担保和资金中介，也不收手续费。所有交易风险自担。
 
+## Documentation Order
+
+按下面顺序阅读文档，避免在多个旧计划之间来回切换：
+
+1. [PLAN.md](./PLAN.md) — 当前唯一的执行计划与优先级来源
+2. [ARCHITECTURE_AUDIT.md](./ARCHITECTURE_AUDIT.md) — 架构诊断、风险和演进方向
+3. [SPEC_PLANS.md](./SPEC_PLANS.md) — 子系统专项计划，如 UUID 迁移与聊天验证
+4. [DEVELOPER.md](./DEVELOPER.md) / [CONTRIBUTING.md](./CONTRIBUTING.md) — 开发流程、代码规范、提交流程
+
 ## 功能特性
 
 | 模块 | 功能 |
@@ -117,7 +126,7 @@ cp config.toml.example good4ncu.toml
 
 ```toml
 [server]
-host = "127.0.0.1"
+host = "0.0.0.0"
 port = 3000
 
 [llm]

@@ -4,6 +4,9 @@
 //! 1. Payment Timeout: pending -> cancelled (30 min)
 //! 2. Auto-Completion: shipped -> completed (7 days)
 
+use crate::repositories::{
+    OrderTimestampField, PostgresListingRepository, PostgresOrderRepository,
+};
 use crate::services::notification::NotificationBroadcast;
 use sqlx::{PgPool, Row};
 use std::time::Duration;
@@ -35,6 +38,8 @@ async fn process_payment_timeouts(
     db: &PgPool,
     broadcast: &NotificationBroadcast,
 ) -> anyhow::Result<()> {
+    let order_repo = PostgresOrderRepository::new(db.clone());
+    let listing_repo = PostgresListingRepository::new(db.clone());
     let expired_rows = sqlx::query(
         r#"
         SELECT id, listing_id, buyer_id
@@ -53,46 +58,33 @@ async fn process_payment_timeouts(
         let process_result: anyhow::Result<Option<bool>> = async {
             let mut tx = db.begin().await?;
 
-            // 1. Update order status first to keep lock order consistent with other flows.
-            let order_update = sqlx::query(
-                "UPDATE orders
-                 SET status = 'cancelled', cancellation_reason = '超时未支付', cancelled_at = NOW()
-                 WHERE id = $1 AND status = 'pending' AND created_at < NOW() - INTERVAL '30 minutes'",
-            )
-            .bind(&order_id)
-            .execute(&mut *tx)
-            .await?;
+            // Keep lock order consistent with other flows by mutating the order first.
+            let updated_listing_id = order_repo
+                .update_status_in_tx(
+                    &mut tx,
+                    &order_id,
+                    "pending",
+                    "cancelled",
+                    OrderTimestampField::Cancelled,
+                    Some("超时未支付"),
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-            if order_update.rows_affected() == 0 {
+            let Some(updated_listing_id) = updated_listing_id else {
                 return Ok(None);
+            };
+            if updated_listing_id != listing_id {
+                return Err(anyhow::anyhow!(
+                    "Order/listing mismatch while processing timeout order"
+                ));
             }
 
-            // 2. Serialize relist decision per listing across workers.
-            let listing_lock = sqlx::query("SELECT 1 FROM inventory WHERE id = $1 FOR UPDATE")
-                .bind(&listing_id)
-                .fetch_optional(&mut *tx)
-                .await?;
-            if listing_lock.is_none() {
-                return Ok(None);
-            }
+            let relisted = listing_repo
+                .relist_if_no_open_orders_in_tx(&mut tx, &listing_id)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
 
-            let relist_update = sqlx::query(
-                r#"UPDATE inventory
-                                 SET status = 'active'
-                                 WHERE id = $1
-                                     AND status = 'sold'
-                                     AND NOT EXISTS (
-                                             SELECT 1
-                                             FROM orders o
-                                             WHERE o.listing_id = $1
-                                                 AND o.status IN ('pending', 'paid', 'shipped')
-                                     )"#,
-            )
-            .bind(&listing_id)
-            .execute(&mut *tx)
-            .await?;
-
-            let relisted = relist_update.rows_affected() > 0;
             if !relisted {
                 tracing::info!(
                     %order_id,
@@ -162,6 +154,7 @@ async fn process_auto_completions(
     db: &PgPool,
     broadcast: &NotificationBroadcast,
 ) -> anyhow::Result<()> {
+    let order_repo = PostgresOrderRepository::new(db.clone());
     let rows = sqlx::query(
         r#"
         SELECT id, buyer_id, seller_id 
@@ -177,18 +170,22 @@ async fn process_auto_completions(
         let buyer_id: String = row.get("buyer_id");
         let seller_id: String = row.get("seller_id");
 
-        let updated = sqlx::query(
-            "UPDATE orders
-             SET status = 'completed', completed_at = NOW()
-             WHERE id = $1 AND status = 'shipped' AND shipped_at < NOW() - INTERVAL '7 days'",
-        )
-        .bind(&order_id)
-        .execute(db)
-        .await?;
-
-        if updated.rows_affected() == 0 {
+        let mut tx = db.begin().await?;
+        let updated_listing_id = order_repo
+            .update_status_in_tx(
+                &mut tx,
+                &order_id,
+                "shipped",
+                "completed",
+                OrderTimestampField::Completed,
+                None,
+            )
+            .await?;
+        if updated_listing_id.is_none() {
+            tx.rollback().await?;
             continue;
         }
+        tx.commit().await?;
 
         // Notify both parties
         let msg = "系统已为您自动确认收货，订单已完成";
@@ -230,53 +227,16 @@ async fn process_auto_completions(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_infra::db_safety;
-    use crate::test_infra::{ensure_test_database_exists, ensure_test_schema_ready};
+    use crate::test_infra::with_test_pool;
     use sqlx::Row;
-    use std::sync::LazyLock;
     use std::sync::{Arc, Mutex};
-    use tokio::sync::Mutex as AsyncMutex;
-
-    static TEST_DB_LOCK: LazyLock<AsyncMutex<()>> = LazyLock::new(|| AsyncMutex::new(()));
 
     async fn with_local_test_pool<F, Fut>(test_body: F)
     where
         F: FnOnce(PgPool) -> Fut,
         Fut: std::future::Future<Output = ()>,
     {
-        let _guard = TEST_DB_LOCK.lock().await;
-        let database_url = db_safety::resolve_test_database_url();
-        let _created = ensure_test_database_exists(&database_url).await;
-        ensure_test_schema_ready(&database_url).await;
-        let pool = sqlx::postgres::PgPoolOptions::new()
-            .max_connections(1)
-            .min_connections(1)
-            .acquire_timeout(std::time::Duration::from_secs(5))
-            .connect(&database_url)
-            .await
-            .expect("Failed to connect to test database");
-
-        let clean_tables = [
-            "chat_messages",
-            "hitl_requests",
-            "notifications",
-            "watchlist",
-            "chat_connections",
-            "orders",
-            "inventory",
-            "documents",
-            "refresh_tokens",
-            "users",
-        ];
-
-        for table in &clean_tables {
-            sqlx::query(&format!("DELETE FROM {table}"))
-                .execute(&pool)
-                .await
-                .expect("DELETE must succeed");
-        }
-
-        test_body(pool).await;
+        with_test_pool(test_body).await;
     }
 
     async fn insert_user(pool: &PgPool, id: &str, username: &str) {

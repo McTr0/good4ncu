@@ -68,11 +68,18 @@ void main() {
           'Bearer fresh-token',
         );
 
-        expect(client.requests[0].url.queryParameters['message'], 'hello');
-        expect(
-          client.requests[1].url.queryParameters['conversation_id'],
-          'conv-1',
-        );
+        final firstRequest = client.requests[0] as http.Request;
+        final secondRequest = client.requests[1] as http.Request;
+        expect(firstRequest.method, 'POST');
+        expect(firstRequest.url.path, '/api/chat/stream');
+        expect(jsonDecode(firstRequest.body), {
+          'message': 'hello',
+          'conversation_id': 'conv-1',
+        });
+        expect(jsonDecode(secondRequest.body), {
+          'message': 'hello',
+          'conversation_id': 'conv-1',
+        });
 
         await service.disconnect();
       },
@@ -174,5 +181,36 @@ void main() {
         expect(service.isConnected, isFalse);
       },
     );
+
+    test('sends media URLs in JSON body instead of query params', () async {
+      final client = _QueuedClient([_response(200)]);
+
+      final service = SseService(
+        baseUrl: 'https://api.test',
+        getAccessToken: () async => 'token-123',
+        refreshAccessToken: () async => false,
+        clientFactory: () => client,
+      );
+
+      await service.connect(
+        message: 'hello',
+        conversationId: 'conv-1',
+        listingId: 'listing-1',
+        imageUrl: 'https://cdn.example.com/a.jpg',
+        audioUrl: 'https://cdn.example.com/a.ogg',
+      );
+
+      final request = client.requests.single as http.Request;
+      expect(request.url.queryParameters, isEmpty);
+      expect(jsonDecode(request.body), {
+        'message': 'hello',
+        'conversation_id': 'conv-1',
+        'listing_id': 'listing-1',
+        'image_url': 'https://cdn.example.com/a.jpg',
+        'audio_url': 'https://cdn.example.com/a.ogg',
+      });
+
+      await service.disconnect();
+    });
   });
 }

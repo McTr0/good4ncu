@@ -38,7 +38,7 @@ class SseToken {
 
 /// Server-Sent Events stream consumer.
 ///
-/// Connects to `GET /api/chat/stream` with JWT auth.
+/// Connects to `POST /api/chat/stream` with JWT auth.
 /// Each SSE `data:` line is parsed as JSON and emitted via StreamController.
 class SseService {
   static const int _maxPendingChars = 65536;
@@ -91,8 +91,8 @@ class SseService {
     required String message,
     String? conversationId,
     String? listingId,
-    String? imageBase64,
-    String? audioBase64,
+    String? imageUrl,
+    String? audioUrl,
   }) async {
     await disconnect();
     final connectionId = _activeConnectionId;
@@ -114,17 +114,14 @@ class SseService {
     // Single-subscription stream preserves events that arrive before UI listener attaches.
     _controller = StreamController<SseToken>();
 
-    final queryParams = <String, String>{'message': message};
-    if (conversationId != null) queryParams['conversation_id'] = conversationId;
-    if (listingId != null) queryParams['listing_id'] = listingId;
-    if (imageBase64 != null) queryParams['image'] = imageBase64;
-    if (audioBase64 != null) queryParams['audio'] = audioBase64;
+    final uri = Uri.parse('$_baseUrl/api/chat/stream');
+    final body = <String, dynamic>{'message': message};
+    if (conversationId != null) body['conversation_id'] = conversationId;
+    if (listingId != null) body['listing_id'] = listingId;
+    if (imageUrl != null) body['image_url'] = imageUrl;
+    if (audioUrl != null) body['audio_url'] = audioUrl;
 
-    final uri = Uri.parse(
-      '$_baseUrl/api/chat/stream',
-    ).replace(queryParameters: queryParams);
-
-    var streamedResponse = await _sendSseRequest(client, uri, token);
+    var streamedResponse = await _sendSseRequest(client, uri, token, body);
 
     if (connectionId != _activeConnectionId) {
       client.close();
@@ -139,7 +136,12 @@ class SseService {
       if (refreshed) {
         final refreshedToken = await _getAccessToken();
         if (refreshedToken != null && refreshedToken.isNotEmpty) {
-          streamedResponse = await _sendSseRequest(client, uri, refreshedToken);
+          streamedResponse = await _sendSseRequest(
+            client,
+            uri,
+            refreshedToken,
+            body,
+          );
         }
       }
     }
@@ -205,11 +207,14 @@ class SseService {
     http.Client client,
     Uri uri,
     String token,
+    Map<String, dynamic> body,
   ) {
-    final request = http.Request('GET', uri);
+    final request = http.Request('POST', uri);
     request.headers['Accept'] = 'text/event-stream';
     request.headers['Cache-Control'] = 'no-cache';
+    request.headers['Content-Type'] = 'application/json';
     request.headers['Authorization'] = 'Bearer $token';
+    request.body = jsonEncode(body);
     return client.send(request);
   }
 

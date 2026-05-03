@@ -11,6 +11,10 @@ use crate::api::ws;
 use crate::api::AppState;
 
 use super::{
+    context::{
+        is_special_conversation, load_conversation_access, load_direct_message_access,
+        ConversationAccess,
+    },
     EditMessageBody, EditMessageResponse, MarkReadResponse, MessageEntry, MessageListQuery,
     MessageListResponse, SendMessageBody, SendMessageResponse, TypingBody, WsMessageReadEvent,
     WsNewMessageEvent, WsTypingEvent,
@@ -33,68 +37,26 @@ pub async fn get_connection_messages(
     let limit = params.limit.unwrap_or(50).clamp(1, 200);
     let offset = params.offset.unwrap_or(0).max(0);
 
-    // 1. Check if this is a 'special' conversation ID (like AI agent or global chat)
-    // 2. Otherwise, check if it's a valid UUID for a peer-to-peer connection
-    let is_special = connection_id == "__agent__" || connection_id == "global";
-    let connection_uuid = uuid::Uuid::parse_str(&connection_id).ok();
-
-    if !is_special && connection_uuid.is_none() {
+    if !is_special_conversation(&connection_id) && uuid::Uuid::parse_str(&connection_id).is_err() {
         return Err(ApiError::BadRequest(
             "Invalid conversation ID format".to_string(),
         ));
     }
 
-    if let Some(uuid) = connection_uuid {
-        let connection = sqlx::query(
-            "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
-        )
-        .bind(uuid)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
+    let _access = load_conversation_access(&state.infra.db, &connection_id, &user_id).await?;
 
-        let requester_id: String = connection.get("requester_id");
-        let receiver_id: String = connection.get("receiver_id");
-
-        if requester_id != user_id && receiver_id != user_id {
-            return Err(ApiError::Forbidden);
-        }
-    }
-
-    let rows = sqlx::query(
-        r#"SELECT id, sender, content, is_agent, timestamp, read_at, read_by, image_data, audio_data, image_url, audio_url, edited_at, status
-           FROM chat_messages
-           WHERE conversation_id = $1::text
-           ORDER BY id DESC
-           LIMIT $2 OFFSET $3"#,
-    )
-    .bind(&connection_id)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let total: i64 = sqlx::query(
-        r#"SELECT COUNT(*) as cnt FROM chat_messages
-            WHERE conversation_id = $1::text"#,
-    )
-    .bind(&connection_id)
-    .fetch_one(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-    .try_get("cnt")
-    .unwrap_or(0);
+    let (rows, total) = state
+        .chat_repo
+        .list_user_chat_messages(&connection_id, limit, offset)
+        .await?;
 
     let sender_ids: Vec<String> = rows
         .iter()
         .filter_map(|row| {
-            let sender: String = row.get("sender");
-            if sender == "assistant" {
+            if row.sender == "assistant" {
                 None
             } else {
-                Some(sender)
+                Some(row.sender.clone())
             }
         })
         .collect();
@@ -118,33 +80,26 @@ pub async fn get_connection_messages(
     let messages: Vec<MessageEntry> = rows
         .into_iter()
         .map(|row| {
-            let sender: String = row.get("sender");
-            let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
-            let read_at: Option<chrono::DateTime<chrono::Utc>> =
-                row.try_get("read_at").ok().flatten();
-            let edited_at: Option<chrono::DateTime<chrono::Utc>> =
-                row.try_get("edited_at").ok().flatten();
-            let status: String = row.try_get("status").unwrap_or_else(|_| "sent".to_string());
-            let sender_username = if sender == "assistant" {
+            let sender_username = if row.sender == "assistant" {
                 None
             } else {
-                sender_usernames.get(&sender).cloned()
+                sender_usernames.get(&row.sender).cloned()
             };
             MessageEntry {
-                id: row.get("id"),
-                sender,
+                id: row.id,
+                sender: row.sender,
                 sender_username,
-                content: row.get("content"),
-                is_agent: row.get("is_agent"),
-                timestamp: timestamp.to_rfc3339(),
-                read_at: read_at.map(|dt| dt.to_rfc3339()),
-                read_by: row.try_get("read_by").ok().flatten(),
-                image_data: row.try_get("image_data").ok().flatten(),
-                audio_data: row.try_get("audio_data").ok().flatten(),
-                image_url: row.try_get("image_url").ok().flatten(),
-                audio_url: row.try_get("audio_url").ok().flatten(),
-                edited_at: edited_at.map(|dt| dt.to_rfc3339()),
-                status,
+                content: row.content,
+                is_agent: row.is_agent,
+                timestamp: row.timestamp.to_rfc3339(),
+                read_at: row.read_at.map(|dt| dt.to_rfc3339()),
+                read_by: row.read_by,
+                image_data: row.image_data,
+                audio_data: row.audio_data,
+                image_url: row.image_url,
+                audio_url: row.audio_url,
+                edited_at: row.edited_at.map(|dt| dt.to_rfc3339()),
+                status: row.status,
             }
         })
         .collect();
@@ -197,72 +152,35 @@ pub async fn send_connection_message(
         ));
     }
 
-    let connection_uuid = uuid::Uuid::parse_str(&connection_id).ok();
-    let is_special = connection_id == "__agent__" || connection_id == "global";
-
-    let (receiver_id_opt, status) = if let Some(uuid) = connection_uuid {
-        let connection = sqlx::query(
-            "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
-        )
-        .bind(uuid)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-        let req_id: String = connection.get("requester_id");
-        let recv_id: String = connection.get("receiver_id");
-        let status: String = connection.get("status");
-
-        if sender_id != req_id && sender_id != recv_id {
-            return Err(ApiError::Forbidden);
+    let access = load_conversation_access(&state.infra.db, &connection_id, &sender_id).await?;
+    let (receiver, connection_uuid) = match access {
+        ConversationAccess::Special => (None, None),
+        ConversationAccess::Direct(connection) => {
+            connection.ensure_connected()?;
+            (
+                Some(connection.other_user_id(&sender_id)?),
+                Some(connection.connection_uuid),
+            )
         }
-
-        let receiver = if sender_id == req_id {
-            Some(recv_id)
-        } else {
-            Some(req_id)
-        };
-        (receiver, status)
-    } else if is_special {
-        // Special conversations don't have a specific human receiver or connection record
-        (None, "connected".to_string())
-    } else {
-        return Err(ApiError::BadRequest("Invalid conversation ID".to_string()));
     };
 
-    if status != "connected" {
-        return Err(ApiError::BadRequest(format!(
-            "连接状态不是 connected，当前状态: {}",
-            status
-        )));
-    }
-
-    let receiver = receiver_id_opt;
-
-    let read_at = Some(chrono::Utc::now());
-    let read_at_str = read_at.map(|dt| dt.to_rfc3339());
-
-    let row = sqlx::query(
-        r#"INSERT INTO chat_messages (conversation_id, listing_id, sender, receiver, is_agent, content, image_data, audio_data, image_url, audio_url, read_at, read_by, status)
-           VALUES ($1::text, 'direct', $2, $3, false, $4, $5, $6, $7, $8, $9, $2, 'sent')
-           RETURNING id, timestamp"#,
-    )
-    .bind(&connection_id)
-    .bind(&sender_id)
-    .bind(&receiver)
-    .bind(&body.content)
-    .bind(&body.image_base64)
-    .bind(&body.audio_base64)
-    .bind(&normalized_image_url)
-    .bind(&body.audio_url)
-    .bind(read_at)
-    .fetch_one(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    let message_id: i64 = row.get("id");
-    let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
+    let read_at = None;
+    let (message_id, timestamp, persisted_read_at) = state
+        .chat_repo
+        .create_direct_message(
+            &connection_id,
+            connection_uuid,
+            &sender_id,
+            receiver.as_deref(),
+            &body.content,
+            body.image_base64.as_deref(),
+            body.audio_base64.as_deref(),
+            normalized_image_url.as_deref(),
+            body.audio_url.as_deref(),
+            read_at,
+        )
+        .await?;
+    let read_at_str = persisted_read_at.map(|dt| dt.to_rfc3339());
 
     state.infra.metrics.record_chat_message();
     if normalized_image_url.is_some() || body.audio_url.is_some() {
@@ -290,15 +208,6 @@ pub async fn send_connection_message(
                 "Failed to enqueue chat image moderation job"
             );
         }
-    }
-
-    // Update unread_count for the receiver (if human connection exists)
-    if let Some(uuid) = connection_uuid {
-        sqlx::query("UPDATE chat_connections SET unread_count = unread_count + 1 WHERE id = $1")
-            .bind(uuid)
-            .execute(&state.infra.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
     }
 
     let sender_username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
@@ -356,45 +265,23 @@ pub async fn mark_message_read(
     )
     .map_err(|_| ApiError::Unauthorized)?;
 
-    let row = sqlx::query(
-        r#"SELECT cm.id, cm.sender, cm.receiver, cm.read_at, cm.conversation_id, cc.status as conn_status
-           FROM chat_messages cm
-                     JOIN chat_connections cc
-                         ON cc.id = CASE
-                                                        WHEN cm.conversation_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                                                        THEN cm.conversation_id::uuid
-                                                        ELSE NULL
-                                                END
-           WHERE cm.id = $1"#,
-    )
-    .bind(message_id)
-    .fetch_optional(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-    .ok_or(ApiError::NotFound)?;
+    let message = load_direct_message_access(&state.infra.db, message_id).await?;
 
-    let sender: String = row.get("sender");
-    let receiver: Option<String> = row.try_get("receiver").ok().flatten();
-    let conversation_id: String = row.get("conversation_id");
-    let current_read_at: Option<chrono::DateTime<chrono::Utc>> =
-        row.try_get("read_at").ok().flatten();
-    let conn_status: String = row.get("conn_status");
-
-    if conn_status != "connected" {
+    if message.connection_status != "connected" {
         return Err(ApiError::BadRequest(format!(
             "连接状态不是 connected，无法标记已读: {}",
-            conn_status
+            message.connection_status
         )));
     }
 
-    let Some(recv) = receiver else {
+    let Some(recv) = message.receiver else {
         return Err(ApiError::Forbidden);
     };
     if recv != user_id {
         return Err(ApiError::Forbidden);
     }
 
-    if let Some(read_at) = current_read_at {
+    if let Some(read_at) = message.read_at {
         let read_at_str = read_at.to_rfc3339();
         return Ok(Json(MarkReadResponse {
             message_id,
@@ -405,22 +292,17 @@ pub async fn mark_message_read(
     let read_at = chrono::Utc::now();
     let read_at_str = read_at.to_rfc3339();
 
-    sqlx::query("UPDATE chat_messages SET read_at = $1, read_by = $2 WHERE id = $3")
-        .bind(read_at)
-        .bind(&user_id)
-        .bind(message_id)
-        .execute(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    // Reset unread_count for the receiver (if human connection exists)
-    if let Ok(uuid) = uuid::Uuid::parse_str(&conversation_id) {
-        sqlx::query("UPDATE chat_connections SET unread_count = 0 WHERE id = $1")
-            .bind(uuid)
-            .execute(&state.infra.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    }
+    let connection_uuid = uuid::Uuid::parse_str(&message.conversation_id).ok();
+    state
+        .chat_repo
+        .mark_direct_message_read(
+            message_id,
+            &message.conversation_id,
+            connection_uuid,
+            &user_id,
+            read_at,
+        )
+        .await?;
 
     let ws_event = WsMessageReadEvent {
         event: "message_read".to_string(),
@@ -429,7 +311,7 @@ pub async fn mark_message_read(
         read_by: user_id.clone(),
     };
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
-    ws::broadcast_to_user(&sender, &payload);
+    ws::broadcast_to_user(&message.sender, &payload);
 
     Ok(Json(MarkReadResponse {
         message_id,
@@ -466,43 +348,23 @@ pub async fn edit_message(
         return Err(ApiError::BadRequest("消息内容不能超过2000字符".to_string()));
     }
 
-    // Fetch the existing message
-    let row = sqlx::query(
-        r#"SELECT cm.id, cm.sender, cm.timestamp, cc.status as conn_status
-           FROM chat_messages cm
-                     JOIN chat_connections cc
-                         ON cc.id = CASE
-                                                        WHEN cm.conversation_id ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-                                                        THEN cm.conversation_id::uuid
-                                                        ELSE NULL
-                                                END
-           WHERE cm.id = $1"#,
-    )
-    .bind(message_id)
-    .fetch_optional(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-    .ok_or(ApiError::NotFound)?;
+    let message = load_direct_message_access(&state.infra.db, message_id).await?;
 
-    let sender: String = row.get("sender");
-    if sender != user_id {
+    if message.sender != user_id {
         return Err(ApiError::Forbidden);
     }
 
-    let timestamp: chrono::DateTime<chrono::Utc> = row.get("timestamp");
-    let conn_status: String = row.get("conn_status");
-
-    if conn_status != "connected" {
+    if message.connection_status != "connected" {
         return Err(ApiError::BadRequest(format!(
             "连接状态不是 connected，无法编辑: {}",
-            conn_status
+            message.connection_status
         )));
     }
 
     // Only allow editing within 15 minutes
     let fifteen_minutes = chrono::Duration::minutes(15);
     let now = chrono::Utc::now();
-    if now.signed_duration_since(timestamp) > fifteen_minutes {
+    if now.signed_duration_since(message.timestamp) > fifteen_minutes {
         return Err(ApiError::BadRequest(
             "消息已超过15分钟，无法编辑".to_string(),
         ));
@@ -511,13 +373,10 @@ pub async fn edit_message(
     let edited_at = chrono::Utc::now();
     let edited_at_str = edited_at.to_rfc3339();
 
-    sqlx::query("UPDATE chat_messages SET content = $1, edited_at = $2 WHERE id = $3")
-        .bind(&body.content)
-        .bind(edited_at)
-        .bind(message_id)
-        .execute(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+    state
+        .chat_repo
+        .update_direct_message_content(message_id, &body.content, edited_at)
+        .await?;
 
     Ok(Json(EditMessageResponse {
         message_id,
@@ -539,34 +398,7 @@ pub async fn typing_indicator(
     )
     .map_err(|_| ApiError::Unauthorized)?;
 
-    let connection_uuid = uuid::Uuid::parse_str(&body.conversation_id).ok();
-    let is_special = body.conversation_id == "__agent__" || body.conversation_id == "global";
-
-    let (req_id, recv_id) = if let Some(uuid) = connection_uuid {
-        let row = sqlx::query(
-            "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
-        )
-        .bind(uuid)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-        let requester_id: String = row.get("requester_id");
-        let receiver_id: String = row.get("receiver_id");
-
-        if user_id != requester_id && user_id != receiver_id {
-            return Err(ApiError::Forbidden);
-        }
-        (requester_id, receiver_id)
-    } else if is_special {
-        (user_id.clone(), "assistant".to_string())
-    } else {
-        return Err(ApiError::BadRequest("Invalid conversation ID".to_string()));
-    };
-
-    let requester_id = req_id;
-    let receiver_id = recv_id;
+    let access = load_conversation_access(&state.infra.db, &body.conversation_id, &user_id).await?;
 
     let username: Option<String> = sqlx::query("SELECT username FROM users WHERE id = $1")
         .bind(&user_id)
@@ -585,10 +417,9 @@ pub async fn typing_indicator(
     let payload = serde_json::to_string(&ws_event).unwrap_or_default();
 
     // Broadcast to the other party
-    let recipient = if user_id == requester_id {
-        receiver_id
-    } else {
-        requester_id
+    let recipient = match access {
+        ConversationAccess::Special => "assistant".to_string(),
+        ConversationAccess::Direct(connection) => connection.other_user_id(&user_id)?,
     };
     ws::broadcast_to_user(&recipient, &payload);
 
@@ -611,57 +442,22 @@ pub async fn mark_connection_read(
     )
     .map_err(|_| ApiError::Unauthorized)?;
 
-    let connection_uuid = uuid::Uuid::parse_str(&connection_id).ok();
-    let is_special = connection_id == "__agent__" || connection_id == "global";
-
-    if let Some(uuid) = connection_uuid {
-        let row = sqlx::query(
-            "SELECT requester_id, receiver_id, status FROM chat_connections WHERE id = $1",
-        )
-        .bind(uuid)
-        .fetch_optional(&state.infra.db)
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
-        .ok_or(ApiError::NotFound)?;
-
-        let requester_id: String = row.get("requester_id");
-        let receiver_id: String = row.get("receiver_id");
-
-        if user_id != requester_id && user_id != receiver_id {
-            return Err(ApiError::Forbidden);
-        }
-    } else if !is_special {
-        return Err(ApiError::BadRequest("Invalid conversation ID".to_string()));
-    }
+    let access = load_conversation_access(&state.infra.db, &connection_id, &user_id).await?;
+    let connection_uuid = match access {
+        ConversationAccess::Special => None,
+        ConversationAccess::Direct(connection) => Some(connection.connection_uuid),
+    };
 
     let now = chrono::Utc::now();
 
     // Batch UPDATE: mark all unread messages sent TO this user as read
-    let result = sqlx::query(
-        r#"UPDATE chat_messages
-           SET read_at = $1, read_by = $2, status = 'read'
-           WHERE conversation_id = $3::text
-             AND receiver = $2
-             AND read_at IS NULL"#,
-    )
-    .bind(now)
-    .bind(&user_id)
-    .bind(&connection_id)
-    .execute(&state.infra.db)
-    .await
-    .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-    // Reset unread_count (if human connection exists)
-    if let Some(uuid) = connection_uuid {
-        sqlx::query("UPDATE chat_connections SET unread_count = 0 WHERE id = $1")
-            .bind(uuid)
-            .execute(&state.infra.db)
-            .await
-            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-    }
+    let marked_count = state
+        .chat_repo
+        .mark_connection_read_with_count(&connection_id, connection_uuid, &user_id, now)
+        .await?;
 
     Ok(Json(serde_json::json!({
-        "marked_count": result.rows_affected(),
+        "marked_count": marked_count,
         "read_at": now.to_rfc3339()
     })))
 }

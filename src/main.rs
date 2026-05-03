@@ -57,6 +57,8 @@ async fn main() -> Result<(), anyhow::Error> {
 
     // Single PgPool for relational + vector data (pgvector lives in the same Postgres instance)
     let db_pool = db::init_db(&config.database_url).await?;
+    db::assert_documents_embedding_dim(&db_pool, config.vector_dim).await?;
+    db::assert_uuid_shadow_drift_zero(&db_pool).await?;
 
     // Build the LLM provider based on configuration
     let llm_provider: Arc<dyn LlmProvider> = match config.llm_provider.as_str() {

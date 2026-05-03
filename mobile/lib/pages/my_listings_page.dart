@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../models/models.dart';
@@ -8,14 +9,16 @@ import '../components/price_tag.dart';
 import '../components/shimmer_grid.dart';
 
 class MyListingsPage extends StatefulWidget {
-  const MyListingsPage({super.key});
+  final ApiService? apiService;
+
+  const MyListingsPage({super.key, this.apiService});
 
   @override
   State<MyListingsPage> createState() => _MyListingsPageState();
 }
 
 class _MyListingsPageState extends State<MyListingsPage> {
-  final ApiService _apiService = ApiService();
+  late final ApiService _apiService;
 
   List<Listing> _listings = [];
   bool _loading = true;
@@ -24,6 +27,7 @@ class _MyListingsPageState extends State<MyListingsPage> {
   @override
   void initState() {
     super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
     _load();
   }
 

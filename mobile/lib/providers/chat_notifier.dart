@@ -47,7 +47,9 @@ class ChatViewData extends ChatViewState {
       currentUserId: currentUserId ?? this.currentUserId,
       connectionStatus: connectionStatus ?? this.connectionStatus,
       isOtherTyping: isOtherTyping ?? this.isOtherTyping,
-      editingMessageId: clearEditing ? null : (editingMessageId ?? this.editingMessageId),
+      editingMessageId: clearEditing
+          ? null
+          : (editingMessageId ?? this.editingMessageId),
       isSending: isSending ?? this.isSending,
     );
   }
@@ -67,27 +69,49 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
   final String conversationId;
 
   Timer? _typingTimer;
+  String? _currentUserId;
+  String? _connectionStatus;
 
   ChatNotifier({
     required this.conversationId,
     ChatService? chatService,
     UserService? userService,
-  })  : _chatService = chatService ?? ChatService(),
-        _userService = userService ?? UserService(),
-        super(const ChatViewInitial()) {
+  }) : _chatService = chatService ?? ChatService(),
+       _userService = userService ?? UserService(),
+       super(const ChatViewInitial()) {
     _loadCurrentUser();
     loadMessages();
+  }
+
+  ChatViewState get currentState => state;
+
+  static String? _normalizeConnectionStatus(String? status) {
+    if (status == 'established') {
+      return 'connected';
+    }
+    return status;
   }
 
   Future<void> _loadCurrentUser() async {
     try {
       final profile = await _userService.getUserProfile();
+      _currentUserId = profile['user_id']?.toString();
       if (state is ChatViewData) {
-        state = (state as ChatViewData).copyWith(
-          currentUserId: profile['user_id']?.toString(),
-        );
+        state = (state as ChatViewData).copyWith(currentUserId: _currentUserId);
       }
     } catch (_) {}
+  }
+
+  Future<void> hydrateConnectionStatus() async {
+    try {
+      final connections = await _chatService.getConnections();
+      final conversation = connections
+          .where((c) => c.id == conversationId)
+          .firstOrNull;
+      setConnectionStatus(conversation?.status);
+    } catch (_) {
+      // Best-effort hydrate. Live WS events and send paths still update state.
+    }
   }
 
   Future<void> loadMessages() async {
@@ -97,15 +121,23 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
       state = const ChatViewLoading();
     }
     try {
-      final messages = await _chatService.getChatConversationMessages(conversationId);
+      final messages = await _chatService.getChatConversationMessages(
+        conversationId,
+      );
       final currentState = state;
       if (currentState is ChatViewData) {
         state = currentState.copyWith(
           messages: messages.reversed.toList(),
+          currentUserId: _currentUserId,
+          connectionStatus: _connectionStatus,
           isSending: false,
         );
       } else {
-        state = ChatViewData(messages: messages.reversed.toList());
+        state = ChatViewData(
+          messages: messages.reversed.toList(),
+          currentUserId: _currentUserId,
+          connectionStatus: _connectionStatus,
+        );
       }
       await _chatService.markConnectionAsRead(conversationId);
     } catch (e) {
@@ -114,8 +146,11 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
   }
 
   void setConnectionStatus(String? status) {
+    _connectionStatus = _normalizeConnectionStatus(status);
     if (state is ChatViewData) {
-      state = (state as ChatViewData).copyWith(connectionStatus: status);
+      state = (state as ChatViewData).copyWith(
+        connectionStatus: _connectionStatus,
+      );
     }
   }
 
@@ -143,8 +178,13 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
     if (currentState.editingMessageId == null) return;
 
     try {
-      final updated = await _chatService.editMessage(currentState.editingMessageId!, newContent);
-      final idx = currentState.messages.indexWhere((m) => m.id == currentState.editingMessageId);
+      final updated = await _chatService.editMessage(
+        currentState.editingMessageId!,
+        newContent,
+      );
+      final idx = currentState.messages.indexWhere(
+        (m) => m.id == currentState.editingMessageId,
+      );
       final newMessages = List<ConversationMessage>.from(currentState.messages);
       if (idx >= 0) newMessages[idx] = updated;
       state = currentState.copyWith(messages: newMessages, clearEditing: true);
@@ -153,7 +193,13 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
     }
   }
 
-  Future<void> sendMessage(String text, {String? imageBase64, String? audioBase64}) async {
+  Future<void> sendMessage({
+    required String content,
+    String? imageBase64,
+    String? audioBase64,
+    String? imageUrl,
+    String? audioUrl,
+  }) async {
     if (state is! ChatViewData) return;
     final currentState = state as ChatViewData;
     if (currentState.connectionStatus != 'connected') {
@@ -164,9 +210,11 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       conversationId: conversationId,
       senderId: currentState.currentUserId ?? '',
-      content: text,
+      content: content,
       imageBase64: imageBase64,
       audioBase64: audioBase64,
+      imageUrl: imageUrl,
+      audioUrl: audioUrl,
       sentAt: DateTime.now(),
       status: 'sending',
     );
@@ -179,9 +227,11 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
     try {
       final reply = await _chatService.sendMessage(
         conversationId,
-        content: text,
+        content: content,
         imageBase64: imageBase64,
         audioBase64: audioBase64,
+        imageUrl: imageUrl,
+        audioUrl: audioUrl,
       );
       if (state is ChatViewData) {
         final s = state as ChatViewData;
@@ -208,17 +258,29 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
 
   Future<void> acceptConnection(String connectionId) async {
     await _chatService.acceptConnection(connectionId);
+    setConnectionStatus('connected');
+    await loadMessages();
   }
 
   Future<void> rejectConnection(String connectionId) async {
     await _chatService.rejectConnection(connectionId);
+    setConnectionStatus('rejected');
   }
 
-  void handleWsNotification(String eventType, {String? messageId, String? conversationId, String? typingUserId}) {
-    if (state is! ChatViewData) return;
-    final currentState = state as ChatViewData;
-
+  void handleWsNotification(
+    String eventType, {
+    String? messageId,
+    String? conversationId,
+    String? typingUserId,
+  }) {
     switch (eventType) {
+      case 'connection_established':
+        setConnectionStatus('connected');
+        loadMessages();
+        break;
+      case 'connection_rejected':
+        setConnectionStatus('rejected');
+        break;
       case 'new_message':
         if (messageId != null) {
           _chatService.markMessageRead(messageId).catchError((_) {});
@@ -229,7 +291,10 @@ class ChatNotifier extends StateNotifier<ChatViewState> {
         loadMessages();
         break;
       case 'typing':
-        if (conversationId == this.conversationId && typingUserId != currentState.currentUserId) {
+        if (state is! ChatViewData) return;
+        final currentState = state as ChatViewData;
+        if (conversationId == this.conversationId &&
+            typingUserId != currentState.currentUserId) {
           state = currentState.copyWith(isOtherTyping: true);
           _typingTimer?.cancel();
           _typingTimer = Timer(const Duration(seconds: 3), () {

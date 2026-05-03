@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import 'package:go_router/go_router.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
@@ -7,14 +8,16 @@ import '../theme/app_theme.dart';
 import '../components/price_tag.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({super.key});
+  final RecommendationService? recommendationService;
+
+  const HomePage({super.key, this.recommendationService});
 
   @override
   State<HomePage> createState() => _HomePageState();
 }
 
 class _HomePageState extends State<HomePage> {
-  final RecommendationService _recommendationService = RecommendationService();
+  late final RecommendationService _recommendationService;
 
   // Recommendation state
   List<Listing> _recommendedListings = [];
@@ -25,6 +28,8 @@ class _HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
+    _recommendationService =
+        widget.recommendationService ?? context.read<RecommendationService>();
     _loadRecommendations();
   }
 

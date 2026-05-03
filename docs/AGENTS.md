@@ -48,7 +48,11 @@ cargo test -- --nocapture
 cd mobile && flutter pub get && flutter run
 ```
 
-No CI pipeline exists yet. Unit tests are run locally with `cargo test`.
+CI pipeline exists via GitHub Actions (`.github/workflows/ci.yml`) and includes:
+- Rust: `cargo fmt -- --check`, `cargo clippy --all-targets -- -D warnings`, `cargo check --locked`, `cargo test`
+- Migration verification against PostgreSQL service
+- Build and Docker image build checks
+- Flutter: `flutter analyze`, `flutter test`
 
 ## Environment
 
@@ -66,7 +70,7 @@ Non-secret settings can be set in `good4ncu.toml`:
 
 ```toml
 [server]
-host = "127.0.0.1"
+host = "0.0.0.0"
 port = 3000
 
 [llm]

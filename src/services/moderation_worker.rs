@@ -251,11 +251,7 @@ async fn update_resource_status(
         }
         "chat_image" => {
             let message_id: i64 = resource_id.parse().map_err(|e| {
-                anyhow::anyhow!(
-                    "invalid chat_image resource_id '{}': {}",
-                    resource_id,
-                    e
-                )
+                anyhow::anyhow!("invalid chat_image resource_id '{}': {}", resource_id, e)
             })?;
             sqlx::query("UPDATE chat_messages SET moderation_status = $1 WHERE id = $2")
                 .bind(status)

@@ -4,6 +4,7 @@
 //! message editing, read receipts, and typing indicators.
 //!
 //! Run with: `cargo test --test chat_e2e`
+//! Enforce required mode: `CHAT_E2E_REQUIRED=true cargo test --test chat_e2e`
 //!
 //! Requires a running PostgreSQL database with `DATABASE_URL` env var set.
 //! Tests are independent and clean up their data in the drop step.
@@ -257,6 +258,77 @@ fn auth_headers(token: &str) -> HeaderMap {
     headers
 }
 
+fn should_require_chat_e2e(flag_value: Option<&str>) -> bool {
+    flag_value
+        .map(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false)
+}
+
+fn chat_e2e_required() -> bool {
+    let raw = std::env::var("CHAT_E2E_REQUIRED").ok();
+    should_require_chat_e2e(raw.as_deref())
+}
+
+async fn resolve_base_url(client: &Client) -> anyhow::Result<Option<String>> {
+    let required = chat_e2e_required();
+
+    let Some(base_url) = std::env::var("TEST_BASE_URL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+    else {
+        if required {
+            return Err(anyhow::anyhow!(
+                "chat_e2e is required but TEST_BASE_URL is not set; set TEST_BASE_URL or set CHAT_E2E_REQUIRED=false"
+            ));
+        }
+
+        eprintln!(
+            "Skipping chat_e2e: TEST_BASE_URL is not set. This suite is optional unless CHAT_E2E_REQUIRED=true."
+        );
+        return Ok(None);
+    };
+
+    let health_url = format!("{}/api/health", base_url);
+    let health_res = client.get(&health_url).send().await;
+    match health_res {
+        Ok(resp) if resp.status().is_success() => Ok(Some(base_url)),
+        Ok(resp) => Err(anyhow::anyhow!(
+            "chat_e2e preflight failed: {} returned status {}",
+            health_url,
+            resp.status()
+        )),
+        Err(err) => Err(anyhow::anyhow!(
+            "chat_e2e preflight failed: cannot reach {}: {}",
+            health_url,
+            err
+        )),
+    }
+}
+
+#[test]
+fn test_should_require_chat_e2e_true_values() {
+    assert!(should_require_chat_e2e(Some("1")));
+    assert!(should_require_chat_e2e(Some("true")));
+    assert!(should_require_chat_e2e(Some("TRUE")));
+    assert!(should_require_chat_e2e(Some("yes")));
+    assert!(should_require_chat_e2e(Some("on")));
+}
+
+#[test]
+fn test_should_require_chat_e2e_false_values() {
+    assert!(!should_require_chat_e2e(None));
+    assert!(!should_require_chat_e2e(Some("")));
+    assert!(!should_require_chat_e2e(Some("0")));
+    assert!(!should_require_chat_e2e(Some("false")));
+    assert!(!should_require_chat_e2e(Some("no")));
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -265,10 +337,10 @@ fn auth_headers(token: &str) -> HeaderMap {
 #[tokio::test]
 async fn test_connection_lifecycle() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create two test users
     let user_a = create_test_user(&client, &base_url, "user_a").await?;
@@ -401,10 +473,10 @@ async fn test_connection_lifecycle() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_message_sending() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create two test users
     let user_a = create_test_user(&client, &base_url, "msg_a").await?;
@@ -522,10 +594,10 @@ async fn test_message_sending() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_message_editing() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create two test users
     let user_a = create_test_user(&client, &base_url, "edit_a").await?;
@@ -677,10 +749,10 @@ async fn test_message_editing() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_read_receipts() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create two test users
     let user_a = create_test_user(&client, &base_url, "read_a").await?;
@@ -737,6 +809,10 @@ async fn test_read_receipts() -> anyhow::Result<()> {
 
     let sent_message = send_response.json::<SendMessageResponse>().await?;
     let message_id = sent_message.message_id;
+    assert!(
+        sent_message.read_at.is_none(),
+        "newly sent message should not start as read"
+    );
 
     // User B marks the message as read
     let read_response = client
@@ -795,10 +871,10 @@ async fn test_read_receipts() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_typing_indicator() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create two test users
     let user_a = create_test_user(&client, &base_url, "typing_a").await?;
@@ -873,10 +949,10 @@ async fn test_typing_indicator() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_cannot_send_to_non_connected() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create two test users
     let user_a = create_test_user(&client, &base_url, "noconn_a").await?;
@@ -941,10 +1017,10 @@ async fn test_cannot_send_to_non_connected() -> anyhow::Result<()> {
 #[tokio::test]
 async fn test_cannot_accept_own_request() -> anyhow::Result<()> {
     let database_url = db_safety::resolve_test_database_url();
-    let base_url =
-        std::env::var("TEST_BASE_URL").unwrap_or_else(|_| "http://127.0.0.1:3000".to_string());
-
     let client = Client::builder().timeout(Duration::from_secs(30)).build()?;
+    let Some(base_url) = resolve_base_url(&client).await? else {
+        return Ok(());
+    };
 
     // Create one test user
     let user_a = create_test_user(&client, &base_url, "self_accept").await?;

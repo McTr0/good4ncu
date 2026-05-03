@@ -398,7 +398,7 @@ Send a typing indicator to the other party.
 
 ## WebSocket Events
 
-Clients connect via `GET /api/ws?token=<jwt>`.
+Clients connect via `GET /api/ws` with `Authorization: Bearer <jwt>`.
 
 ### Event Types
 

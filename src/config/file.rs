@@ -51,7 +51,7 @@ pub struct FileConfig {
 /// Server bind configuration.
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct ServerConfig {
-    /// IP address to bind. Defaults to "127.0.0.1".
+    /// IP address to bind. Defaults to "0.0.0.0".
     #[serde(default)]
     pub host: Option<String>,
     /// TCP port to listen on. Defaults to 3000.

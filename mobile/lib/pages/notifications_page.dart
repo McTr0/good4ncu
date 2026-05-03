@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
@@ -43,7 +44,8 @@ class _NotificationsPageState extends State<NotificationsPage> {
   @override
   void initState() {
     super.initState();
-    _notificationService = widget.notificationService ?? NotificationService();
+    _notificationService =
+        widget.notificationService ?? context.read<NotificationService>();
     _filterStorage =
         widget.filterStorage ?? SharedPrefsNotificationFilterStorage();
     _initialize();

@@ -195,6 +195,13 @@ pub trait UserRepository: Send + Sync {
     /// Update email for a user. Returns error if new_email already taken.
     async fn update_email(&self, user_id: &str, new_email: &str) -> Result<(), ApiError>;
 
+    /// Update password hash for a user.
+    async fn update_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), ApiError>;
+
     /// Count all users.
     async fn count_users(&self) -> Result<i64, ApiError>;
 }

@@ -1,8 +1,7 @@
 //! WebSocket real-time notification push.
 //!
-//! Clients connect to GET /api/ws and authenticate with either:
-//! - Authorization: Bearer <jwt> (preferred for native clients)
-//! - ?token=<jwt> query parameter (fallback for browser WebSocket)
+//! Clients connect to GET /api/ws and authenticate with:
+//! - Authorization: Bearer <jwt>
 //!
 //! The JWT is validated server-side
 //! to associate the WebSocket connection with a user_id. When a notification is
@@ -97,36 +96,24 @@ pub fn broadcast_to_user(user_id: &str, payload: &str) {
 
 /// GET /api/ws — WebSocket upgrade endpoint.
 ///
-/// Authentication is extracted from Authorization header first. If missing,
-/// falls back to query parameter `token` for browser compatibility.
+/// Authentication is extracted from the Authorization header only.
 pub async fn ws_handler(
     axum::extract::State(state): axum::extract::State<AppState>,
-    axum::extract::Query(params): axum::extract::Query<WsQuery>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> impl IntoResponse {
-    let has_auth_header = headers.get("Authorization").is_some();
-    let header_token = headers
-        .get("Authorization")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "));
-    let query_token = params.token.as_deref().filter(|v| !v.is_empty());
-    let token = if has_auth_header {
-        match header_token {
-            Some(t) if !t.is_empty() => t,
-            _ => {
-                tracing::warn!("WS auth failed: malformed Authorization header");
-                return (
-                    StatusCode::UNAUTHORIZED,
-                    axum::response::Json(serde_json::json!({
-                        "error": "Unauthorized"
-                    })),
-                )
-                    .into_response();
-            }
+    let token = match extract_bearer_token(&headers) {
+        Ok(token) => token,
+        Err(()) => {
+            tracing::warn!("WS auth failed: missing or malformed Authorization header");
+            return (
+                StatusCode::UNAUTHORIZED,
+                axum::response::Json(serde_json::json!({
+                    "error": "Unauthorized"
+                })),
+            )
+                .into_response();
         }
-    } else {
-        query_token.unwrap_or("")
     };
 
     if ensure_token_not_revoked(&state, token).await.is_err() {
@@ -163,9 +150,13 @@ pub async fn ws_handler(
     })
 }
 
-#[derive(serde::Deserialize)]
-pub struct WsQuery {
-    token: Option<String>,
+fn extract_bearer_token(headers: &HeaderMap) -> Result<&str, ()> {
+    headers
+        .get("Authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .filter(|v| !v.is_empty())
+        .ok_or(())
 }
 
 /// Handle a single WebSocket connection for its lifetime.
@@ -298,16 +289,27 @@ mod tests {
     }
 
     #[test]
-    fn test_ws_query_deserialize() {
-        let json = r#"{"token": "eyJhbGciOiJIUzI1NiJ9.test"}"#;
-        let query: WsQuery = serde_json::from_str(json).unwrap();
-        assert!(query.token.is_some());
+    fn test_extract_bearer_token_from_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            "Bearer eyJhbGciOiJIUzI1NiJ9.test".parse().expect("header"),
+        );
+
+        let token = extract_bearer_token(&headers).expect("token");
+        assert_eq!(token, "eyJhbGciOiJIUzI1NiJ9.test");
     }
 
     #[test]
-    fn test_ws_query_missing_token() {
-        let json = r#"{}"#;
-        let query: WsQuery = serde_json::from_str(json).unwrap();
-        assert!(query.token.is_none());
+    fn test_extract_bearer_token_rejects_missing_header() {
+        let headers = HeaderMap::new();
+        assert!(extract_bearer_token(&headers).is_err());
+    }
+
+    #[test]
+    fn test_extract_bearer_token_rejects_malformed_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("Authorization", "Token abc".parse().expect("header"));
+        assert!(extract_bearer_token(&headers).is_err());
     }
 }

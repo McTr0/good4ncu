@@ -50,6 +50,14 @@ pub struct ServiceManager {
 /// the event loop is overwhelmed, preventing unbounded memory growth.
 const EVENT_BUS_CAPACITY: usize = 2048;
 
+/// API chat endpoints persist directly. Event-driven chat persistence is reserved
+/// for internal negotiation transcripts only.
+const INTERNAL_EVENT_CHAT_PREFIX: &str = "negotiate:";
+
+fn should_persist_chat_event(conversation_id: &str) -> bool {
+    conversation_id.starts_with(INTERNAL_EVENT_CHAT_PREFIX)
+}
+
 impl ServiceManager {
     /// Creates ServiceManager from a single PgPool (serves both relational + vector data).
     #[allow(dead_code)]
@@ -104,6 +112,9 @@ impl ServiceManager {
                         }
                     }
                     BusinessEvent::OrderPaid { order_id } => {
+                        if let Some(metrics) = crate::api::metrics::GLOBAL_METRICS.get() {
+                            metrics.record_order_paid();
+                        }
                         tracing::info!(order_id, "OrderPaid event received");
                     }
                     BusinessEvent::ChatMessage {
@@ -114,6 +125,14 @@ impl ServiceManager {
                         image_data,
                         audio_data,
                     } => {
+                        if !should_persist_chat_event(&conversation_id) {
+                            tracing::warn!(
+                                conversation_id,
+                                "Dropped BusinessEvent::ChatMessage for non-internal conversation; API chat endpoints persist directly"
+                            );
+                            return;
+                        }
+
                         if let Err(e) = chat_svc
                             .log_message(
                                 &conversation_id,
@@ -231,5 +250,19 @@ mod tests {
     fn test_event_bus_capacity_constant() {
         let capacity = EVENT_BUS_CAPACITY;
         assert!((100..=100_000).contains(&capacity));
+    }
+
+    #[test]
+    fn test_should_persist_chat_event_for_internal_negotiation_conversation() {
+        assert!(should_persist_chat_event("negotiate:listing-123"));
+    }
+
+    #[test]
+    fn test_should_not_persist_chat_event_for_api_chat_conversations() {
+        assert!(!should_persist_chat_event("global"));
+        assert!(!should_persist_chat_event("__agent__"));
+        assert!(!should_persist_chat_event(
+            "01234567-89ab-cdef-0123-456789abcdef"
+        ));
     }
 }

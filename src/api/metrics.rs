@@ -195,34 +195,24 @@ impl MetricsService {
             .observe(duration.as_secs_f64());
     }
 
-    /// Record an order created event (DISABLED - orders are disabled).
-    #[allow(dead_code)]
     pub fn record_order_created(&self) {
-        // Orders are disabled - no-op
+        self.orders_created_total.inc();
     }
 
-    /// Record an order paid event (DISABLED - orders are disabled).
-    #[allow(dead_code)]
     pub fn record_order_paid(&self) {
-        // Orders are disabled - no-op
+        self.orders_paid_total.inc();
     }
 
-    /// Record an order shipped event (DISABLED - orders are disabled).
-    #[allow(dead_code)]
     pub fn record_order_shipped(&self) {
-        // Orders are disabled - no-op
+        self.orders_shipped_total.inc();
     }
 
-    /// Record an order completed event (DISABLED - orders are disabled).
-    #[allow(dead_code)]
     pub fn record_order_completed(&self) {
-        // Orders are disabled - no-op
+        self.orders_completed_total.inc();
     }
 
-    /// Record an order cancelled event (DISABLED - orders are disabled).
-    #[allow(dead_code)]
     pub fn record_order_cancelled(&self) {
-        // Orders are disabled - no-op
+        self.orders_cancelled_total.inc();
     }
 
     /// Record a chat message processed.

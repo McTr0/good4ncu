@@ -3,6 +3,7 @@
 use crate::api::error::ApiError;
 use crate::repositories::{User, UserProfile, UserRepository};
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -52,11 +53,18 @@ impl UserRepository for PostgresUserRepository {
         role: &str,
     ) -> Result<String, ApiError> {
         let user_id = uuid::Uuid::new_v4().to_string();
+        let user_uuid = Uuid::parse_str(&user_id).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!(
+                "Generated user id is not UUID-compatible: {}",
+                e
+            ))
+        })?;
         let result = if let Some(e) = email {
             sqlx::query(
-                "INSERT INTO users (id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO users (id, new_id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(&user_id)
+            .bind(user_uuid)
             .bind(username)
             .bind(e)
             .bind(password_hash)
@@ -65,9 +73,10 @@ impl UserRepository for PostgresUserRepository {
             .await
         } else {
             sqlx::query(
-                "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)",
+                "INSERT INTO users (id, new_id, username, password_hash, role) VALUES ($1, $2, $3, $4, $5)",
             )
             .bind(&user_id)
+            .bind(user_uuid)
             .bind(username)
             .bind(password_hash)
             .bind(role)
@@ -355,11 +364,89 @@ impl UserRepository for PostgresUserRepository {
         Ok(())
     }
 
+    async fn update_password_hash(
+        &self,
+        user_id: &str,
+        password_hash: &str,
+    ) -> Result<(), ApiError> {
+        sqlx::query("UPDATE users SET password_hash = $1 WHERE id = $2")
+            .bind(password_hash)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(())
+    }
+
     async fn count_users(&self) -> Result<i64, ApiError> {
         let row = sqlx::query("SELECT COUNT(*) FROM users")
             .fetch_one(&self.pool)
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
         Ok(row.get(0))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_infra::with_test_pool;
+
+    #[tokio::test]
+    async fn create_dual_writes_shadow_uuid_column() {
+        with_test_pool(|pool| async move {
+            let repo = PostgresUserRepository::new(pool.clone());
+
+            let user_id = repo
+                .create(
+                    "shadow_profile_user",
+                    Some("profile@example.com"),
+                    "hash",
+                    "user",
+                )
+                .await
+                .expect("create user");
+            let user_uuid = Uuid::parse_str(&user_id).expect("uuid id");
+
+            let row = sqlx::query("SELECT new_id, username, email, role FROM users WHERE id = $1")
+                .bind(&user_id)
+                .fetch_one(&pool)
+                .await
+                .expect("select user");
+
+            assert_eq!(row.get::<Uuid, _>("new_id"), user_uuid);
+            assert_eq!(row.get::<String, _>("username"), "shadow_profile_user");
+            assert_eq!(
+                row.get::<Option<String>, _>("email").as_deref(),
+                Some("profile@example.com")
+            );
+            assert_eq!(row.get::<String, _>("role"), "user");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn update_password_hash_persists_new_hash() {
+        with_test_pool(|pool| async move {
+            let repo = PostgresUserRepository::new(pool.clone());
+            let user_id = repo
+                .create("password_repo_user", None, "old-hash", "user")
+                .await
+                .expect("create user");
+
+            repo.update_password_hash(&user_id, "new-hash")
+                .await
+                .expect("update password hash");
+
+            let password_hash: String =
+                sqlx::query_scalar("SELECT password_hash FROM users WHERE id = $1")
+                    .bind(&user_id)
+                    .fetch_one(&pool)
+                    .await
+                    .expect("select password hash");
+            assert_eq!(password_hash, "new-hash");
+        })
+        .await;
     }
 }

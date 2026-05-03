@@ -1,6 +1,6 @@
 # Chat System Documentation
 
-**Last Updated:** 2026-03-27
+**Last Updated:** 2026-04-01
 
 ## Overview
 
@@ -9,6 +9,12 @@ The chat system implements user-to-user direct messaging with a three-way handsh
 - **HTTP REST API** for connection management and message exchange
 - **WebSocket** for real-time push notifications (new messages, typing indicators, connection events)
 - **PostgreSQL** for persistent message storage and connection state
+
+### Policy Decisions (2026-04-01)
+
+- `/api/chat` and `/api/chat/conversations/{id}/messages` use direct database writes for message persistence.
+- `BusinessEvent::ChatMessage` persistence is reserved for internal negotiation transcripts (`negotiate:*` conversation IDs).
+- `tests/chat_e2e.rs` is optional in default CI (`CHAT_E2E_REQUIRED=false`). To enforce it, run explicitly with `CHAT_E2E_REQUIRED=true`, `TEST_BASE_URL`, and `TEST_DATABASE_URL` set.
 
 ---
 
@@ -79,10 +85,10 @@ The system implements a deliberate connection handshake before allowing message 
 ### Endpoint
 
 ```
-ws://localhost:3000/api/ws?token=<jwt>
+ws://localhost:3000/api/ws
 ```
 
-**Authentication**: JWT token passed as query parameter (not header). Browsers do not send custom headers during WebSocket handshake.
+**Authentication**: Send `Authorization: Bearer <jwt>` during the WebSocket handshake. Browser builds should not fall back to query-string tokens.
 
 ### Server-Side Implementation
 
@@ -158,8 +164,9 @@ class WsService {
   Future<void> connect() async {
     final prefs = await SharedPreferences.getInstance();
     final token = prefs.getString('jwt_token');
-    _channel = WebSocketChannel.connect(
-      Uri.parse('$_wsUrl?token=$token'),
+    _channel = IOWebSocketChannel.connect(
+      Uri.parse(_wsUrl),
+      headers: {'Authorization': 'Bearer $token'},
     );
     _channel!.stream.listen(_handleMessage, ...);
   }
@@ -517,11 +524,11 @@ if !mod_result.passed {
 # Allow specific origins (comma-separated)
 CORS_ORIGINS=https://example.com,https://app.example.com
 
-# Or use wildcard for development only
-CORS_ORIGINS=*
+# Development only
+# APP_ENV=development
 ```
 
-**Note**: In production, always set `CORS_ORIGINS` to specific origins. Empty `CORS_ORIGINS` defaults to allowing all origins (development mode).
+**Note**: In production (`APP_ENV=production` / `ENVIRONMENT=production` / `RUST_ENV=production`), startup now fails if `CORS_ORIGINS` is empty or contains `*`.
 
 **File**: `/Users/mctr0/Projects/good4ncu/src/api/mod.rs` (lines 182-206)
 

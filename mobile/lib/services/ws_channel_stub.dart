@@ -4,5 +4,7 @@ WebSocketChannel connectWsChannel({
   required String wsUrl,
   required String token,
 }) {
-  return WebSocketChannel.connect(Uri.parse('$wsUrl?token=$token'));
+  throw UnsupportedError(
+    'WebSocket auth requires platform-specific channel support.',
+  );
 }

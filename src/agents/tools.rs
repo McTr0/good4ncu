@@ -1,3 +1,6 @@
+use crate::repositories::{
+    CreateListingInput, ListingRepository, PostgresListingRepository, UpdateListingInput,
+};
 use crate::services::BusinessEvent;
 use crate::utils::cents_to_yuan;
 use async_trait::async_trait;
@@ -5,7 +8,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 use serde_json::json;
-use sqlx::{Acquire, PgConnection, PgPool};
+use sqlx::{PgConnection, PgPool};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::runtime::Handle;
@@ -117,26 +120,20 @@ impl Tool for CreateListingTool {
             .current_user_id
             .clone()
             .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
-        let listing_id = uuid::Uuid::new_v4().to_string();
-        let defects_json =
-            serde_json::to_string(&args.defects).unwrap_or_else(|_| "[]".to_string());
-
-        sqlx::query(
-            "INSERT INTO inventory (id, title, category, brand, condition_score, suggested_price_cny, defects, description, owner_id) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
-        )
-        .bind(&listing_id)
-        .bind(&args.title)
-        .bind(&args.category)
-        .bind(&args.brand)
-        .bind(args.condition_score as i64)
-        .bind(args.suggested_price_cny)
-        .bind(&defects_json)
-        .bind(&args.original_description)
-        .bind(&owner)
-        .execute(&self.ctx.db_pool)
-        .await
-        .map_err(|e| ToolError(format!("DB insert error: {}", e)))?;
+        let listing_repo = PostgresListingRepository::new(self.ctx.db_pool.clone());
+        let listing_id = listing_repo
+            .create(CreateListingInput {
+                title: args.title.clone(),
+                category: args.category.clone(),
+                brand: Some(args.brand.clone()),
+                condition_score: args.condition_score as i32,
+                suggested_price_cny: args.suggested_price_cny as f64 / 100.0,
+                defects: args.defects.clone(),
+                description: args.original_description.clone(),
+                owner_id: owner.clone(),
+            })
+            .await
+            .map_err(|e| ToolError(format!("DB insert error: {}", e)))?;
 
         let content_to_embed = format!(
             "Title: {}\nCategory: {}\nBrand: {}\nCondition: {}/10\nDescription: {}",
@@ -476,6 +473,7 @@ impl Tool for UpdateListingTool {
             );
 
             let db_pool = self.ctx.db_pool.clone();
+            let listing_repo = PostgresListingRepository::new(self.ctx.db_pool.clone());
             let embed_updater = self.ctx.embed_updater.clone();
             let listing_id = args.listing_id.clone();
             let owner_id_clone = owner_id.clone();
@@ -486,11 +484,7 @@ impl Tool for UpdateListingTool {
             let update_result = spawn_blocking(move || {
                 let rt = Handle::current();
                 let result: Result<bool, ToolError> = rt.block_on(async move {
-                    let mut conn = db_pool
-                        .acquire()
-                        .await
-                        .map_err(|e| ToolError(format!("Pool acquire error: {}", e)))?;
-                    let mut tx: sqlx::Transaction<'_, sqlx::Postgres> = conn
+                    let mut tx: sqlx::Transaction<'_, sqlx::Postgres> = db_pool
                         .begin()
                         .await
                         .map_err(|e| ToolError(format!("Transaction error: {}", e)))?;
@@ -504,35 +498,26 @@ impl Tool for UpdateListingTool {
                         .await
                         .map_err(|e| ToolError(format!("Re-embedding error: {}", e)))?;
 
-                    // Inventory UPDATE in the same transaction
-                    let mut qb = sqlx::QueryBuilder::new("UPDATE inventory SET ");
-                    let mut sep = qb.separated(", ");
-                    if let Some(price) = new_price {
-                        sep.push("suggested_price_cny = ");
-                        sep.push_bind_unseparated(price);
-                    }
-                    if let Some(ref title) = new_title {
-                        sep.push("title = ");
-                        sep.push_bind_unseparated(title);
-                    }
-                    if let Some(ref desc) = new_description {
-                        sep.push("description = ");
-                        sep.push_bind_unseparated(desc);
-                    }
-                    qb.push(" WHERE id = ");
-                    qb.push_bind(&listing_id);
-                    qb.push(" AND owner_id = ");
-                    qb.push_bind(&owner_id_clone);
-                    qb.push(" AND status = 'active'");
-
-                    #[allow(clippy::explicit_auto_deref)]
-                    let update_result = qb
-                        .build()
-                        .execute(&mut *tx)
+                    let update_result = listing_repo
+                        .update_owned_active_in_tx(
+                            &mut tx,
+                            &listing_id,
+                            &owner_id_clone,
+                            &UpdateListingInput {
+                                title: new_title,
+                                category: None,
+                                brand: None,
+                                condition_score: None,
+                                suggested_price_cny: new_price.map(|v| v as f64 / 100.0),
+                                defects: None,
+                                description: new_description,
+                                status: None,
+                            },
+                        )
                         .await
                         .map_err(|e| ToolError(format!("Update error: {}", e)))?;
 
-                    if update_result.rows_affected() == 0 {
+                    if !update_result {
                         tx.rollback()
                             .await
                             .map_err(|e| ToolError(format!("Rollback error: {}", e)))?;
@@ -562,25 +547,26 @@ impl Tool for UpdateListingTool {
             }
         } else {
             // Price-only update — no re-embedding needed; keep it simple
-            let mut qb = sqlx::QueryBuilder::new("UPDATE inventory SET ");
-            let mut sep = qb.separated(", ");
-            if let Some(price) = args.new_price {
-                sep.push("suggested_price_cny = ");
-                sep.push_bind_unseparated(price);
-            }
-            qb.push(" WHERE id = ");
-            qb.push_bind(&args.listing_id);
-            qb.push(" AND owner_id = ");
-            qb.push_bind(&owner_id);
-            qb.push(" AND status = 'active'");
-
-            let result = qb
-                .build()
-                .execute(&self.ctx.db_pool)
+            let listing_repo = PostgresListingRepository::new(self.ctx.db_pool.clone());
+            let result = listing_repo
+                .update_owned_active(
+                    &args.listing_id,
+                    &owner_id,
+                    &UpdateListingInput {
+                        title: None,
+                        category: None,
+                        brand: None,
+                        condition_score: None,
+                        suggested_price_cny: args.new_price.map(|v| v as f64 / 100.0),
+                        defects: None,
+                        description: None,
+                        status: None,
+                    },
+                )
                 .await
                 .map_err(|e| ToolError(format!("Update error: {}", e)))?;
 
-            if result.rows_affected() == 0 {
+            if !result {
                 Ok(format!(
                     "No active listing found with ID: {} (or you don't own it)",
                     args.listing_id
@@ -632,17 +618,13 @@ impl Tool for DeleteListingTool {
             .current_user_id
             .clone()
             .ok_or_else(|| ToolError("请先登录再进行操作".to_string()))?;
+        let listing_repo = PostgresListingRepository::new(self.ctx.db_pool.clone());
+        let deleted = listing_repo
+            .soft_delete_active_owned(&args.listing_id, &owner_id)
+            .await
+            .map_err(|e| ToolError(format!("Delete error: {}", e)))?;
 
-        let result = sqlx::query(
-            "UPDATE inventory SET status = 'deleted' WHERE id = $1 AND owner_id = $2 AND status = 'active'",
-        )
-        .bind(&args.listing_id)
-        .bind(&owner_id)
-        .execute(&self.ctx.db_pool)
-        .await
-        .map_err(|e| ToolError(format!("Delete error: {}", e)))?;
-
-        if result.rows_affected() == 0 {
+        if !deleted {
             return Ok(format!(
                 "No active listing found with ID: {} (or you don't own it)",
                 args.listing_id
@@ -1010,6 +992,27 @@ struct MyListingRow {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_infra::with_test_pool;
+    use sqlx::Row;
+    use uuid::Uuid;
+
+    struct NoopEmbedUpdater;
+
+    #[async_trait(?Send)]
+    impl EmbedUpdater for NoopEmbedUpdater {
+        async fn embed_and_update(
+            &self,
+            _content: String,
+            _listing_id: String,
+            _conn: &mut PgConnection,
+        ) -> Result<(), ToolError> {
+            Ok(())
+        }
+    }
+
+    fn noop_embed_fn() -> EmbedFn {
+        Arc::new(|_, _| Box::pin(async { Ok(()) }))
+    }
 
     #[test]
     fn test_tool_error_display() {
@@ -1172,5 +1175,69 @@ mod tests {
         // SearchInventoryTool is Clone, verify it compiles
         fn assert_clone<T: Clone>() {}
         assert_clone::<SearchInventoryTool>();
+    }
+
+    #[tokio::test]
+    async fn create_listing_tool_dual_writes_shadow_uuid_columns() {
+        with_test_pool(|pool| async move {
+            let owner_id = Uuid::new_v4().to_string();
+
+            sqlx::query(
+                "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, 'hash', 'user')",
+            )
+            .bind(&owner_id)
+            .bind("tool_listing_owner")
+            .execute(&pool)
+            .await
+            .expect("insert owner");
+
+            let (event_tx, _event_rx) = mpsc::channel(1);
+            let tool = CreateListingTool {
+                ctx: ToolContext {
+                    db_pool: pool.clone(),
+                    embed_and_insert: noop_embed_fn(),
+                    embed_updater: Arc::new(NoopEmbedUpdater),
+                    event_tx,
+                    current_user_id: Some(owner_id.clone()),
+                    notification: crate::services::notification::NotificationService::new(
+                        pool.clone(),
+                    ),
+                },
+            };
+
+            let result = tool
+                .call(CreateListingArgs {
+                    title: "Shadow Tool Listing".to_string(),
+                    category: "electronics".to_string(),
+                    brand: "Acme".to_string(),
+                    condition_score: 8,
+                    suggested_price_cny: 12_345,
+                    defects: vec!["scuff".to_string()],
+                    original_description: "Tool-created listing".to_string(),
+                })
+                .await
+                .expect("create listing");
+            assert!(result.contains("Shadow Tool Listing"));
+
+            let row = sqlx::query(
+                "SELECT id, new_id, owner_id, new_owner_id, suggested_price_cny FROM inventory WHERE title = $1",
+            )
+            .bind("Shadow Tool Listing")
+            .fetch_one(&pool)
+            .await
+            .expect("select listing");
+            let owner_uuid: Uuid = sqlx::query_scalar("SELECT new_id FROM users WHERE id = $1")
+                .bind(&owner_id)
+                .fetch_one(&pool)
+                .await
+                .expect("select owner uuid");
+
+            let listing_id: String = row.get("id");
+            assert_eq!(row.get::<Uuid, _>("new_id"), Uuid::parse_str(&listing_id).unwrap());
+            assert_eq!(row.get::<String, _>("owner_id"), owner_id);
+            assert_eq!(row.get::<Uuid, _>("new_owner_id"), owner_uuid);
+            assert_eq!(row.get::<i64, _>("suggested_price_cny"), 12_345);
+        })
+        .await;
     }
 }

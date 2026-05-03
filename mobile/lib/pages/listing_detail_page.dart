@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../models/models.dart';
@@ -12,17 +13,26 @@ import '../components/recommendation_carousel.dart';
 
 class ListingDetailPage extends StatefulWidget {
   final String listingId;
+  final ApiService? apiService;
+  final RecommendationService? recommendationService;
+  final OrderService? orderService;
 
-  const ListingDetailPage({super.key, required this.listingId});
+  const ListingDetailPage({
+    super.key,
+    required this.listingId,
+    this.apiService,
+    this.recommendationService,
+    this.orderService,
+  });
 
   @override
   State<ListingDetailPage> createState() => _ListingDetailPageState();
 }
 
 class _ListingDetailPageState extends State<ListingDetailPage> {
-  final ApiService _apiService = ApiService();
-  final RecommendationService _recommendationService = RecommendationService();
-  final OrderService _orderService = OrderService();
+  late final ApiService _apiService;
+  late final RecommendationService _recommendationService;
+  late final OrderService _orderService;
   Listing? _listing;
   bool _loading = true;
   String? _error;
@@ -35,6 +45,10 @@ class _ListingDetailPageState extends State<ListingDetailPage> {
   @override
   void initState() {
     super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
+    _recommendationService =
+        widget.recommendationService ?? context.read<RecommendationService>();
+    _orderService = widget.orderService ?? context.read<OrderService>();
     _loadDetail();
   }
 

@@ -1,8 +1,7 @@
 use crate::agents::router::IntentRouter;
 use crate::api::metrics::MetricsService;
-use crate::llm::{LlmProvider, MarketplaceAgent};
+use crate::llm::LlmProvider;
 use crate::repositories;
-use crate::services::chat::ChatService;
 use crate::services::moderation::ModerationService;
 use crate::services::notification::NotificationService;
 use crate::services::order;
@@ -12,12 +11,11 @@ use axum::{
     middleware,
     response::Response,
     routing::{get, patch, post},
-    Json, Router,
+    Router,
 };
-use futures::StreamExt;
-use sqlx::Row;
 pub mod admin;
 pub mod auth;
+pub mod chat;
 pub mod conversations;
 pub mod error;
 pub mod listings;
@@ -30,14 +28,9 @@ pub mod stats;
 pub mod upload;
 pub mod user;
 pub mod user_chat;
-pub mod user_chat_models;
 pub mod watchlist;
 pub mod ws;
 use error::ApiError;
-use rig::completion::Message;
-use rig::message::{AssistantContent, Text, UserContent};
-use rig::OneOrMany;
-use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -45,7 +38,6 @@ use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::limit::RequestBodyLimitLayer;
-use uuid::Uuid;
 
 use crate::middleware::rate_limit::{is_whitelisted, RateLimitStateHandle};
 use regex::Regex;
@@ -61,6 +53,60 @@ static NUMERIC_PATH_RE: LazyLock<Regex> =
 
 fn fallback_peer_addr() -> SocketAddr {
     SocketAddr::from(([0, 0, 0, 0], 0))
+}
+
+fn peer_addr_from_extensions(extensions: &axum::http::Extensions) -> Option<SocketAddr> {
+    extensions
+        .get::<axum::extract::connect_info::ConnectInfo<SocketAddr>>()
+        .map(|ci| ci.0)
+        .or_else(|| extensions.get::<SocketAddr>().copied())
+}
+
+fn missing_peer_rate_limit_key(headers: &axum::http::HeaderMap) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    const FINGERPRINT_HEADERS: &[&str] = &[
+        "user-agent",
+        "accept-language",
+        "accept-encoding",
+        "host",
+        "origin",
+    ];
+
+    let mut hasher = DefaultHasher::new();
+    let mut found_component = false;
+
+    for header_name in FINGERPRINT_HEADERS {
+        if let Some(value) = headers.get(*header_name).and_then(|v| v.to_str().ok()) {
+            header_name.hash(&mut hasher);
+            value.hash(&mut hasher);
+            found_component = true;
+        }
+    }
+
+    if !found_component {
+        return "anon:missing-peer".to_string();
+    }
+
+    format!("anon:{:016x}", hasher.finish())
+}
+
+fn rate_limit_key_for_request(
+    headers: &axum::http::HeaderMap,
+    peer_addr: Option<SocketAddr>,
+    secrets: &ApiSecrets,
+) -> String {
+    auth::extract_user_id_from_token_with_fallback(
+        headers,
+        &secrets.jwt_secret,
+        secrets.jwt_secret_old.as_deref(),
+    )
+    .map(|user_id| format!("uid:{user_id}"))
+    .unwrap_or_else(|_| match peer_addr {
+        Some(peer_addr) => format!("ip:{}", peer_addr.ip()),
+        None => missing_peer_rate_limit_key(headers),
+    })
 }
 
 /// Security headers applied to all responses.
@@ -103,20 +149,12 @@ pub async fn rate_limit_middleware(
         return next.run(request).await;
     }
 
-    let peer_addr = request
-        .extensions()
-        .get::<SocketAddr>()
-        .copied()
-        .unwrap_or_else(fallback_peer_addr);
+    let peer_addr = peer_addr_from_extensions(request.extensions());
+    if peer_addr.is_none() {
+        tracing::warn!(path = %path, "Rate limit middleware missing peer address extension");
+    }
 
-    let rate_limit_key = if path == "/api/chat" || path == "/api/chat/stream" {
-        match auth::extract_user_id_from_token(request.headers(), &state.secrets.jwt_secret) {
-            Ok(user_id) => format!("uid:{user_id}"),
-            Err(_) => format!("ip:{}", peer_addr.ip()),
-        }
-    } else {
-        format!("ip:{}", peer_addr.ip())
-    };
+    let rate_limit_key = rate_limit_key_for_request(request.headers(), peer_addr, &state.secrets);
 
     if !state
         .infra
@@ -207,12 +245,7 @@ where
         _state: &S,
     ) -> Result<Self, Self::Rejection> {
         // axum::serve automatically adds extensions::PeerAddr when using the MakeService
-        let addr = parts
-            .extensions
-            .get::<axum::extract::connect_info::ConnectInfo<SocketAddr>>()
-            .map(|ci| ci.0)
-            .or_else(|| parts.extensions.get::<std::net::SocketAddr>().copied())
-            .unwrap_or_else(fallback_peer_addr);
+        let addr = peer_addr_from_extensions(&parts.extensions).unwrap_or_else(fallback_peer_addr);
         Ok(PeerAddr(addr))
     }
 }
@@ -337,8 +370,11 @@ pub fn create_router(state: AppState, cors_origins: &[String]) -> Router {
             get(recommendations::get_similar_listings),
         )
         .route("/api/categories", get(listings::get_categories))
-        .route("/api/chat", post(handle_chat))
-        .route("/api/chat/stream", get(handle_chat_stream))
+        .route("/api/chat", post(chat::handle_chat))
+        .route(
+            "/api/chat/stream",
+            get(chat::handle_chat_stream_get).post(chat::handle_chat_stream_post),
+        )
         .route("/api/auth/register", post(auth::register))
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/change-password", post(auth::change_password))
@@ -464,523 +500,12 @@ async fn health_check(State(state): State<AppState>) -> Result<&'static str, Api
     Ok("OK")
 }
 
-#[derive(Deserialize)]
-struct ChatRequest {
-    message: String,
-    image: Option<String>,
-    audio: Option<String>,
-    conversation_id: Option<String>,
-    /// Optional listing context — when provided, the buyer is inquiring about
-    /// a specific listing. The conversation is anchored to the listing owner
-    /// as receiver so they immediately see it in their conversation list.
-    listing_id: Option<String>,
-}
 
-#[derive(Serialize)]
-struct ChatResponse {
-    reply: String,
-    conversation_id: String,
-}
-
-use axum::http::HeaderMap;
-
-async fn handle_chat(
-    State(state): State<AppState>,
-    PeerAddr(addr): PeerAddr,
-    headers: HeaderMap,
-    Json(payload): Json<ChatRequest>,
-) -> Result<Json<ChatResponse>, ApiError> {
-    // Reject oversized payloads before they can exhaust API tokens or memory.
-    // 10 MB network limit is enforced by RequestBodyLimitLayer.
-    // Text messages beyond 2000 chars are almost certainly abuse.
-    if payload.message.len() > 2000 {
-        return Err(ApiError::BadRequest(
-            "Text message exceeds maximum length of 2000 characters.".to_string(),
-        ));
-    }
-
-    // Use the direct TCP peer address as rate limit key — it cannot be spoofed.
-    // X-Forwarded-For is read for logging only, never as a rate-limit token.
-    let client_ip = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim());
-
-    if let Some(proxy_ip) = client_ip {
-        tracing::debug!(client_ip = %proxy_ip, peer = %addr, "Chat request");
-    }
-
-    let current_user_id = auth::extract_user_id_from_token_with_fallback(
-        &headers,
-        &state.secrets.jwt_secret,
-        state.secrets.jwt_secret_old.as_deref(),
-    )
-    .map_err(|_| ApiError::Unauthorized)?;
-
-    // Route: lightweight intent classification before doing any LLM work.
-    // Blocked content and simple chat greetings short-circuit here — no token spent.
-    let intent_result = state.agents.router.classify(&payload.message);
-    tracing::debug!(intent = ?intent_result.intent.as_str(), confidence = %intent_result.confidence, "Router classification");
-
-    // Blocked: reject immediately, no LLM tokens consumed.
-    if let Some(reply) = intent_result.direct_response(&payload.message) {
-        let conversation_id = payload
-            .conversation_id
-            .filter(|id| !id.is_empty())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        return Ok(Json(ChatResponse {
-            reply,
-            conversation_id,
-        }));
-    }
-
-    // Resolve listing context: if listing_id is provided, look up the owner to use as
-    // the message receiver. This anchors buyer→seller conversations to a specific listing
-    // so the seller immediately sees the conversation in their list (receiver = seller).
-    let listing_id: String;
-    let receiver: Option<String>;
-    match payload.listing_id {
-        Some(ref lid) if !lid.is_empty() => {
-            let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
-                .bind(lid)
-                .fetch_optional(&state.infra.db)
-                .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-            match row {
-                Some(r) => {
-                    let owner_id: String = r.get("owner_id");
-                    let status: String = r.get("status");
-                    if status == "active" && owner_id != current_user_id {
-                        // Pass listing_id for context; owner is stored as receiver so seller
-                        // immediately sees this conversation in their list_conversations.
-                        listing_id = lid.clone();
-                        receiver = Some(owner_id);
-                    } else {
-                        // Inactive listing or buyer is the owner — fall back to global context
-                        listing_id = "global".to_string();
-                        receiver = None;
-                    }
-                }
-                None => {
-                    listing_id = "global".to_string();
-                    receiver = None;
-                }
-            }
-        }
-        _ => {
-            listing_id = "global".to_string();
-            receiver = None;
-        }
-    };
-
-    let conversation_id = payload
-        .conversation_id
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-    let chat_svc = ChatService::new(state.infra.db.clone());
-
-    // Log user message BEFORE LLM call — prevents data loss if LLM times out or request is aborted.
-    // When listing_id is provided, receiver is set to the listing owner so the seller
-    // immediately sees the buyer's inquiry in their conversation list.
-    let log_user = chat_svc.log_message(
-        &conversation_id,
-        &listing_id,
-        &current_user_id,
-        receiver.as_deref(),
-        false,
-        &payload.message,
-        payload.image.as_deref(),
-        payload.audio.as_deref(),
-        None,
-        None,
-    );
-
-    let log_result = log_user.await;
-    if let Err(e) = log_result {
-        tracing::warn!(%e, "Failed to log user message — continuing anyway");
-    }
-
-    state.infra.metrics.record_chat_message();
-
-    let history_entries = chat_svc
-        .get_conversation_history(&conversation_id)
-        .await
-        .unwrap_or_default();
-
-    let chat_history: Vec<Message> = history_entries
-        .iter()
-        .map(|entry| {
-            if entry.is_agent {
-                Message::Assistant {
-                    id: None,
-                    content: OneOrMany::one(AssistantContent::Text(Text {
-                        text: entry.content.clone(),
-                    })),
-                }
-            } else {
-                Message::User {
-                    content: OneOrMany::one(UserContent::Text(Text {
-                        text: entry.content.clone(),
-                    })),
-                }
-            }
-        })
-        .collect();
-
-    let agent: Box<dyn MarketplaceAgent> = state
-        .agents
-        .llm_provider
-        .create_marketplace_agent(
-            &state.infra.db,
-            state.infra.event_tx.clone(),
-            Some(current_user_id.clone()),
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
-
-    let reply = agent
-        .prompt_with_history(payload.message.clone(), chat_history)
-        .await
-        .map_err(|e| {
-            tracing::error!(err = %e, "LLM prompt failed");
-            state.infra.metrics.record_llm_error();
-            ApiError::Internal(anyhow::anyhow!(e))
-        })?;
-
-    state.infra.metrics.record_llm_call();
-
-    // Log agent reply — fire and forget, errors are non-fatal.
-    // Agent messages have no receiver (they're broadcast-style from the AI assistant).
-    let log_agent = chat_svc.log_message(
-        &conversation_id,
-        &listing_id,
-        "assistant",
-        None,
-        true,
-        &reply,
-        None,
-        None,
-        None,
-        None,
-    );
-
-    if let Err(e) = log_agent.await {
-        tracing::warn!(%e, "Failed to log agent reply");
-    }
-
-    // Send event with backpressure: wait up to 5 seconds, then log and continue.
-    // Using send instead of try_send prevents silent event loss under load.
-    let chat_event = BusinessEvent::ChatMessage {
-        conversation_id: conversation_id.clone(),
-        listing_id: listing_id.to_string(),
-        sender: current_user_id,
-        content: payload.message,
-        image_data: payload.image,
-        audio_data: payload.audio,
-    };
-    // Send event with backpressure: block until the event is received or the channel
-    // is closed. This is preferred over try_send/timeout because ChatMessage must
-    // be persisted — dropping it silently would cause the user to see their message
-    // disappear with no reply and no error feedback.
-    if let Err(e) = state.infra.event_tx.send(chat_event).await {
-        tracing::error!(%e, "Event bus closed, ChatMessage not delivered");
-        return Err(ApiError::Internal(anyhow::anyhow!(
-            "服务暂时不可用，请稍后重试: {}",
-            e
-        )));
-    }
-
-    Ok(Json(ChatResponse {
-        reply,
-        conversation_id,
-    }))
-}
-
-/// Query params for SSE chat streaming.
-/// Message is required to start a new turn.
-///
-/// Auth is read from Authorization header first; query `token` remains a
-/// backward-compatible fallback for older clients.
-#[derive(Deserialize)]
-struct ChatStreamQuery {
-    token: Option<String>,
-    message: String,
-    /// Optional listing context — same as handle_chat.
-    listing_id: Option<String>,
-    /// Optional conversation_id — if provided, continues existing conversation.
-    conversation_id: Option<String>,
-}
-
-/// GET /api/chat/stream — SSE streaming chat endpoint.
-///
-/// Clients send: GET /api/chat/stream?message=hello&listing_id=xxx
-/// Auth: Authorization: Bearer <jwt> (preferred), query token (fallback)
-/// Server streams: text/event-stream with data: {"token": "..."} chunks.
-///
-/// Each chunk is a JSON object with a "token" field containing the text fragment.
-/// The stream closes when the LLM finishes responding (no more tool calls).
-async fn handle_chat_stream(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    axum::extract::Query(params): axum::extract::Query<ChatStreamQuery>,
-) -> Result<impl axum::response::IntoResponse, ApiError> {
-    if params.message.len() > 2000 {
-        return Err(ApiError::BadRequest(
-            "Text message exceeds maximum length of 2000 characters.".to_string(),
-        ));
-    }
-
-    let has_auth_header = headers.get("Authorization").is_some();
-    let token = if has_auth_header {
-        headers
-            .get("Authorization")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.strip_prefix("Bearer "))
-            .filter(|v| !v.is_empty())
-            .ok_or(ApiError::Unauthorized)?
-    } else {
-        params
-            .token
-            .as_deref()
-            .filter(|v| !v.is_empty())
-            .ok_or(ApiError::Unauthorized)?
-    };
-
-    auth::ensure_token_not_revoked(&state, token)
-        .await
-        .map_err(|_| ApiError::Unauthorized)?;
-
-    let current_user_id = auth::extract_user_id_from_token_str_with_fallback(
-        token,
-        &state.secrets.jwt_secret,
-        state.secrets.jwt_secret_old.as_deref(),
-    )
-    .map_err(|_| ApiError::Unauthorized)?;
-
-    // Route: lightweight intent classification before doing any LLM work.
-    let intent_result = state.agents.router.classify(&params.message);
-    tracing::debug!(intent = ?intent_result.intent.as_str(), confidence = %intent_result.confidence, "SSE Router classification");
-
-    // Blocked: reject immediately, no LLM tokens consumed.
-    if let Some(reply) = intent_result.direct_response(&params.message) {
-        let conversation_id = params
-            .conversation_id
-            .filter(|id| !id.is_empty())
-            .unwrap_or_else(|| Uuid::new_v4().to_string());
-        let payload = serde_json::json!({ "token": reply, "conversation_id": conversation_id });
-        let body = axum::body::Body::from(format!(
-            "data: {}\n\n",
-            serde_json::to_string(&payload).expect(
-                "intent payload serializes to JSON; this is a programmer error if it panics"
-            )
-        ));
-        return Ok(Response::builder()
-            .header("Content-Type", "text/event-stream")
-            .header("Cache-Control", "no-cache")
-            .header("X-Conversation-Id", &conversation_id)
-            .body(body)
-            .unwrap());
-    }
-
-    // Same listing resolution as handle_chat.
-    let listing_id: String;
-    let _receiver: Option<String>;
-    match params.listing_id {
-        Some(ref lid) if !lid.is_empty() => {
-            let row = sqlx::query("SELECT owner_id, status FROM inventory WHERE id = $1")
-                .bind(lid)
-                .fetch_optional(&state.infra.db)
-                .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-            match row {
-                Some(r) => {
-                    let owner_id: String = r.get("owner_id");
-                    let status: String = r.get("status");
-                    if status == "active" && owner_id != current_user_id {
-                        listing_id = lid.clone();
-                        _receiver = Some(owner_id);
-                    } else {
-                        listing_id = "global".to_string();
-                        _receiver = None;
-                    }
-                }
-                None => {
-                    listing_id = "global".to_string();
-                    _receiver = None;
-                }
-            }
-        }
-        _ => {
-            listing_id = "global".to_string();
-            _receiver = None;
-        }
-    };
-
-    let conversation_id = params
-        .conversation_id
-        .filter(|id| !id.is_empty())
-        .unwrap_or_else(|| Uuid::new_v4().to_string());
-
-    let chat_svc = ChatService::new(state.infra.db.clone());
-
-    // Log user message before streaming.
-    let log_user = chat_svc.log_message(
-        &conversation_id,
-        &listing_id,
-        &current_user_id,
-        _receiver.as_deref(),
-        false,
-        &params.message,
-        None,
-        None,
-        None,
-        None,
-    );
-    if let Err(e) = log_user.await {
-        tracing::warn!(%e, "Failed to log user message for SSE stream");
-    }
-
-    let history_entries = chat_svc
-        .get_conversation_history(&conversation_id)
-        .await
-        .unwrap_or_default();
-
-    let chat_history: Vec<Message> = history_entries
-        .iter()
-        .map(|entry| {
-            if entry.is_agent {
-                Message::Assistant {
-                    id: None,
-                    content: OneOrMany::one(AssistantContent::Text(Text {
-                        text: entry.content.clone(),
-                    })),
-                }
-            } else {
-                Message::User {
-                    content: OneOrMany::one(UserContent::Text(Text {
-                        text: entry.content.clone(),
-                    })),
-                }
-            }
-        })
-        .collect();
-
-    let agent: Box<dyn MarketplaceAgent> = state
-        .agents
-        .llm_provider
-        .create_marketplace_agent(
-            &state.infra.db,
-            state.infra.event_tx.clone(),
-            Some(current_user_id.clone()),
-        )
-        .await
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!(e)))?;
-
-    let stream = agent.stream_chat(params.message.clone(), chat_history);
-
-    // Send ChatMessage event.
-    let chat_event = BusinessEvent::ChatMessage {
-        conversation_id: conversation_id.clone(),
-        listing_id: listing_id.to_string(),
-        sender: current_user_id,
-        content: params.message,
-        image_data: None,
-        audio_data: None,
-    };
-    if let Err(e) = state.infra.event_tx.try_send(chat_event) {
-        tracing::warn!(%e, conversation_id = %conversation_id, "ChatMessage event dropped - channel full");
-    }
-
-    // Build SSE stream: each token becomes data: {"token": "..."}\n\n
-    let conv_id = conversation_id.clone();
-    let sse_stream = stream.map(move |result| {
-        let line = match result {
-            Ok(token) => {
-                let payload = serde_json::json!({ "token": token, "conversation_id": conv_id });
-                format!("data: {}\n\n", serde_json::to_string(&payload).expect("LLM token payload serializes to JSON; this is a programmer error if it panics"))
-            }
-            Err(e) => {
-                let payload = serde_json::json!({ "error": e.to_string() });
-                format!("data: {}\n\n", serde_json::to_string(&payload).expect("error payload serializes to JSON; this is a programmer error if it panics"))
-            }
-        };
-        Ok::<_, std::convert::Infallible>(line.into_bytes())
-    });
-
-    let body = axum::body::Body::from_stream(sse_stream);
-
-    Ok(Response::builder()
-        .header("Content-Type", "text/event-stream")
-        .header("Cache-Control", "no-cache")
-        .header("Connection", "keep-alive")
-        .header("X-Conversation-Id", &conversation_id)
-        .body(body)
-        .unwrap())
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_chat_request_with_message() {
-        let json = r#"{"message": "Hello!", "conversation_id": "conv-1"}"#;
-        let req: ChatRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.message, "Hello!");
-        assert_eq!(req.conversation_id, Some("conv-1".to_string()));
-        assert_eq!(req.image, None);
-        assert_eq!(req.audio, None);
-        assert_eq!(req.listing_id, None);
-    }
-
-    #[test]
-    fn test_chat_request_with_media() {
-        let json = r#"{"message": "Check this", "image": "base64data", "audio": "base64audio"}"#;
-        let req: ChatRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.message, "Check this");
-        assert_eq!(req.image, Some("base64data".to_string()));
-        assert_eq!(req.audio, Some("base64audio".to_string()));
-        assert_eq!(req.listing_id, None);
-    }
-
-    #[test]
-    fn test_chat_request_with_listing_context() {
-        let json = r#"{"message": "Is this available?", "listing_id": "listing-123"}"#;
-        let req: ChatRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.message, "Is this available?");
-        assert_eq!(req.listing_id, Some("listing-123".to_string()));
-    }
-
-    #[test]
-    fn test_chat_request_without_conversation_id() {
-        let json = r#"{"message": "Hello!"}"#;
-        let req: ChatRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.message, "Hello!");
-        assert_eq!(req.conversation_id, None);
-    }
-
-    #[test]
-    fn test_chat_request_empty_conversation_id() {
-        let json = r#"{"message": "Hi", "conversation_id": ""}"#;
-        let req: ChatRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(req.message, "Hi");
-        assert_eq!(req.conversation_id, Some("".to_string()));
-    }
-
-    #[test]
-    fn test_chat_response_serialization() {
-        let resp = ChatResponse {
-            reply: "Hello back!".to_string(),
-            conversation_id: "conv-123".to_string(),
-        };
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("Hello back!"));
-        assert!(json.contains("conv-123"));
-    }
+    use axum::http::{HeaderMap, HeaderValue};
 
     #[test]
     fn test_peer_addr_clone() {
@@ -999,4 +524,118 @@ mod tests {
         assert!(debug_str.contains("PeerAddr"));
         assert!(debug_str.contains("192.168.1.1"));
     }
+
+    #[test]
+    fn rate_limit_key_prefers_authenticated_user_id() {
+        let (token, _, _) = auth::generate_access_token(
+            "user-123",
+            "user",
+            "test_jwt_secret_at_least_32_characters_long",
+            3600,
+        )
+        .expect("token");
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "Authorization",
+            HeaderValue::from_str(&format!("Bearer {token}")).expect("header"),
+        );
+        let peer_addr: SocketAddr = "127.0.0.1:3000".parse().expect("socket addr");
+        let secrets = ApiSecrets {
+            jwt_secret: "test_jwt_secret_at_least_32_characters_long".to_string(),
+            jwt_secret_old: None,
+            gemini_api_key: String::new(),
+            oss_endpoint: String::new(),
+            oss_bucket: String::new(),
+            oss_role_arn: None,
+            oss_access_key_id: None,
+            oss_access_key_secret: None,
+        };
+
+        let key = rate_limit_key_for_request(&headers, Some(peer_addr), &secrets);
+        assert_eq!(key, "uid:user-123");
+    }
+
+    #[test]
+    fn rate_limit_key_falls_back_to_peer_ip_without_auth() {
+        let headers = HeaderMap::new();
+        let peer_addr: SocketAddr = "127.0.0.9:4000".parse().expect("socket addr");
+        let secrets = ApiSecrets {
+            jwt_secret: "test_jwt_secret_at_least_32_characters_long".to_string(),
+            jwt_secret_old: None,
+            gemini_api_key: String::new(),
+            oss_endpoint: String::new(),
+            oss_bucket: String::new(),
+            oss_role_arn: None,
+            oss_access_key_id: None,
+            oss_access_key_secret: None,
+        };
+
+        let key = rate_limit_key_for_request(&headers, Some(peer_addr), &secrets);
+        assert_eq!(key, "ip:127.0.0.9");
+    }
+
+    #[test]
+    fn rate_limit_key_falls_back_to_stable_header_fingerprint_without_peer_or_auth() {
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", HeaderValue::from_static("good4ncu-test"));
+        headers.insert("host", HeaderValue::from_static("example.test"));
+        let secrets = ApiSecrets {
+            jwt_secret: "test_jwt_secret_at_least_32_characters_long".to_string(),
+            jwt_secret_old: None,
+            gemini_api_key: String::new(),
+            oss_endpoint: String::new(),
+            oss_bucket: String::new(),
+            oss_role_arn: None,
+            oss_access_key_id: None,
+            oss_access_key_secret: None,
+        };
+
+        let key_one = rate_limit_key_for_request(&headers, None, &secrets);
+        let key_two = rate_limit_key_for_request(&headers, None, &secrets);
+
+        assert_eq!(key_one, key_two);
+        assert!(key_one.starts_with("anon:"));
+        assert_ne!(key_one, "anon:missing-peer");
+    }
+
+    #[test]
+    fn rate_limit_key_uses_missing_peer_bucket_when_no_peer_or_fingerprint_headers_exist() {
+        let headers = HeaderMap::new();
+        let secrets = ApiSecrets {
+            jwt_secret: "test_jwt_secret_at_least_32_characters_long".to_string(),
+            jwt_secret_old: None,
+            gemini_api_key: String::new(),
+            oss_endpoint: String::new(),
+            oss_bucket: String::new(),
+            oss_role_arn: None,
+            oss_access_key_id: None,
+            oss_access_key_secret: None,
+        };
+
+        let key = rate_limit_key_for_request(&headers, None, &secrets);
+        assert_eq!(key, "anon:missing-peer");
+    }
+
+    #[test]
+    fn peer_addr_from_extensions_prefers_connect_info() {
+        let mut extensions = axum::http::Extensions::new();
+        let socket_addr: SocketAddr = "127.0.0.9:4000".parse().expect("socket addr");
+        let connect_info_addr: SocketAddr = "10.0.0.5:8080".parse().expect("socket addr");
+        extensions.insert(socket_addr);
+        extensions.insert(axum::extract::connect_info::ConnectInfo(connect_info_addr));
+
+        let addr = peer_addr_from_extensions(&extensions);
+        assert_eq!(addr, Some(connect_info_addr));
+    }
+
+    #[test]
+    fn peer_addr_from_extensions_falls_back_to_socket_addr() {
+        let mut extensions = axum::http::Extensions::new();
+        let socket_addr: SocketAddr = "127.0.0.9:4000".parse().expect("socket addr");
+        extensions.insert(socket_addr);
+
+        let addr = peer_addr_from_extensions(&extensions);
+        assert_eq!(addr, Some(socket_addr));
+    }
+
 }

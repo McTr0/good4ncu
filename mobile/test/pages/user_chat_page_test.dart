@@ -1,15 +1,62 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:good4ncu_mobile/models/models.dart';
 import 'package:good4ncu_mobile/components/audio_message_player.dart';
+import 'package:good4ncu_mobile/models/models.dart';
+import 'package:good4ncu_mobile/pages/user_chat_composer_controller.dart';
+import 'package:good4ncu_mobile/pages/user_chat_components.dart';
 import 'package:good4ncu_mobile/pages/user_chat_page.dart';
+import 'package:good4ncu_mobile/providers/chat_notifier.dart';
+import 'package:good4ncu_mobile/services/chat_service.dart';
+import 'package:good4ncu_mobile/services/user_service.dart';
+
+class _FakePageChatService extends ChatService {
+  @override
+  Future<List<ConversationMessage>> getChatConversationMessages(
+    String conversationId, {
+    int limit = 50,
+    int offset = 0,
+  }) async => const [];
+
+  @override
+  Future<void> markConnectionAsRead(String conversationId) async {}
+}
+
+class _FakePageUserService extends UserService {
+  @override
+  Future<Map<String, dynamic>> getUserProfile() async => {'user_id': 'user-me'};
+}
 
 void main() {
-  group('MessageBubble', () {
-    Widget buildTestableWidget(Widget child) {
-      return MaterialApp(home: Scaffold(body: child));
-    }
+  Widget buildTestableWidget(Widget child) {
+    return MaterialApp(home: Scaffold(body: child));
+  }
 
+  group('UserChatPage', () {
+    test('requires chatNotifier when injecting composerController', () {
+      final notifier = ChatNotifier(
+        conversationId: 'conv-1',
+        chatService: _FakePageChatService(),
+        userService: _FakePageUserService(),
+      );
+      addTearDown(notifier.dispose);
+      final composerController = UserChatComposerController(
+        chatNotifier: notifier,
+      );
+      addTearDown(composerController.dispose);
+
+      expect(
+        () => UserChatPage(
+          conversationId: 'conv-1',
+          otherUserId: 'user-other',
+          otherUsername: 'Other User',
+          composerController: composerController,
+        ),
+        throwsA(isA<AssertionError>()),
+      );
+    });
+  });
+
+  group('MessageBubble', () {
     testWidgets('aligns own messages to the right', (tester) async {
       final message = ConversationMessage(
         id: '1',
@@ -569,6 +616,114 @@ void main() {
       );
 
       expect(find.text('离线'), findsOneWidget);
+    });
+  });
+
+  group('UserChatMessageList', () {
+    testWidgets('shows retry state when initial load fails', (tester) async {
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          UserChatMessageList(
+            isLoading: false,
+            error: 'network',
+            messages: const [],
+            currentUserId: null,
+            connectionStatus: null,
+            scrollController: controller,
+            onRetry: () {},
+            onEditMessage: (_) {},
+          ),
+        ),
+      );
+
+      expect(find.text('加载失败: network'), findsOneWidget);
+      expect(find.text('重试'), findsOneWidget);
+    });
+
+    testWidgets('shows empty state when there are no messages', (tester) async {
+      final controller = ScrollController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          UserChatMessageList(
+            isLoading: false,
+            error: null,
+            messages: const [],
+            currentUserId: null,
+            connectionStatus: 'connected',
+            scrollController: controller,
+            onRetry: () {},
+            onEditMessage: (_) {},
+          ),
+        ),
+      );
+
+      expect(find.text('暂无消息，开始聊天吧'), findsOneWidget);
+    });
+  });
+
+  group('UserChatInputArea', () {
+    testWidgets('shows pending banner when conversation is not connected', (
+      tester,
+    ) async {
+      final controller = TextEditingController();
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          UserChatInputArea(
+            connectionStatus: 'pending',
+            isRecording: false,
+            recordingSeconds: 0,
+            isSending: false,
+            isEditing: false,
+            textController: controller,
+            onPickImage: () {},
+            onToggleRecording: () {},
+            onCancelEdit: () {},
+            onChanged: (_) {},
+            onSubmitted: (_) {},
+            onSend: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('等待对方接受连接'), findsOneWidget);
+      expect(find.byType(TextField), findsNothing);
+    });
+
+    testWidgets('shows edit affordances when editing a message', (
+      tester,
+    ) async {
+      final controller = TextEditingController(text: 'draft');
+      addTearDown(controller.dispose);
+
+      await tester.pumpWidget(
+        buildTestableWidget(
+          UserChatInputArea(
+            connectionStatus: 'connected',
+            isRecording: false,
+            recordingSeconds: 0,
+            isSending: false,
+            isEditing: true,
+            textController: controller,
+            onPickImage: () {},
+            onToggleRecording: () {},
+            onCancelEdit: () {},
+            onChanged: (_) {},
+            onSubmitted: (_) {},
+            onSend: () {},
+          ),
+        ),
+      );
+
+      expect(find.text('编辑消息...'), findsOneWidget);
+      expect(find.byIcon(Icons.check), findsOneWidget);
+      expect(find.byIcon(Icons.close), findsOneWidget);
     });
   });
 }

@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/ws_service.dart';
@@ -9,14 +10,16 @@ import '../l10n/app_localizations.dart';
 
 /// 会话列表页面 — also shows pending incoming connection requests with accept/reject.
 class ConversationListPage extends StatefulWidget {
-  const ConversationListPage({super.key});
+  final ApiService? apiService;
+
+  const ConversationListPage({super.key, this.apiService});
 
   @override
   State<ConversationListPage> createState() => _ConversationListPageState();
 }
 
 class _ConversationListPageState extends State<ConversationListPage> {
-  final ApiService _apiService = ApiService();
+  late final ApiService _apiService;
   String? _currentUserId;
   List<Conversation> _conversations = [];
   bool _isLoading = true;
@@ -27,6 +30,7 @@ class _ConversationListPageState extends State<ConversationListPage> {
   @override
   void initState() {
     super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
     _loadCurrentUser();
     _loadConversations();
     _connectWs();

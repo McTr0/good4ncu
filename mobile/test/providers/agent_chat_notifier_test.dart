@@ -19,8 +19,8 @@ class _FakeSseService extends SseService {
     required String message,
     String? conversationId,
     String? listingId,
-    String? imageBase64,
-    String? audioBase64,
+    String? imageUrl,
+    String? audioUrl,
   }) async {
     lastMessage = message;
     lastConversationId = conversationId;

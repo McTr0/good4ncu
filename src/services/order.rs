@@ -2,6 +2,11 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
 
+use crate::api::metrics::GLOBAL_METRICS;
+use crate::repositories::{
+    OrderTimestampField, PostgresListingRepository, PostgresOrderRepository,
+};
+
 #[derive(Clone)]
 pub struct OrderService {
     db: PgPool,
@@ -88,43 +93,39 @@ impl OrderService {
         seller_id: &str,
         final_price: i64,
     ) -> Result<String, OrderError> {
+        let listing_repo = PostgresListingRepository::new(self.db.clone());
+        let order_repo = PostgresOrderRepository::new(self.db.clone());
         let mut tx: sqlx::Transaction<'_, sqlx::Postgres> = sqlx::Acquire::begin(&self.db)
             .await
             .map_err(OrderError::Db)?;
 
-        // Atomically mark listing as sold
-        let updated = sqlx::query(
-            r#"UPDATE inventory SET status = 'sold' WHERE id = $1 AND status = 'active'"#,
-        )
-        .bind(listing_id)
-        .execute(&mut *tx)
-        .await
-        .map_err(OrderError::Db)?;
-
-        if updated.rows_affected() == 0 {
+        if !listing_repo
+            .mark_sold_if_active_in_tx(&mut tx, listing_id)
+            .await
+            .map_err(OrderError::Repo)?
+        {
             return Err(OrderError::AlreadySold);
         }
 
         let order_id = uuid::Uuid::new_v4().to_string();
 
-        // Note: Using query instead of repo because we are inside a transaction
-        // Future: Repo should support transactions
-        sqlx::query(
-            r#"
-            INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status)
-            VALUES ($1, $2, $3, $4, $5, 'pending')
-            "#,
-        )
-        .bind(&order_id)
-        .bind(listing_id)
-        .bind(buyer_id)
-        .bind(seller_id)
-        .bind(final_price)
-        .execute(&mut *tx)
-        .await
-        .map_err(OrderError::Db)?;
+        order_repo
+            .create_pending_in_tx(
+                &mut tx,
+                &order_id,
+                listing_id,
+                buyer_id,
+                seller_id,
+                final_price,
+            )
+            .await
+            .map_err(OrderError::Repo)?;
 
         tx.commit().await.map_err(OrderError::Db)?;
+
+        if let Some(metrics) = GLOBAL_METRICS.get() {
+            metrics.record_order_created();
+        }
 
         Ok(order_id)
     }
@@ -281,62 +282,53 @@ impl OrderService {
         }
 
         let timestamp_field = match next {
-            OrderStatus::Paid => "paid_at",
-            OrderStatus::Shipped => "shipped_at",
-            OrderStatus::Completed => "completed_at",
-            OrderStatus::Cancelled => "cancelled_at",
+            OrderStatus::Paid => OrderTimestampField::Paid,
+            OrderStatus::Shipped => OrderTimestampField::Shipped,
+            OrderStatus::Completed => OrderTimestampField::Completed,
+            OrderStatus::Cancelled => OrderTimestampField::Cancelled,
             OrderStatus::Pending => return Ok(false),
         };
 
+        let listing_repo = PostgresListingRepository::new(self.db.clone());
+        let order_repo = PostgresOrderRepository::new(self.db.clone());
         let mut tx = self.db.begin().await.map_err(OrderError::Db)?;
 
-        // Update order status
-        let updated = if let Some(reason) = cancellation_reason {
-            sqlx::query(&format!(
-                "UPDATE orders SET status = $1, {} = NOW(), cancellation_reason = $2 WHERE id = $3 AND status = $4",
-                timestamp_field
-            ))
-            .bind(new_status)
-            .bind(reason)
-            .bind(order_id)
-            .bind(expected_current)
-            .execute(&mut *tx)
+        let updated_listing_id = order_repo
+            .update_status_in_tx(
+                &mut tx,
+                order_id,
+                expected_current,
+                new_status,
+                timestamp_field,
+                cancellation_reason,
+            )
             .await
-        } else {
-            sqlx::query(&format!(
-                "UPDATE orders SET status = $1, {} = NOW() WHERE id = $2 AND status = $3",
-                timestamp_field
-            ))
-            .bind(new_status)
-            .bind(order_id)
-            .bind(expected_current)
-            .execute(&mut *tx)
-            .await
-        }
-        .map_err(OrderError::Db)?;
+            .map_err(OrderError::Repo)?;
 
-        if updated.rows_affected() == 0 {
+        let Some(listing_id) = updated_listing_id else {
             tx.rollback().await.map_err(OrderError::Db)?;
             return Ok(false);
-        }
+        };
 
-        // If cancelled, relist the associated item
         if next == OrderStatus::Cancelled {
-            sqlx::query(
-                r#"
-                UPDATE inventory 
-                SET status = 'active' 
-                WHERE id = (SELECT listing_id FROM orders WHERE id = $1)
-                AND status = 'sold'
-                "#,
-            )
-            .bind(order_id)
-            .execute(&mut *tx)
-            .await
-            .map_err(OrderError::Db)?;
+            let _ = listing_repo
+                .relist_if_no_open_orders_in_tx(&mut tx, &listing_id)
+                .await
+                .map_err(OrderError::Repo)?;
         }
 
         tx.commit().await.map_err(OrderError::Db)?;
+
+        if let Some(metrics) = GLOBAL_METRICS.get() {
+            match next {
+                OrderStatus::Paid => metrics.record_order_paid(),
+                OrderStatus::Shipped => metrics.record_order_shipped(),
+                OrderStatus::Completed => metrics.record_order_completed(),
+                OrderStatus::Cancelled => metrics.record_order_cancelled(),
+                OrderStatus::Pending => {}
+            }
+        }
+
         Ok(true)
     }
 

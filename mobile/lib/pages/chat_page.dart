@@ -1,7 +1,9 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:record/record.dart';
@@ -9,9 +11,11 @@ import 'package:path_provider/path_provider.dart';
 import 'dart:io';
 import '../services/api_service.dart';
 import '../services/sse_service.dart';
+import '../services/upload_service.dart';
 import '../services/ws_service.dart';
 import '../models/models.dart';
 import '../components/audio_message_player.dart';
+import 'chat_page_media_sender.dart';
 
 /// Negotiation action card shown in the chat for HITL requests.
 class NegotiationCard extends StatelessWidget {
@@ -417,7 +421,18 @@ class _StatusBadge extends StatelessWidget {
 }
 
 class ChatPage extends StatefulWidget {
-  const ChatPage({super.key});
+  final ApiService? apiService;
+  final SseService? sseService;
+  final UploadService? uploadService;
+  final ChatPageMediaSender? mediaSender;
+
+  const ChatPage({
+    super.key,
+    this.apiService,
+    this.sseService,
+    this.uploadService,
+    this.mediaSender,
+  });
 
   @override
   State<ChatPage> createState() => _ChatPageState();
@@ -426,13 +441,16 @@ class ChatPage extends StatefulWidget {
 class _ChatPageState extends State<ChatPage> {
   final TextEditingController _controller = TextEditingController();
   final List<ChatMessage> _messages = [];
-  final ApiService _apiService = ApiService();
-  final SseService _sseService = SseService();
+  late final ApiService _apiService;
+  late final SseService _sseService;
+  late final UploadService _uploadService;
+  late final ChatPageMediaSender _mediaSender;
   final ImagePicker _picker = ImagePicker();
   final AudioRecorder _audioRecorder = AudioRecorder();
 
-  String? _selectedImageBase64;
-  String? _selectedAudioBase64;
+  XFile? _selectedImage;
+  Uint8List? _selectedImageBytes;
+  List<int>? _selectedAudioBytes;
   bool _isRecording = false;
   int _recordingSeconds = 0;
   Timer? _recordingTimer;
@@ -447,6 +465,11 @@ class _ChatPageState extends State<ChatPage> {
   @override
   void initState() {
     super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
+    _sseService = widget.sseService ?? context.read<SseService>();
+    _uploadService = widget.uploadService ?? context.read<UploadService>();
+    _mediaSender =
+        widget.mediaSender ?? ChatPageMediaSender(uploadService: _uploadService);
     _loadCurrentUser();
     _connectWs();
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -528,7 +551,8 @@ class _ChatPageState extends State<ChatPage> {
     if (image != null) {
       final bytes = await image.readAsBytes();
       setState(() {
-        _selectedImageBase64 = base64Encode(bytes);
+        _selectedImage = image;
+        _selectedImageBytes = bytes;
       });
     }
   }
@@ -541,7 +565,7 @@ class _ChatPageState extends State<ChatPage> {
         final bytes = await File(path).readAsBytes();
         setState(() {
           _isRecording = false;
-          _selectedAudioBase64 = base64Encode(bytes);
+          _selectedAudioBytes = bytes;
         });
         _sendMessage();
       } else {
@@ -575,48 +599,59 @@ class _ChatPageState extends State<ChatPage> {
   /// Send a message using SSE streaming (token-by-token render).
   Future<void> _sendMessage() async {
     final text = _controller.text.trim();
-    if (text.isEmpty &&
-        _selectedImageBase64 == null &&
-        _selectedAudioBase64 == null) {
+    final selectedImage = _selectedImage;
+    final selectedImageBytes = _selectedImageBytes;
+    final selectedAudioBytes = _selectedAudioBytes;
+    if (text.isEmpty && selectedImageBytes == null && selectedAudioBytes == null) {
       return;
     }
 
-    final userMsg = ChatMessage(
-      sender: 'user',
-      content: text.isEmpty ? '[Multimedia Message]' : text,
-      imageBase64: _selectedImageBase64,
-      audioBase64: _selectedAudioBase64,
-      timestamp: DateTime.now(),
-    );
-
     setState(() {
-      _messages.add(userMsg);
       _isStreaming = true;
-      _controller.clear();
-      _selectedImageBase64 = null;
-      _selectedAudioBase64 = null;
     });
 
-    // Append a placeholder streaming message.
-    final botMsgIndex = _messages.length;
-    _messages.add(
-      ChatMessage(
-        sender: 'bot',
-        content: '',
-        timestamp: DateTime.now(),
-        isPartial: true,
-      ),
-    );
-
     try {
+      final uploadedMedia = await _mediaSender.uploadSelectedMedia(
+        pickedImage: selectedImage,
+        imageBytes: selectedImageBytes,
+        audioBytes: selectedAudioBytes,
+      );
+
+      final userMsg = ChatMessage(
+        sender: 'user',
+        content: text.isEmpty ? '[Multimedia Message]' : text,
+        imageUrl: uploadedMedia.imageUrl,
+        audioUrl: uploadedMedia.audioUrl,
+        timestamp: DateTime.now(),
+      );
+
+      setState(() {
+        _messages.add(userMsg);
+        _controller.clear();
+        _selectedImage = null;
+        _selectedImageBytes = null;
+        _selectedAudioBytes = null;
+      });
+
+      // Append a placeholder streaming message.
+      final botMsgIndex = _messages.length;
+      _messages.add(
+        ChatMessage(
+          sender: 'bot',
+          content: '',
+          timestamp: DateTime.now(),
+          isPartial: true,
+        ),
+      );
+
       // Connect SSE stream with timeout.
       bool connected;
       try {
         await _sseService
             .connect(
               message: userMsg.content,
-              imageBase64: userMsg.imageBase64,
-              audioBase64: userMsg.audioBase64,
+              imageUrl: uploadedMedia.imageUrl,
+              audioUrl: uploadedMedia.audioUrl,
             )
             .timeout(const Duration(seconds: 30));
         connected = true;
@@ -630,7 +665,12 @@ class _ChatPageState extends State<ChatPage> {
             backgroundColor: Colors.red,
           ),
         );
-        setState(() => _isStreaming = false);
+        setState(() {
+          _isStreaming = false;
+          if (botMsgIndex < _messages.length) {
+            _messages.removeAt(botMsgIndex);
+          }
+        });
         return;
       }
 
@@ -651,17 +691,35 @@ class _ChatPageState extends State<ChatPage> {
       // Finalize the message (no longer partial).
       if (mounted && botMsgIndex < _messages.length) {
         setState(() {
-          _messages[botMsgIndex] = _messages[botMsgIndex].copyWith(
-            content: fullReply.isEmpty ? '（无回复）' : fullReply,
-            isPartial: false,
-          );
+          if (botMsgIndex < _messages.length) {
+            _messages[botMsgIndex] = _messages[botMsgIndex].copyWith(
+              content: fullReply.isEmpty ? '（无回复）' : fullReply,
+              isPartial: false,
+            );
+          }
         });
       }
 
       // Refresh negotiations after chat (the agent may have created a HITL request).
       await _loadNegotiations();
+    } on ChatPageMediaUploadException catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message),
+          backgroundColor: Colors.red,
+        ),
+      );
+      setState(() {
+        _isStreaming = false;
+        _selectedImage = selectedImage;
+        _selectedImageBytes = selectedImageBytes;
+        _selectedAudioBytes = selectedAudioBytes;
+      });
+      return;
     } catch (e) {
-      if (mounted && botMsgIndex < _messages.length) {
+      final botMsgIndex = _messages.isEmpty ? -1 : _messages.length - 1;
+      if (mounted && botMsgIndex >= 0 && botMsgIndex < _messages.length) {
         final l = AppLocalizations.of(context)!;
         setState(() {
           _messages[botMsgIndex] = _messages[botMsgIndex].copyWith(
@@ -738,22 +796,24 @@ class _ChatPageState extends State<ChatPage> {
                 onHitlUpdated: _loadNegotiations,
               );
             },
-          ),
         ),
-        if (_selectedImageBase64 != null)
+      ),
+        if (_selectedImageBytes != null)
           Container(
             padding: const EdgeInsets.all(8),
             height: 100,
             child: Stack(
               children: [
-                Image.memory(base64Decode(_selectedImageBase64!)),
+                Image.memory(_selectedImageBytes!),
                 Positioned(
                   right: 0,
                   top: 0,
                   child: IconButton(
                     icon: const Icon(Icons.close, color: Colors.red),
-                    onPressed: () =>
-                        setState(() => _selectedImageBase64 = null),
+                    onPressed: () => setState(() {
+                      _selectedImage = null;
+                      _selectedImageBytes = null;
+                    }),
                   ),
                 ),
               ],

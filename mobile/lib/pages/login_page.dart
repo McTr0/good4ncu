@@ -1,11 +1,14 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import '../theme/app_theme.dart';
 import 'package:go_router/go_router.dart';
 import '../services/api_service.dart';
 
 class LoginPage extends StatefulWidget {
-  const LoginPage({super.key});
+  final ApiService? apiService;
+
+  const LoginPage({super.key, this.apiService});
 
   @override
   State<LoginPage> createState() => _LoginPageState();
@@ -15,9 +18,15 @@ class _LoginPageState extends State<LoginPage> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _confirmPasswordController = TextEditingController();
-  final ApiService _apiService = ApiService();
+  late final ApiService _apiService;
   bool _isLogin = true;
   bool _isLoading = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
+  }
 
   Future<void> _submit() async {
     final l = AppLocalizations.of(context)!;

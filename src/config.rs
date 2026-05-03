@@ -194,12 +194,20 @@ impl AppConfig {
 
         let jwt_secret_old = std::env::var("JWT_SECRET_OLD").ok();
 
-        // CORS: env > file > default (empty = allow all)
+        let read_non_empty_env = |key: &str| {
+            std::env::var(key)
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        };
+
+        // CORS: env > file > default (empty = allow all in non-production only)
         let cors_origins = std::env::var("CORS_ORIGINS")
             .ok()
             .map(|s| s.split(',').map(|v| v.trim().to_string()).collect())
             .or_else(|| file.as_ref()?.cors.origins.clone())
             .unwrap_or_default();
+        validate_cors_origins(&cors_origins).unwrap_or_else(|msg| panic!("{msg}"));
 
         // Blocked keywords: env > file > default
         let blocked_keywords = std::env::var("BLOCKED_KEYWORDS")
@@ -247,13 +255,16 @@ impl AppConfig {
                 .unwrap_or(60)
         };
 
-        // TOML-only fields (env vars don't override these)
-        let server_host = file
-            .as_ref()
-            .and_then(|f| f.server.host.clone())
-            .unwrap_or_else(|| "127.0.0.1".into());
+        // Server bind address: env > file > safe container default
+        let server_host = read_non_empty_env("SERVER_HOST")
+            .or_else(|| file.as_ref()?.server.host.clone())
+            .unwrap_or_else(|| "0.0.0.0".into());
 
-        let server_port = file.as_ref().and_then(|f| f.server.port).unwrap_or(3000);
+        let server_port: u16 = if let Some(v) = read_non_empty_env("SERVER_PORT") {
+            v.parse().expect("SERVER_PORT must be a valid u16")
+        } else {
+            file.as_ref().and_then(|f| f.server.port).unwrap_or(3000)
+        };
 
         let event_bus_capacity = file
             .as_ref()
@@ -310,13 +321,6 @@ impl AppConfig {
                     .collect()
             });
 
-        let read_non_empty_env = |key: &str| {
-            std::env::var(key)
-                .ok()
-                .map(|v| v.trim().to_string())
-                .filter(|v| !v.is_empty())
-        };
-
         let moderation_image_enabled = read_non_empty_env("MODERATION_IMAGE_ENABLED")
             .and_then(|v| v.parse::<bool>().ok())
             .or_else(|| file.as_ref()?.moderation.image_enabled)
@@ -365,6 +369,31 @@ impl AppConfig {
     }
 }
 
+fn is_production_label(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "production" | "prod"
+    )
+}
+
+fn running_in_production() -> bool {
+    ["APP_ENV", "ENVIRONMENT", "RUST_ENV"]
+        .into_iter()
+        .filter_map(|key| std::env::var(key).ok())
+        .any(|value| is_production_label(&value))
+}
+
+fn validate_cors_origins(cors_origins: &[String]) -> Result<(), String> {
+    let allows_any_origin =
+        cors_origins.is_empty() || cors_origins.iter().any(|origin| origin == "*");
+    if running_in_production() && allows_any_origin {
+        return Err(
+            "Refusing to start with permissive CORS in production. Set CORS_ORIGINS to explicit origins.".to_string(),
+        );
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -389,7 +418,7 @@ mod tests {
             redis_url: None,
             rate_limit_max_requests: 100,
             rate_limit_window_secs: 60,
-            server_host: "127.0.0.1".to_string(),
+            server_host: "0.0.0.0".to_string(),
             server_port: 3000,
             event_bus_capacity: 2048,
             hitl_expire_scan_interval_secs: 600,
@@ -452,5 +481,17 @@ mod tests {
         // load() returns None when no file exists
         let result = file::load(Some(Path::new("/nonexistent/path.toml")));
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_validate_cors_origins_allows_empty_in_non_production() {
+        assert!(validate_cors_origins(&[]).is_ok());
+    }
+
+    #[test]
+    fn test_is_production_label_matches_expected_values() {
+        assert!(is_production_label("production"));
+        assert!(is_production_label(" PROD "));
+        assert!(!is_production_label("development"));
     }
 }

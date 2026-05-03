@@ -4,6 +4,7 @@ use crate::api::error::ApiError;
 use crate::repositories::{AuthRepository, User};
 use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Row};
+use uuid::Uuid;
 
 #[derive(Clone)]
 #[allow(dead_code)]
@@ -43,11 +44,18 @@ impl AuthRepository for PostgresAuthRepository {
         password_hash: &str,
     ) -> Result<String, ApiError> {
         let user_id = uuid::Uuid::new_v4().to_string();
+        let user_uuid = Uuid::parse_str(&user_id).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!(
+                "Generated user id is not UUID-compatible: {}",
+                e
+            ))
+        })?;
         let result = if let Some(e) = email {
             sqlx::query(
-                "INSERT INTO users (id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5)",
+                "INSERT INTO users (id, new_id, username, email, password_hash, role) VALUES ($1, $2, $3, $4, $5, $6)",
             )
             .bind(&user_id)
+            .bind(user_uuid)
             .bind(username)
             .bind(e)
             .bind(password_hash)
@@ -56,9 +64,10 @@ impl AuthRepository for PostgresAuthRepository {
             .await
         } else {
             sqlx::query(
-                "INSERT INTO users (id, username, password_hash, role) VALUES ($1, $2, $3, $4)",
+                "INSERT INTO users (id, new_id, username, password_hash, role) VALUES ($1, $2, $3, $4, $5)",
             )
             .bind(&user_id)
+            .bind(user_uuid)
             .bind(username)
             .bind(password_hash)
             .bind("user")

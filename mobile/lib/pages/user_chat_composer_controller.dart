@@ -1,0 +1,87 @@
+import 'package:flutter/material.dart';
+
+import '../models/models.dart';
+import '../providers/chat_notifier.dart';
+
+class UserChatComposerException implements Exception {
+  UserChatComposerException(this.message);
+
+  final String message;
+
+  @override
+  String toString() => message;
+}
+
+class UserChatComposerController {
+  UserChatComposerController({required ChatNotifier chatNotifier})
+    : _chatNotifier = chatNotifier;
+
+  final ChatNotifier _chatNotifier;
+  final TextEditingController textController = TextEditingController();
+
+  ChatViewData? get _chatData {
+    final state = _chatNotifier.currentState;
+    return state is ChatViewData ? state : null;
+  }
+
+  String? get editingMessageId => _chatData?.editingMessageId;
+
+  bool get isSending => _chatData?.isSending ?? false;
+
+  void startEditMessage(ConversationMessage message) {
+    _chatNotifier.startEditMessage(message);
+    textController.text = message.content;
+  }
+
+  void cancelEdit() {
+    _chatNotifier.cancelEdit();
+    textController.clear();
+  }
+
+  Future<String?> confirmEdit() async {
+    final editingMessageId = this.editingMessageId;
+    final newContent = textController.text.trim();
+    if (editingMessageId == null || newContent.isEmpty) {
+      return null;
+    }
+
+    try {
+      await _chatNotifier.confirmEdit(newContent);
+      textController.clear();
+      return '消息已编辑';
+    } catch (e) {
+      throw UserChatComposerException('编辑失败: $e');
+    }
+  }
+
+  Future<void> sendMessage() async {
+    if (isSending) {
+      return;
+    }
+
+    final content = textController.text.trim();
+    if (content.isEmpty) {
+      return;
+    }
+
+    final chatData = _chatData;
+    if (chatData?.connectionStatus != 'connected') {
+      throw UserChatComposerException('等待连接建立后再发送消息');
+    }
+
+    textController.clear();
+    try {
+      await _chatNotifier.sendMessage(content: content);
+    } catch (e) {
+      throw UserChatComposerException('发送失败: $e');
+    }
+  }
+
+  void sendTypingIndicator() {
+    _chatNotifier.sendTypingIndicator();
+  }
+
+  void dispose() {
+    textController.dispose();
+  }
+}

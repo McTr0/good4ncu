@@ -3,8 +3,6 @@
 //! Design:
 //! - Each test gets its own `PgPool` via `PgPool::connect` (one pool per test)
 //! - Pool is dropped at end of test, all connections returned
-//! - Tests MUST be run with `--test-threads=1` for proper isolation
-//! - OR use serial test execution where each test completes before the next starts
 
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -114,6 +112,10 @@ pub(crate) async fn ensure_test_schema_ready(database_url: &str) {
         )
     }
 
+    fn is_version_mismatch(err: &sqlx::migrate::MigrateError) -> bool {
+        matches!(err, sqlx::migrate::MigrateError::VersionMismatch(_))
+    }
+
     async fn reset_public_schema(pool: &PgPool) {
         sqlx::query("DROP SCHEMA IF EXISTS public CASCADE")
             .execute(pool)
@@ -157,12 +159,20 @@ pub(crate) async fn ensure_test_schema_ready(database_url: &str) {
         reset_public_schema(&pool).await;
     }
 
+    // Keep the literal path here so test binaries embed the current on-disk migration set, including new files.
     let migrate_result = match sqlx::migrate!("./migrations").run(&pool).await {
         Ok(()) => Ok(()),
         Err(e) if is_duplicate_schema_conflict(&e) => {
             tracing::warn!(
                 code = ?migration_error_code(&e),
                 "Duplicate schema conflict during migration; resetting schema and retrying"
+            );
+            reset_public_schema(&pool).await;
+            sqlx::migrate!("./migrations").run(&pool).await
+        }
+        Err(e) if is_version_mismatch(&e) => {
+            tracing::warn!(
+                "Detected migration version mismatch in test DB; resetting schema and retrying"
             );
             reset_public_schema(&pool).await;
             sqlx::migrate!("./migrations").run(&pool).await
@@ -205,30 +215,24 @@ where
 {
     let pool = create_test_pool().await;
 
-    // Clean all tables before test runs.
-    // This runs on pool's single connection before test body starts.
-    let clean_tables = [
-        "chat_messages",
-        "hitl_requests",
-        "notifications",
-        "watchlist",
-        "chat_connections",
-        "orders",
-        "inventory",
-        "documents",
-        "refresh_tokens",
-        "users",
-    ];
-    for table in &clean_tables {
-        sqlx::query(&format!("DELETE FROM {table}"))
-            .execute(&pool)
-            .await
-            .expect("DELETE must succeed");
-    }
+    const TEST_DB_LOCK_ID: i64 = 7_315_900_421;
+    sqlx::query("SELECT pg_advisory_lock($1)")
+        .bind(TEST_DB_LOCK_ID)
+        .execute(&pool)
+        .await
+        .expect("failed to acquire test database advisory lock");
+
+    sqlx::query(
+        "TRUNCATE TABLE \
+            chat_messages, hitl_requests, notifications, watchlist, \
+            chat_connections, orders, inventory, documents, refresh_tokens, users \
+         RESTART IDENTITY CASCADE",
+    )
+    .execute(&pool)
+    .await
+    .expect("TRUNCATE must succeed");
 
     test_body(pool).await;
-
-    // pool is dropped here, returning all connections
 }
 
 #[cfg(test)]
@@ -267,5 +271,53 @@ mod tests {
             assert_eq!(count, 0, "users table should be empty after clean");
         })
         .await;
+    }
+
+    #[tokio::test]
+    async fn test_with_test_pool_parallel_calls_are_isolated() {
+        let t1 = tokio::spawn(async {
+            with_test_pool(|pool| async move {
+                sqlx::query(
+                    "INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')",
+                )
+                .bind("user-1")
+                .bind("user1")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+                let row = sqlx::query("SELECT COUNT(*) as c FROM users")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                let count: i64 = sqlx::Row::get(&row, "c");
+                assert_eq!(count, 1);
+            })
+            .await;
+        });
+
+        let t2 = tokio::spawn(async {
+            with_test_pool(|pool| async move {
+                sqlx::query(
+                    "INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')",
+                )
+                .bind("user-1")
+                .bind("user1")
+                .execute(&pool)
+                .await
+                .unwrap();
+
+                let row = sqlx::query("SELECT COUNT(*) as c FROM users")
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+                let count: i64 = sqlx::Row::get(&row, "c");
+                assert_eq!(count, 1);
+            })
+            .await;
+        });
+
+        t1.await.unwrap();
+        t2.await.unwrap();
     }
 }

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import '../models/models.dart';
 import '../services/order_service.dart';
@@ -7,15 +8,16 @@ import '../theme/app_theme.dart';
 /// Order detail page with action buttons based on status and role.
 class OrderDetailPage extends StatefulWidget {
   final String orderId;
+  final OrderService? orderService;
 
-  const OrderDetailPage({super.key, required this.orderId});
+  const OrderDetailPage({super.key, required this.orderId, this.orderService});
 
   @override
   State<OrderDetailPage> createState() => _OrderDetailPageState();
 }
 
 class _OrderDetailPageState extends State<OrderDetailPage> {
-  final OrderService _orderService = OrderService();
+  late final OrderService _orderService;
   OrderDetail? _order;
   bool _loading = true;
   String? _error;
@@ -24,11 +26,15 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   @override
   void initState() {
     super.initState();
+    _orderService = widget.orderService ?? context.read<OrderService>();
     _load();
   }
 
   Future<void> _load() async {
-    setState(() { _loading = true; _error = null; });
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
     try {
       final data = await _orderService.getOrder(widget.orderId);
       if (mounted) {
@@ -57,7 +63,9 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${AppLocalizations.of(context)?.operationFailed ?? "Failed"}: $e'),
+            content: Text(
+              '${AppLocalizations.of(context)?.operationFailed ?? "Failed"}: $e',
+            ),
             backgroundColor: Colors.red,
           ),
         );
@@ -71,9 +79,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
   Widget build(BuildContext context) {
     final l = AppLocalizations.of(context)!;
     return Scaffold(
-      appBar: AppBar(
-        title: Text(l.orderDetail),
-      ),
+      appBar: AppBar(title: Text(l.orderDetail)),
       body: _buildBody(),
     );
   }
@@ -131,11 +137,13 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                   children: [
                     _InfoRow(
                       label: l.buyer,
-                      value: '${order.buyerUsername} (${order.buyerId.substring(0, 8)}...)',
+                      value:
+                          '${order.buyerUsername} (${order.buyerId.substring(0, 8)}...)',
                     ),
                     _InfoRow(
                       label: l.owner,
-                      value: '${order.sellerUsername} (${order.sellerId.substring(0, 8)}...)',
+                      value:
+                          '${order.sellerUsername} (${order.sellerId.substring(0, 8)}...)',
                     ),
                     _InfoRow(label: '${l.orderId}:', value: order.id),
                   ],
@@ -146,21 +154,45 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
                 _SectionCard(
                   title: l.orderDetail,
                   children: [
-                    _TimelineRow(label: l.orderDetail, time: order.createdAt, done: true),
+                    _TimelineRow(
+                      label: l.orderDetail,
+                      time: order.createdAt,
+                      done: true,
+                    ),
                     if (order.paidAt != null)
-                      _TimelineRow(label: l.markPaid, time: order.paidAt!, done: true),
+                      _TimelineRow(
+                        label: l.markPaid,
+                        time: order.paidAt!,
+                        done: true,
+                      ),
                     if (order.shippedAt != null)
-                      _TimelineRow(label: l.markShipped, time: order.shippedAt!, done: true),
+                      _TimelineRow(
+                        label: l.markShipped,
+                        time: order.shippedAt!,
+                        done: true,
+                      ),
                     if (order.completedAt != null)
-                      _TimelineRow(label: l.markCompleted, time: order.completedAt!, done: true),
+                      _TimelineRow(
+                        label: l.markCompleted,
+                        time: order.completedAt!,
+                        done: true,
+                      ),
                     if (order.cancelledAt != null)
-                      _TimelineRow(label: l.cancel, time: order.cancelledAt!, done: true),
-                    if (order.cancellationReason != null && order.cancellationReason!.isNotEmpty)
+                      _TimelineRow(
+                        label: l.cancel,
+                        time: order.cancelledAt!,
+                        done: true,
+                      ),
+                    if (order.cancellationReason != null &&
+                        order.cancellationReason!.isNotEmpty)
                       Padding(
                         padding: const EdgeInsets.only(top: 8),
                         child: Text(
                           '${l.cancel}: ${order.cancellationReason}',
-                          style: const TextStyle(color: AppTheme.error, fontSize: 13),
+                          style: const TextStyle(
+                            color: AppTheme.error,
+                            fontSize: 13,
+                          ),
                         ),
                       ),
                   ],
@@ -223,7 +255,8 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
       actions.add(
         Expanded(
           child: ElevatedButton(
-            onPressed: () => _doAction(() => _orderService.confirmOrder(order.id)),
+            onPressed: () =>
+                _doAction(() => _orderService.confirmOrder(order.id)),
             style: ElevatedButton.styleFrom(
               backgroundColor: AppTheme.primary,
               foregroundColor: Colors.white,
@@ -266,10 +299,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
           ),
         ],
       ),
-      child: SafeArea(
-        top: false,
-        child: Row(children: actions),
-      ),
+      child: SafeArea(top: false, child: Row(children: actions)),
     );
   }
 
@@ -282,10 +312,7 @@ class _OrderDetailPageState extends State<OrderDetailPage> {
         title: Text(l.cancel),
         content: TextField(
           controller: reasonController,
-          decoration: InputDecoration(
-            labelText: l.reason,
-            hintText: l.cancel,
-          ),
+          decoration: InputDecoration(labelText: l.reason, hintText: l.cancel),
           maxLines: 2,
         ),
         actions: [
@@ -325,11 +352,7 @@ class _StatusCard extends StatelessWidget {
         padding: const EdgeInsets.all(AppTheme.sp16),
         child: Row(
           children: [
-            Icon(
-              _statusIcon(order.status),
-              color: order.statusColor,
-              size: 32,
-            ),
+            Icon(_statusIcon(order.status), color: order.statusColor, size: 32),
             const SizedBox(width: 12),
             Column(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -359,23 +382,35 @@ class _StatusCard extends StatelessWidget {
 
   IconData _statusIcon(String status) {
     switch (status) {
-      case 'pending': return Icons.hourglass_empty;
-      case 'paid': return Icons.paid_outlined;
-      case 'shipped': return Icons.local_shipping_outlined;
-      case 'completed': return Icons.check_circle_outline;
-      case 'cancelled': return Icons.cancel_outlined;
-      default: return Icons.help_outline;
+      case 'pending':
+        return Icons.hourglass_empty;
+      case 'paid':
+        return Icons.paid_outlined;
+      case 'shipped':
+        return Icons.local_shipping_outlined;
+      case 'completed':
+        return Icons.check_circle_outline;
+      case 'cancelled':
+        return Icons.cancel_outlined;
+      default:
+        return Icons.help_outline;
     }
   }
 
   String _statusHint(String status) {
     switch (status) {
-      case 'pending': return 'Waiting for buyer to pay';
-      case 'paid': return 'Waiting for seller to ship';
-      case 'shipped': return 'Waiting for buyer to confirm receipt';
-      case 'completed': return 'Order completed';
-      case 'cancelled': return 'Order cancelled';
-      default: return '';
+      case 'pending':
+        return 'Waiting for buyer to pay';
+      case 'paid':
+        return 'Waiting for seller to ship';
+      case 'shipped':
+        return 'Waiting for buyer to confirm receipt';
+      case 'completed':
+        return 'Order completed';
+      case 'cancelled':
+        return 'Order cancelled';
+      default:
+        return '';
     }
   }
 }
@@ -492,10 +527,7 @@ class _TimelineRow extends StatelessWidget {
           ),
           Text(
             _formatDate(time),
-            style: const TextStyle(
-              fontSize: 12,
-              color: AppTheme.textSecondary,
-            ),
+            style: const TextStyle(fontSize: 12, color: AppTheme.textSecondary),
           ),
         ],
       ),

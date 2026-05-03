@@ -9,7 +9,7 @@ pub struct AdminService {
     db: PgPool,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, sqlx::FromRow)]
 pub struct AuditLogEntry {
     pub id: String,
     pub admin_id: String,
@@ -36,17 +36,16 @@ impl AdminService {
             .fetch_one(&self.db)
             .await?;
 
-        let rows = sqlx::query_as!(
-            AuditLogEntry,
+        let rows = sqlx::query_as::<_, AuditLogEntry>(
             r#"
             SELECT id, admin_id, action, target_id, old_value, new_value, memo, created_at
             FROM admin_audit_logs
             ORDER BY created_at DESC
             LIMIT $1 OFFSET $2
             "#,
-            limit,
-            offset
         )
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&self.db)
         .await?;
 

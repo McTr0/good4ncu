@@ -18,7 +18,6 @@ const WHITELISTED_PATHS: &[&str] = &[
     "/api/chat/connections",
     "/api/chat/conversations",
     "/api/chat/messages",
-    "/api/ws",
 ];
 
 /// Token bucket rate limiter using moka cache.
@@ -137,6 +136,12 @@ mod tests {
         assert!(!limiter.check_rate_limit("10.0.0.1").await.unwrap());
         limiter.reset("10.0.0.1").await.unwrap();
         assert!(limiter.check_rate_limit("10.0.0.1").await.unwrap());
+    }
+
+    #[test]
+    fn test_ws_endpoint_is_not_whitelisted() {
+        assert!(!is_whitelisted("/api/ws"));
+        assert!(is_whitelisted("/api/health"));
     }
 }
 

@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 import '../l10n/app_localizations.dart';
 import 'package:go_router/go_router.dart';
 import '../services/api_service.dart';
@@ -8,14 +9,16 @@ import '../services/token_storage.dart';
 import '../theme/app_theme.dart';
 
 class ProfilePage extends StatefulWidget {
-  const ProfilePage({super.key});
+  final ApiService? apiService;
+
+  const ProfilePage({super.key, this.apiService});
 
   @override
   State<ProfilePage> createState() => _ProfilePageState();
 }
 
 class _ProfilePageState extends State<ProfilePage> {
-  final ApiService _apiService = ApiService();
+  late final ApiService _apiService;
   Map<String, dynamic>? _profile;
   bool _loading = true;
   String? _error;
@@ -23,6 +26,7 @@ class _ProfilePageState extends State<ProfilePage> {
   @override
   void initState() {
     super.initState();
+    _apiService = widget.apiService ?? context.read<ApiService>();
     _loadProfile();
   }
 

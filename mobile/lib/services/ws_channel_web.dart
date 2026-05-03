@@ -4,7 +4,7 @@ WebSocketChannel connectWsChannel({
   required String wsUrl,
   required String token,
 }) {
-  // Browser WebSocket APIs do not allow custom Authorization headers,
-  // so web keeps query-token mode for compatibility.
-  return WebSocketChannel.connect(Uri.parse('$wsUrl?token=$token'));
+  throw UnsupportedError(
+    'Browser WebSocket connections are disabled until a secure auth ticket flow exists.',
+  );
 }

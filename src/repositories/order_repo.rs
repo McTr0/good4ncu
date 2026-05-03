@@ -2,7 +2,27 @@
 
 use crate::api::error::ApiError;
 use crate::repositories::traits::{Order, OrderRepository, OrderSummary};
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row, Transaction};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy)]
+pub enum OrderTimestampField {
+    Paid,
+    Shipped,
+    Completed,
+    Cancelled,
+}
+
+impl OrderTimestampField {
+    fn as_sql(self) -> &'static str {
+        match self {
+            Self::Paid => "paid_at",
+            Self::Shipped => "shipped_at",
+            Self::Completed => "completed_at",
+            Self::Cancelled => "cancelled_at",
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct PostgresOrderRepository {
@@ -12,6 +32,123 @@ pub struct PostgresOrderRepository {
 impl PostgresOrderRepository {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
+    }
+
+    async fn resolve_shadow_fk_ids_in_tx(
+        tx: &mut Transaction<'_, Postgres>,
+        listing_id: &str,
+        buyer_id: &str,
+        seller_id: &str,
+    ) -> Result<(Uuid, Uuid, Uuid), ApiError> {
+        let row = sqlx::query(
+            r#"
+            SELECT i.new_id AS listing_uuid,
+                   buyer.new_id AS buyer_uuid,
+                   seller.new_id AS seller_uuid
+            FROM inventory i
+            JOIN users buyer ON buyer.id = $2
+            JOIN users seller ON seller.id = $3
+            WHERE i.id = $1
+            "#,
+        )
+        .bind(listing_id)
+        .bind(buyer_id)
+        .bind(seller_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
+        .ok_or_else(|| {
+            ApiError::Internal(anyhow::anyhow!(
+                "Missing UUID shadow dependency for order insert"
+            ))
+        })?;
+
+        Ok((
+            row.get("listing_uuid"),
+            row.get("buyer_uuid"),
+            row.get("seller_uuid"),
+        ))
+    }
+
+    pub async fn create_pending_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        id: &str,
+        listing_id: &str,
+        buyer_id: &str,
+        seller_id: &str,
+        final_price: i64,
+    ) -> Result<(), ApiError> {
+        let order_uuid = Uuid::parse_str(id).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!("Order id must be UUID-compatible: {}", e))
+        })?;
+        let (listing_uuid, buyer_uuid, seller_uuid) =
+            Self::resolve_shadow_fk_ids_in_tx(tx, listing_id, buyer_id, seller_id).await?;
+
+        sqlx::query(
+            r#"
+            INSERT INTO orders (
+                id, new_id,
+                listing_id, new_listing_id,
+                buyer_id, new_buyer_id,
+                seller_id, new_seller_id,
+                final_price, status
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'pending')
+            "#,
+        )
+        .bind(id)
+        .bind(order_uuid)
+        .bind(listing_id)
+        .bind(listing_uuid)
+        .bind(buyer_id)
+        .bind(buyer_uuid)
+        .bind(seller_id)
+        .bind(seller_uuid)
+        .bind(final_price)
+        .execute(&mut **tx)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(())
+    }
+
+    pub async fn update_status_in_tx(
+        &self,
+        tx: &mut Transaction<'_, Postgres>,
+        order_id: &str,
+        expected_current: &str,
+        new_status: &str,
+        timestamp_field: OrderTimestampField,
+        cancellation_reason: Option<&str>,
+    ) -> Result<Option<String>, ApiError> {
+        let timestamp_field = timestamp_field.as_sql();
+
+        let row = if let Some(reason) = cancellation_reason {
+            sqlx::query(&format!(
+                "UPDATE orders SET status = $1, {} = NOW(), cancellation_reason = $2 WHERE id = $3 AND status = $4 RETURNING listing_id",
+                timestamp_field
+            ))
+            .bind(new_status)
+            .bind(reason)
+            .bind(order_id)
+            .bind(expected_current)
+            .fetch_optional(&mut **tx)
+            .await
+        } else {
+            sqlx::query(&format!(
+                "UPDATE orders SET status = $1, {} = NOW() WHERE id = $2 AND status = $3 RETURNING listing_id",
+                timestamp_field
+            ))
+            .bind(new_status)
+            .bind(order_id)
+            .bind(expected_current)
+            .fetch_optional(&mut **tx)
+            .await
+        }
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
+
+        Ok(row.map(|row| row.get("listing_id")))
     }
 }
 
@@ -24,13 +161,29 @@ impl OrderRepository for PostgresOrderRepository {
         seller_id: &str,
         final_price: i64,
     ) -> Result<(), ApiError> {
+        let order_uuid = Uuid::parse_str(id).map_err(|e| {
+            ApiError::Internal(anyhow::anyhow!("Order id must be UUID-compatible: {}", e))
+        })?;
         sqlx::query(
             r#"
-            INSERT INTO orders (id, listing_id, buyer_id, seller_id, final_price, status)
-            VALUES ($1, $2, $3, $4, $5, 'pending')
+            INSERT INTO orders (
+                id, new_id,
+                listing_id, new_listing_id,
+                buyer_id, new_buyer_id,
+                seller_id, new_seller_id,
+                final_price, status
+            )
+            VALUES (
+                $1, $2,
+                $3, (SELECT new_id FROM inventory WHERE id = $3),
+                $4, (SELECT new_id FROM users WHERE id = $4),
+                $5, (SELECT new_id FROM users WHERE id = $5),
+                $6, 'pending'
+            )
             "#,
         )
         .bind(id)
+        .bind(order_uuid)
         .bind(listing_id)
         .bind(buyer_id)
         .bind(seller_id)
@@ -92,25 +245,22 @@ impl OrderRepository for PostgresOrderRepository {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<OrderSummary>, i64), ApiError> {
-        let mut where_clause = String::from("WHERE 1=1");
-        if let Some(uid) = user_id {
-            match role {
-                Some("buyer") => where_clause = format!("WHERE o.buyer_id = '{}'", uid),
-                Some("seller") => where_clause = format!("WHERE o.seller_id = '{}'", uid),
-                _ => {
-                    where_clause =
-                        format!("WHERE (o.buyer_id = '{}' OR o.seller_id = '{}')", uid, uid)
-                }
-            }
-        }
+        let total: i64 = sqlx::query_scalar(
+            r#"SELECT COUNT(*)
+            FROM orders o
+            WHERE $1::text IS NULL
+               OR ($2::text = 'buyer' AND o.buyer_id = $1)
+               OR ($2::text = 'seller' AND o.seller_id = $1)
+               OR (($2::text IS NULL OR $2::text NOT IN ('buyer', 'seller'))
+                   AND (o.buyer_id = $1 OR o.seller_id = $1))"#,
+        )
+        .bind(user_id)
+        .bind(role)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
 
-        let total: i64 =
-            sqlx::query_scalar(&format!("SELECT COUNT(*) FROM orders o {}", where_clause))
-                .fetch_one(&self.pool)
-                .await
-                .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
-
-        let rows = sqlx::query(&format!(
+        let rows = sqlx::query(
             r#"
             SELECT o.id, o.listing_id, o.buyer_id, o.seller_id, o.final_price,
                    o.status, o.created_at,
@@ -121,12 +271,17 @@ impl OrderRepository for PostgresOrderRepository {
             JOIN inventory i ON i.id = o.listing_id
             JOIN users buyer ON buyer.id = o.buyer_id
             JOIN users seller ON seller.id = o.seller_id
-            {}
+            WHERE $1::text IS NULL
+               OR ($2::text = 'buyer' AND o.buyer_id = $1)
+               OR ($2::text = 'seller' AND o.seller_id = $1)
+               OR (($2::text IS NULL OR $2::text NOT IN ('buyer', 'seller'))
+                   AND (o.buyer_id = $1 OR o.seller_id = $1))
             ORDER BY o.created_at DESC
-            LIMIT $1 OFFSET $2
+            LIMIT $3 OFFSET $4
             "#,
-            where_clause
-        ))
+        )
+        .bind(user_id)
+        .bind(role)
         .bind(limit)
         .bind(offset)
         .fetch_all(&self.pool)
@@ -159,24 +314,26 @@ impl OrderRepository for PostgresOrderRepository {
         timestamp_field: &str,
         cancellation_reason: Option<&str>,
     ) -> Result<bool, ApiError> {
-        let query = if let Some(reason) = cancellation_reason {
-            format!(
-                "UPDATE orders SET status = $1, {} = NOW(), cancellation_reason = '{}' WHERE id = $2",
-                timestamp_field,
-                reason.replace("'", "''")
-            )
+        let db_result = if let Some(reason) = cancellation_reason {
+            sqlx::query(&format!(
+                "UPDATE orders SET status = $1, {} = NOW(), cancellation_reason = $2 WHERE id = $3",
+                timestamp_field
+            ))
+            .bind(new_status)
+            .bind(reason)
+            .bind(order_id)
+            .execute(&self.pool)
+            .await
         } else {
-            format!(
+            sqlx::query(&format!(
                 "UPDATE orders SET status = $1, {} = NOW() WHERE id = $2",
                 timestamp_field
-            )
-        };
-
-        let db_result = sqlx::query(&query)
+            ))
             .bind(new_status)
             .bind(order_id)
             .execute(&self.pool)
-            .await;
+            .await
+        };
 
         let rows = db_result
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?
@@ -190,5 +347,70 @@ impl OrderRepository for PostgresOrderRepository {
             .await
             .map_err(|e| ApiError::Internal(anyhow::anyhow!("DB error: {}", e)))?;
         Ok(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_infra::with_test_pool;
+
+    #[tokio::test]
+    async fn create_dual_writes_shadow_uuid_columns() {
+        with_test_pool(|pool| async move {
+            for (id, username) in [("seller-1", "seller"), ("buyer-1", "buyer")] {
+                sqlx::query("INSERT INTO users (id, username, password_hash) VALUES ($1, $2, 'hash')")
+                    .bind(id)
+                    .bind(username)
+                    .execute(&pool)
+                    .await
+                    .expect("insert user");
+            }
+
+            sqlx::query(
+                "INSERT INTO inventory (id, title, category, brand, condition_score, suggested_price_cny, defects, owner_id, status) \
+                 VALUES ('listing-1', 'Desk', 'other', 'Brand', 8, 10000, '[]', 'seller-1', 'active')",
+            )
+            .execute(&pool)
+            .await
+            .expect("insert listing");
+
+            let repo = PostgresOrderRepository::new(pool.clone());
+            let order_id = Uuid::new_v4().to_string();
+            repo.create(&order_id, "listing-1", "buyer-1", "seller-1", 10000)
+                .await
+                .expect("create order");
+            let order_uuid = Uuid::parse_str(&order_id).expect("uuid id");
+
+            let listing_uuid: Uuid =
+                sqlx::query_scalar("SELECT new_id FROM inventory WHERE id = 'listing-1'")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("listing uuid");
+            let buyer_uuid: Uuid =
+                sqlx::query_scalar("SELECT new_id FROM users WHERE id = 'buyer-1'")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("buyer uuid");
+            let seller_uuid: Uuid =
+                sqlx::query_scalar("SELECT new_id FROM users WHERE id = 'seller-1'")
+                    .fetch_one(&pool)
+                    .await
+                    .expect("seller uuid");
+
+            let row = sqlx::query(
+                "SELECT new_id, new_listing_id, new_buyer_id, new_seller_id FROM orders WHERE id = $1",
+            )
+            .bind(&order_id)
+            .fetch_one(&pool)
+            .await
+            .expect("select order");
+
+            assert_eq!(row.get::<Uuid, _>("new_id"), order_uuid);
+            assert_eq!(row.get::<Uuid, _>("new_listing_id"), listing_uuid);
+            assert_eq!(row.get::<Uuid, _>("new_buyer_id"), buyer_uuid);
+            assert_eq!(row.get::<Uuid, _>("new_seller_id"), seller_uuid);
+        })
+        .await;
     }
 }

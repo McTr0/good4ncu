@@ -130,6 +130,10 @@ class WsService {
       );
 
       _reconnectAttempts = 0;
+    } on UnsupportedError catch (e) {
+      debugPrint('WS unsupported on this platform: $e');
+      _shouldReconnect = false;
+      _pendingAuthToken = null;
     } catch (e) {
       debugPrint('WS connect error: $e');
       _scheduleReconnect();

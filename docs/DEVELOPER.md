@@ -467,12 +467,12 @@ cd mobile && flutter test
 # Rust（需要真实数据库）
 TEST_DATABASE_URL="postgres://mctr0@localhost/good4ncu_test" \
 DATABASE_URL="postgres://mctr0@localhost/good4ncu" \
-  cargo test --test product_integration -- --test-threads=1
+  cargo test --test product_integration
 ```
 
 > ⚠️ 安全说明：所有会执行清理数据的测试必须连接 `*_test` 库。
 > 框架已默认拦截非测试库清理；仅在你明确知道风险时才可设置 `ALLOW_NON_TEST_DB_WIPE=1` 覆盖。
-> 另外，`src/test_infra` 在连接测试库前会自动尝试创建缺失的测试数据库（仅允许安全的 `*_test` 名称）。
+> 另外，`src/test_infra` 在连接测试库前会自动尝试创建缺失的测试数据库（仅允许安全的 `*_test` 名称），并使用 PostgreSQL advisory lock + `TRUNCATE ... RESTART IDENTITY CASCADE` 做跨测试进程隔离，避免并发测试互相污染。
 
 ### E2E测试
 

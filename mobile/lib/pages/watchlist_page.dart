@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
 
 import '../components/price_tag.dart';
 import '../l10n/app_localizations.dart';
@@ -34,7 +35,8 @@ class _WatchlistPageState extends State<WatchlistPage> {
   @override
   void initState() {
     super.initState();
-    _watchlistService = widget.watchlistService ?? WatchlistService();
+    _watchlistService =
+        widget.watchlistService ?? context.read<WatchlistService>();
     _load(reset: true);
   }
 

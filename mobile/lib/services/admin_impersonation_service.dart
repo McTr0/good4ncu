@@ -8,9 +8,13 @@ abstract class AdminImpersonationGateway {
 }
 
 class ApiAdminImpersonationGateway implements AdminImpersonationGateway {
+  ApiAdminImpersonationGateway(this._apiService);
+
+  final ApiService _apiService;
+
   @override
   Future<String> fetchImpersonationToken(String userId) {
-    return ApiService().impersonateUserToken(userId);
+    return _apiService.impersonateUserToken(userId);
   }
 }
 
@@ -80,10 +84,19 @@ class SecureAuthTokenStore implements AuthTokenStore {
 
 class AdminImpersonationService {
   AdminImpersonationService({
+    ApiService? apiService,
     AdminImpersonationGateway? gateway,
     RealtimeConnectionController? realtime,
     AuthTokenStore? tokenStore,
-  }) : _gateway = gateway ?? ApiAdminImpersonationGateway(),
+  }) : assert(
+         apiService == null || gateway == null,
+         'Provide apiService or gateway, not both.',
+       ),
+       assert(
+         apiService != null || gateway != null,
+         'Provide apiService or gateway.',
+       ),
+       _gateway = gateway ?? ApiAdminImpersonationGateway(apiService!),
        _realtime = realtime ?? WsRealtimeConnectionController(),
        _tokenStore = tokenStore ?? SecureAuthTokenStore();
 

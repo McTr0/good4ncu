@@ -5,11 +5,15 @@ import '../services/auth_service.dart';
 import '../services/listing_service.dart';
 import '../services/chat_service.dart';
 import '../services/admin_service.dart';
+import '../services/admin_impersonation_service.dart';
 import '../services/negotiate_service.dart';
 import '../services/user_service.dart';
 import '../services/watchlist_service.dart';
 import '../services/notification_service.dart';
 import '../services/order_service.dart';
+import '../services/recommendation_service.dart';
+import '../services/upload_service.dart';
+import '../services/sse_service.dart';
 
 /// All service providers for dependency injection.
 /// Pages can use these directly for better testability,
@@ -20,9 +24,16 @@ List<SingleChildWidget> get serviceProviders => [
   Provider<ListingService>(create: (_) => ListingService()),
   Provider<ChatService>(create: (_) => ChatService()),
   Provider<AdminService>(create: (_) => AdminService()),
+  Provider<RecommendationService>(create: (_) => RecommendationService()),
+  Provider<UploadService>(create: (_) => UploadService()),
   Provider<NegotiateService>(create: (_) => NegotiateService()),
   Provider<UserService>(create: (_) => UserService()),
   Provider<WatchlistService>(create: (_) => WatchlistService()),
   Provider<NotificationService>(create: (_) => NotificationService()),
   Provider<OrderService>(create: (_) => OrderService()),
+  Provider<SseService>(create: (_) => SseService()),
+  Provider<AdminImpersonationService>(
+    create: (context) =>
+        AdminImpersonationService(apiService: context.read<ApiService>()),
+  ),
 ];
